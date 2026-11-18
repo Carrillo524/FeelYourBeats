@@ -7,13 +7,14 @@ const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
 const LANE_DIVIDER_COLOR: Color = Color(0.45, 0.75, 1.0, 0.16)
 const OUTER_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.32)
-const RAIL_IDLE_CORE_COLOR: Color = Color(0.45, 0.90, 1.0, 0.78)
-const RAIL_IDLE_GLOW_COLOR: Color = Color(0.20, 0.75, 1.0, 0.42)
-const RAIL_PRESSED_CORE_COLOR: Color = Color(0.90, 0.99, 1.0, 1.0)
-const RAIL_PRESSED_GLOW_COLOR: Color = Color(0.35, 0.95, 1.0, 0.85)
-const RAIL_HOLD_CORE_COLOR: Color = Color(0.75, 1.0, 0.92, 1.0)
-const RAIL_HOLD_GLOW_COLOR: Color = Color(0.25, 1.0, 0.82, 0.92)
-const RAIL_LATERAL_INSET_PX: float = 10.0
+const RAIL_CONTINUOUS_CORE_COLOR: Color = Color(0.82, 0.98, 1.0, 0.96)
+const RAIL_CONTINUOUS_GLOW_COLOR: Color = Color(0.22, 0.88, 1.0, 0.75)
+const RAIL_PRESSED_CORE_COLOR: Color = Color(0.96, 1.0, 1.0, 1.0)
+const RAIL_PRESSED_GLOW_COLOR: Color = Color(0.40, 0.96, 1.0, 0.90)
+const RAIL_HOLD_CORE_COLOR: Color = Color(0.80, 1.0, 0.94, 1.0)
+const RAIL_HOLD_GLOW_COLOR: Color = Color(0.28, 1.0, 0.85, 0.95)
+const CONTINUOUS_CORE_THICKNESS: float = 2.6
+const CONTINUOUS_GLOW_SCALE: float = 1.25
 
 @export var dsp_clock: DSPClock = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
@@ -52,6 +53,7 @@ func _ready() -> void:
 
 func _draw() -> void:
 	var lane_count: int = _get_active_lane_count()
+	var field_width: float = maxf(1.0, size.x)
 	var field_height: float = maxf(1.0, size.y)
 
 	for divider_idx: int in range(lane_count + 1):
@@ -64,49 +66,56 @@ func _draw() -> void:
 	var receptor_half_h: float = NoteView.DEFAULT_HEAD_HEIGHT_PX * 0.5
 	var top_rail_y: float = _hit_line_y - receptor_half_h
 	var bottom_rail_y: float = _hit_line_y + receptor_half_h
-	var rail_inset: float = maxf(NoteView.HORIZONTAL_PADDING_PX, RAIL_LATERAL_INSET_PX)
-	var rail_width: float = maxf(4.0, _lane_width - (rail_inset * 2.0))
+
+	_draw_glowing_horizontal_line(
+		0.0,
+		field_width,
+		top_rail_y,
+		RAIL_CONTINUOUS_CORE_COLOR,
+		RAIL_CONTINUOUS_GLOW_COLOR,
+		CONTINUOUS_CORE_THICKNESS,
+		CONTINUOUS_GLOW_SCALE
+	)
+	_draw_glowing_horizontal_line(
+		0.0,
+		field_width,
+		bottom_rail_y,
+		RAIL_CONTINUOUS_CORE_COLOR,
+		RAIL_CONTINUOUS_GLOW_COLOR,
+		CONTINUOUS_CORE_THICKNESS,
+		CONTINUOUS_GLOW_SCALE
+	)
 
 	for lane_idx: int in range(lane_count):
 		var is_pressed: bool = lane_idx < _lane_pressed_states.size() and _lane_pressed_states[lane_idx]
 		var is_holding: bool = lane_idx < _lane_hold_states.size() and _lane_hold_states[lane_idx]
+		if not is_pressed and not is_holding:
+			continue
 
-		var rail_start_x: float = (float(lane_idx) * _lane_width) + rail_inset
-		var rail_end_x: float = rail_start_x + rail_width
-
-		var core_color: Color = RAIL_IDLE_CORE_COLOR
-		var glow_color: Color = RAIL_IDLE_GLOW_COLOR
-		var core_thickness: float = 2.0
-		var glow_scale: float = 1.0
-
-		if is_holding:
-			core_color = RAIL_HOLD_CORE_COLOR
-			glow_color = RAIL_HOLD_GLOW_COLOR
-			core_thickness = 3.4
-			glow_scale = 1.55
-		elif is_pressed:
-			core_color = RAIL_PRESSED_CORE_COLOR
-			glow_color = RAIL_PRESSED_GLOW_COLOR
-			core_thickness = 3.0
-			glow_scale = 1.40
+		var lane_start_x: float = float(lane_idx) * _lane_width
+		var lane_end_x: float = lane_start_x + _lane_width
+		var active_core: Color = RAIL_HOLD_CORE_COLOR if is_holding else RAIL_PRESSED_CORE_COLOR
+		var active_glow: Color = RAIL_HOLD_GLOW_COLOR if is_holding else RAIL_PRESSED_GLOW_COLOR
+		var active_thickness: float = 3.4 if is_holding else 3.0
+		var active_scale: float = 1.55 if is_holding else 1.40
 
 		_draw_glowing_horizontal_line(
-			rail_start_x,
-			rail_end_x,
+			lane_start_x,
+			lane_end_x,
 			top_rail_y,
-			core_color,
-			glow_color,
-			core_thickness,
-			glow_scale
+			active_core,
+			active_glow,
+			active_thickness,
+			active_scale
 		)
 		_draw_glowing_horizontal_line(
-			rail_start_x,
-			rail_end_x,
+			lane_start_x,
+			lane_end_x,
 			bottom_rail_y,
-			core_color,
-			glow_color,
-			core_thickness,
-			glow_scale
+			active_core,
+			active_glow,
+			active_thickness,
+			active_scale
 		)
 
 
@@ -122,13 +131,13 @@ func _draw_glowing_horizontal_line(
 	var p_from: Vector2 = Vector2(p_x_start, p_y)
 	var p_to: Vector2 = Vector2(p_x_end, p_y)
 
-	var outer_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.16)
-	var mid_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.32)
-	var inner_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.54)
+	var outer_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.18)
+	var mid_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.36)
+	var inner_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.60)
 
-	draw_line(p_from, p_to, outer_halo, p_core_thickness * 5.2 * p_glow_scale)
-	draw_line(p_from, p_to, mid_halo, p_core_thickness * 3.2 * p_glow_scale)
-	draw_line(p_from, p_to, inner_halo, p_core_thickness * 1.8 * p_glow_scale)
+	draw_line(p_from, p_to, outer_halo, p_core_thickness * 6.0 * p_glow_scale)
+	draw_line(p_from, p_to, mid_halo, p_core_thickness * 3.5 * p_glow_scale)
+	draw_line(p_from, p_to, inner_halo, p_core_thickness * 1.9 * p_glow_scale)
 	draw_line(p_from, p_to, p_core_color, p_core_thickness)
 
 
