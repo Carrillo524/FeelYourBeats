@@ -6,15 +6,20 @@ const DEMO_DURATION_SEC: float = 15.0
 const DEMO_SAMPLE_RATE: int = 8000
 
 @export var dsp_clock: DSPClock = null
+@export var audio_analyzer: AudioAnalyzer = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var input_adapter: RhythmInputAdapter = null
 @export var hit_judge: HitJudge = null
 @export var lane_field: LaneField = null
 @export var reactive_background: ReactiveBackground = null
 @export var safe_hud: SafeHud = null
+@export var custom_audio_path: String = ""
+@export var default_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
+@export var default_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 @export var auto_start_demo: bool = true
 
 var _active_chart: ChartData = null
+var _active_audio_stream: AudioStream = null
 
 
 func _ready() -> void:
@@ -22,14 +27,70 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_resolve_and_wire_nodes()
 
-	if auto_start_demo:
+	if not custom_audio_path.is_empty():
+		var started: bool = start_audio_file_session(
+			custom_audio_path,
+			default_difficulty,
+			default_note_type_mode
+		)
+		if not started and auto_start_demo:
+			start_demo_session()
+	elif auto_start_demo:
 		start_demo_session()
 
 
 func start_demo_session() -> void:
 	_resolve_and_wire_nodes()
 	var demo_chart: ChartData = build_demo_chart()
+	_active_audio_stream = _generate_metronome_stream(
+		demo_chart.duration_sec,
+		demo_chart.bpm_estimate
+	)
+	if audio_analyzer != null:
+		audio_analyzer.set_live_monitoring(true)
 	start_chart_session(demo_chart)
+
+
+func start_audio_file_session(
+	p_audio_path: String,
+	p_difficulty: int = AutoChartGenerator.Difficulty.NORMAL,
+	p_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD,
+	p_title: String = ""
+) -> bool:
+	_resolve_and_wire_nodes()
+	if audio_analyzer == null or p_audio_path.is_empty():
+		return false
+
+	var stream: AudioStream = audio_analyzer.load_audio_stream(p_audio_path)
+	if stream == null:
+		return false
+
+	var analysis: Dictionary = audio_analyzer.analyze_audio_stream(stream)
+	var duration_sec: float = analysis.get("duration_sec", 0.0) as float
+	if duration_sec <= 0.0:
+		return false
+
+	var file_basename: String = p_audio_path.get_file().get_basename()
+	var song_id: String = file_basename if not file_basename.is_empty() else "custom_track"
+	var resolved_title: String = p_title if not p_title.is_empty() else song_id
+
+	var generator: AutoChartGenerator = AutoChartGenerator.new()
+	var chart: ChartData = generator.generate_from_analysis(
+		song_id,
+		resolved_title,
+		p_audio_path,
+		analysis,
+		p_difficulty,
+		p_note_type_mode
+	)
+
+	var validation: Dictionary = chart.validate()
+	if not (validation.get("valid", false) as bool):
+		return false
+
+	_active_audio_stream = stream
+	audio_analyzer.set_live_monitoring(true)
+	return start_chart_session(chart)
 
 
 func start_chart_session(p_chart: ChartData) -> bool:
@@ -49,11 +110,14 @@ func start_chart_session(p_chart: ChartData) -> bool:
 	if dsp_clock != null:
 		if not dsp_clock.load_chart(p_chart):
 			return false
-		if dsp_clock.audio_player != null and dsp_clock.audio_player.stream == null:
-			dsp_clock.audio_player.stream = _generate_metronome_stream(
-				p_chart.duration_sec,
-				p_chart.bpm_estimate
-			)
+		if dsp_clock.audio_player != null:
+			if _active_audio_stream != null:
+				dsp_clock.audio_player.stream = _active_audio_stream
+			elif dsp_clock.audio_player.stream == null:
+				dsp_clock.audio_player.stream = _generate_metronome_stream(
+					p_chart.duration_sec,
+					p_chart.bpm_estimate
+				)
 
 	if lane_field != null:
 		if not lane_field.load_chart(p_chart):
@@ -67,6 +131,9 @@ func start_chart_session(p_chart: ChartData) -> bool:
 
 	if screen_safe_adapter != null:
 		screen_safe_adapter.recalculate_layout()
+
+	if audio_analyzer != null:
+		audio_analyzer.set_live_monitoring(true)
 
 	if dsp_clock != null:
 		dsp_clock.start()
@@ -114,6 +181,8 @@ func get_active_chart() -> ChartData:
 func _resolve_and_wire_nodes() -> void:
 	if dsp_clock == null:
 		dsp_clock = get_node_or_null("DSPClock") as DSPClock
+	if audio_analyzer == null:
+		audio_analyzer = get_node_or_null("AudioAnalyzer") as AudioAnalyzer
 	if screen_safe_adapter == null:
 		screen_safe_adapter = get_node_or_null("ScreenSafeAdapter") as ScreenSafeAdapter
 	if input_adapter == null:
@@ -134,6 +203,7 @@ func _resolve_and_wire_nodes() -> void:
 	if reactive_background != null:
 		reactive_background.dsp_clock = dsp_clock
 		reactive_background.hit_judge = hit_judge
+		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
 
 	if lane_field != null:
