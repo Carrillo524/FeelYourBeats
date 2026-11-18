@@ -11,6 +11,12 @@ const PAUSE_BUTTON_HEIGHT_PX: float = 64.0
 const CENTER_BANNER_HEIGHT_PX: float = 140.0
 const MODAL_WIDTH_PX: float = 440.0
 const MODAL_HEIGHT_PX: float = 300.0
+const COUNTDOWN_BOX_WIDTH_PX: float = 260.0
+const COUNTDOWN_BOX_HEIGHT_PX: float = 160.0
+const COUNTDOWN_FONT_SIZE: int = 110
+const COUNTDOWN_STEP_DURATION_SEC: float = 1.0
+const COUNTDOWN_START_SCALE: float = 1.35
+const COUNTDOWN_END_ALPHA: float = 0.25
 
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var hit_judge: HitJudge = null
@@ -22,12 +28,15 @@ var _score_label: Label = null
 var _accuracy_label: Label = null
 var _combo_label: Label = null
 var _judgment_label: Label = null
+var _countdown_label: Label = null
 var _pause_button: Button = null
 var _pause_overlay: ColorRect = null
 var _pause_panel: Panel = null
 var _resume_button: Button = null
 var _restart_button: Button = null
 
+var _countdown_tween: Tween = null
+var _is_counting_down: bool = false
 var _displayed_score: int = 0
 var _displayed_combo: int = 0
 var _displayed_accuracy: float = 1.0
@@ -48,6 +57,10 @@ func _ready() -> void:
 		apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
 	else:
 		apply_hud_safe_rect(Rect2(64.8, 0.0, 950.4, 1920.0))
+
+
+func _exit_tree() -> void:
+	_cancel_resume_countdown()
 
 
 func connect_dependencies() -> void:
@@ -86,6 +99,14 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_judgment_label.position = Vector2(0.0, center_y + 52.0)
 	_judgment_label.size = Vector2(safe_w, CENTER_BANNER_HEIGHT_PX * 0.5)
 
+	var countdown_size: Vector2 = Vector2(COUNTDOWN_BOX_WIDTH_PX, COUNTDOWN_BOX_HEIGHT_PX)
+	_countdown_label.size = countdown_size
+	_countdown_label.position = Vector2(
+		(safe_w - countdown_size.x) * 0.5,
+		(safe_h - countdown_size.y) * 0.42
+	)
+	_countdown_label.pivot_offset = countdown_size * 0.5
+
 	_pause_overlay.position = Vector2.ZERO
 	_pause_overlay.size = p_hud_safe_rect.size
 
@@ -103,6 +124,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 
 
 func reset_hud_display() -> void:
+	_cancel_resume_countdown()
 	_displayed_score = 0
 	_displayed_combo = 0
 	_displayed_accuracy = 1.0
@@ -114,6 +136,7 @@ func reset_hud_display() -> void:
 
 func open_pause_menu() -> void:
 	_ensure_ui_nodes()
+	_cancel_resume_countdown()
 	if input_adapter != null:
 		input_adapter.reset_input_state()
 	if dsp_clock != null:
@@ -124,14 +147,62 @@ func open_pause_menu() -> void:
 
 func close_pause_menu_and_resume() -> void:
 	_ensure_ui_nodes()
+	_cancel_resume_countdown()
 	_pause_overlay.visible = false
-	if dsp_clock != null:
-		dsp_clock.resume()
-	resume_requested.emit()
+	_pause_button.disabled = true
+	_is_counting_down = true
+	_countdown_label.visible = true
+
+	_prepare_countdown_step(3)
+	_countdown_tween = create_tween()
+
+	_countdown_tween.tween_property(
+		_countdown_label,
+		"scale",
+		Vector2.ONE,
+		COUNTDOWN_STEP_DURATION_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_countdown_tween.parallel().tween_property(
+		_countdown_label,
+		"modulate:a",
+		COUNTDOWN_END_ALPHA,
+		COUNTDOWN_STEP_DURATION_SEC
+	)
+
+	_countdown_tween.tween_callback(_prepare_countdown_step.bind(2))
+	_countdown_tween.tween_property(
+		_countdown_label,
+		"scale",
+		Vector2.ONE,
+		COUNTDOWN_STEP_DURATION_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_countdown_tween.parallel().tween_property(
+		_countdown_label,
+		"modulate:a",
+		COUNTDOWN_END_ALPHA,
+		COUNTDOWN_STEP_DURATION_SEC
+	)
+
+	_countdown_tween.tween_callback(_prepare_countdown_step.bind(1))
+	_countdown_tween.tween_property(
+		_countdown_label,
+		"scale",
+		Vector2.ONE,
+		COUNTDOWN_STEP_DURATION_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_countdown_tween.parallel().tween_property(
+		_countdown_label,
+		"modulate:a",
+		COUNTDOWN_END_ALPHA,
+		COUNTDOWN_STEP_DURATION_SEC
+	)
+
+	_countdown_tween.tween_callback(_on_resume_countdown_finished)
 
 
 func request_restart() -> void:
 	_ensure_ui_nodes()
+	_cancel_resume_countdown()
 	_pause_overlay.visible = false
 	if input_adapter != null:
 		input_adapter.reset_input_state()
@@ -140,6 +211,10 @@ func request_restart() -> void:
 
 func is_pause_menu_open() -> bool:
 	return _pause_overlay != null and _pause_overlay.visible
+
+
+func is_resume_countdown_active() -> bool:
+	return _is_counting_down
 
 
 func get_safe_container_rect() -> Rect2:
@@ -162,6 +237,42 @@ func get_displayed_accuracy() -> float:
 
 func get_last_judgment_text() -> String:
 	return _last_judgment_text
+
+
+func _prepare_countdown_step(p_number: int) -> void:
+	if _countdown_label == null:
+		return
+	_countdown_label.text = str(p_number)
+	_countdown_label.pivot_offset = _countdown_label.size * 0.5
+	_countdown_label.scale = Vector2(COUNTDOWN_START_SCALE, COUNTDOWN_START_SCALE)
+	_countdown_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
+
+
+func _on_resume_countdown_finished() -> void:
+	_countdown_tween = null
+	_is_counting_down = false
+	if _countdown_label != null:
+		_countdown_label.visible = false
+		_countdown_label.scale = Vector2.ONE
+		_countdown_label.modulate = Color.WHITE
+	if _pause_button != null:
+		_pause_button.disabled = false
+	if dsp_clock != null:
+		dsp_clock.resume()
+	resume_requested.emit()
+
+
+func _cancel_resume_countdown() -> void:
+	if _countdown_tween != null:
+		_countdown_tween.kill()
+		_countdown_tween = null
+	_is_counting_down = false
+	if _countdown_label != null:
+		_countdown_label.visible = false
+		_countdown_label.scale = Vector2.ONE
+		_countdown_label.modulate = Color.WHITE
+	if _pause_button != null:
+		_pause_button.disabled = false
 
 
 func _on_safe_play_rect_changed(_p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
@@ -219,6 +330,15 @@ func _ensure_ui_nodes() -> void:
 	_judgment_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_judgment_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_safe_container.add_child(_judgment_label)
+
+	_countdown_label = Label.new()
+	_countdown_label.name = "CountdownLabel"
+	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_countdown_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_countdown_label.add_theme_font_size_override("font_size", COUNTDOWN_FONT_SIZE)
+	_countdown_label.visible = false
+	_safe_container.add_child(_countdown_label)
 
 	_pause_button = Button.new()
 	_pause_button.name = "PauseButton"

@@ -7,12 +7,13 @@ const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
 const LANE_DIVIDER_COLOR: Color = Color(0.45, 0.75, 1.0, 0.16)
 const OUTER_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.32)
-const HIT_LINE_GUIDE_COLOR: Color = Color(0.35, 0.90, 1.0, 0.25)
-const RECEPTOR_IDLE_FILL_COLOR: Color = Color(0.12, 0.22, 0.36, 0.32)
-const RECEPTOR_ACTIVE_FILL_COLOR: Color = Color(0.30, 0.92, 1.0, 0.52)
-const RECEPTOR_HOLD_FILL_COLOR: Color = Color(0.40, 1.0, 0.88, 0.62)
-const RECEPTOR_IDLE_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.58)
-const RECEPTOR_ACTIVE_BORDER_COLOR: Color = Color(0.85, 0.98, 1.0, 0.98)
+const RAIL_IDLE_CORE_COLOR: Color = Color(0.45, 0.90, 1.0, 0.78)
+const RAIL_IDLE_GLOW_COLOR: Color = Color(0.20, 0.75, 1.0, 0.42)
+const RAIL_PRESSED_CORE_COLOR: Color = Color(0.90, 0.99, 1.0, 1.0)
+const RAIL_PRESSED_GLOW_COLOR: Color = Color(0.35, 0.95, 1.0, 0.85)
+const RAIL_HOLD_CORE_COLOR: Color = Color(0.75, 1.0, 0.92, 1.0)
+const RAIL_HOLD_GLOW_COLOR: Color = Color(0.25, 1.0, 0.82, 0.92)
+const RAIL_LATERAL_INSET_PX: float = 10.0
 
 @export var dsp_clock: DSPClock = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
@@ -51,7 +52,6 @@ func _ready() -> void:
 
 func _draw() -> void:
 	var lane_count: int = _get_active_lane_count()
-	var field_width: float = maxf(1.0, size.x)
 	var field_height: float = maxf(1.0, size.y)
 
 	for divider_idx: int in range(lane_count + 1):
@@ -61,45 +61,75 @@ func _draw() -> void:
 		var divider_width: float = 2.0 if is_outer else 1.5
 		draw_line(Vector2(x_pos, 0.0), Vector2(x_pos, field_height), divider_color, divider_width)
 
-	draw_line(Vector2(0.0, _hit_line_y), Vector2(field_width, _hit_line_y), HIT_LINE_GUIDE_COLOR, 1.5)
-
-	var receptor_height: float = NoteView.DEFAULT_HEAD_HEIGHT_PX
-	var receptor_half_h: float = receptor_height * 0.5
-	var receptor_top_y: float = _hit_line_y - receptor_half_h
-	var receptor_bottom_y: float = _hit_line_y + receptor_half_h
-	var receptor_width: float = maxf(4.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
+	var receptor_half_h: float = NoteView.DEFAULT_HEAD_HEIGHT_PX * 0.5
+	var top_rail_y: float = _hit_line_y - receptor_half_h
+	var bottom_rail_y: float = _hit_line_y + receptor_half_h
+	var rail_inset: float = maxf(NoteView.HORIZONTAL_PADDING_PX, RAIL_LATERAL_INSET_PX)
+	var rail_width: float = maxf(4.0, _lane_width - (rail_inset * 2.0))
 
 	for lane_idx: int in range(lane_count):
 		var is_pressed: bool = lane_idx < _lane_pressed_states.size() and _lane_pressed_states[lane_idx]
 		var is_holding: bool = lane_idx < _lane_hold_states.size() and _lane_hold_states[lane_idx]
-		var is_active: bool = is_pressed or is_holding
 
-		var receptor_x: float = (float(lane_idx) * _lane_width) + NoteView.HORIZONTAL_PADDING_PX
-		var receptor_rect: Rect2 = Rect2(receptor_x, receptor_top_y, receptor_width, receptor_height)
+		var rail_start_x: float = (float(lane_idx) * _lane_width) + rail_inset
+		var rail_end_x: float = rail_start_x + rail_width
 
-		var fill_color: Color = RECEPTOR_IDLE_FILL_COLOR
+		var core_color: Color = RAIL_IDLE_CORE_COLOR
+		var glow_color: Color = RAIL_IDLE_GLOW_COLOR
+		var core_thickness: float = 2.0
+		var glow_scale: float = 1.0
+
 		if is_holding:
-			fill_color = RECEPTOR_HOLD_FILL_COLOR
+			core_color = RAIL_HOLD_CORE_COLOR
+			glow_color = RAIL_HOLD_GLOW_COLOR
+			core_thickness = 3.4
+			glow_scale = 1.55
 		elif is_pressed:
-			fill_color = RECEPTOR_ACTIVE_FILL_COLOR
+			core_color = RAIL_PRESSED_CORE_COLOR
+			glow_color = RAIL_PRESSED_GLOW_COLOR
+			core_thickness = 3.0
+			glow_scale = 1.40
 
-		var border_color: Color = RECEPTOR_ACTIVE_BORDER_COLOR if is_active else RECEPTOR_IDLE_BORDER_COLOR
-		var border_width: float = 3.0 if is_active else 2.0
+		_draw_glowing_horizontal_line(
+			rail_start_x,
+			rail_end_x,
+			top_rail_y,
+			core_color,
+			glow_color,
+			core_thickness,
+			glow_scale
+		)
+		_draw_glowing_horizontal_line(
+			rail_start_x,
+			rail_end_x,
+			bottom_rail_y,
+			core_color,
+			glow_color,
+			core_thickness,
+			glow_scale
+		)
 
-		draw_rect(receptor_rect, fill_color, true)
-		draw_rect(receptor_rect, border_color, false, border_width)
-		draw_line(
-			Vector2(receptor_x, receptor_top_y),
-			Vector2(receptor_x + receptor_width, receptor_top_y),
-			border_color,
-			border_width
-		)
-		draw_line(
-			Vector2(receptor_x, receptor_bottom_y),
-			Vector2(receptor_x + receptor_width, receptor_bottom_y),
-			border_color,
-			border_width
-		)
+
+func _draw_glowing_horizontal_line(
+	p_x_start: float,
+	p_x_end: float,
+	p_y: float,
+	p_core_color: Color,
+	p_glow_color: Color,
+	p_core_thickness: float,
+	p_glow_scale: float
+) -> void:
+	var p_from: Vector2 = Vector2(p_x_start, p_y)
+	var p_to: Vector2 = Vector2(p_x_end, p_y)
+
+	var outer_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.16)
+	var mid_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.32)
+	var inner_halo: Color = Color(p_glow_color.r, p_glow_color.g, p_glow_color.b, p_glow_color.a * 0.54)
+
+	draw_line(p_from, p_to, outer_halo, p_core_thickness * 5.2 * p_glow_scale)
+	draw_line(p_from, p_to, mid_halo, p_core_thickness * 3.2 * p_glow_scale)
+	draw_line(p_from, p_to, inner_halo, p_core_thickness * 1.8 * p_glow_scale)
+	draw_line(p_from, p_to, p_core_color, p_core_thickness)
 
 
 func load_chart(p_chart: ChartData) -> bool:

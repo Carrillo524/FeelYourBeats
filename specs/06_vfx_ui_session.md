@@ -38,10 +38,10 @@ En cumplimiento con `AGENTS.md`:
 - **Propiedades Exportadas:** `screen_safe_adapter: ScreenSafeAdapter`, `hit_judge: HitJudge`, `dsp_clock: DSPClock` e `input_adapter: RhythmInputAdapter`.
 - **Inicialización Inmediata en `_ready()`:**
   - Lee `screen_safe_adapter.get_hud_safe_rect()` de inmediato en `_ready()` y se suscribe a `safe_play_rect_changed`.
-- **Flujo de Pausa y Reinicio:**
-  - `open_pause_menu() -> void`: invoca `input_adapter.reset_input_state()` para liberar cualquier dedo o tecla retenida, llama a `dsp_clock.pause()`, muestra `PauseOverlay` y emite `pause_requested`.
-  - `close_pause_menu_and_resume() -> void`: oculta `PauseOverlay`, llama a `dsp_clock.resume()` y emite `resume_requested`.
-  - `request_restart() -> void`: oculta `PauseOverlay`, invoca `input_adapter.reset_input_state()` y emite `restart_requested`.
+- **Flujo de Pausa, Cuenta Regresiva de 3 Segundos y Reinicio:**
+  - `open_pause_menu() -> void`: cancela cualquier cuenta regresiva activa, invoca `input_adapter.reset_input_state()` para liberar cualquier dedo o tecla retenida, llama a `dsp_clock.pause()`, muestra `PauseOverlay` y emite `pause_requested`.
+  - `close_pause_menu_and_resume() -> void`: oculta `PauseOverlay`, deshabilita `PauseButton` durante el conteo y muestra `CountdownLabel` centrado dentro de `SafeAreaContainer` (`font_size = 110`, `mouse_filter = Control.MOUSE_FILTER_IGNORE`, `pivot_offset` centrado). Anima secuencialmente los pasos `3`, `2`, `1` durante `1.0 s` cada uno mediante un `Tween` de escala (`1.35 -> 1.0`) y opacidad manteniendo `DSPClock` en pausa; al concluir el `1`, oculta `CountdownLabel`, rehabilita `PauseButton`, invoca `dsp_clock.resume()` y emite `resume_requested`.
+  - `request_restart() -> void` y `_exit_tree() -> void`: cancelan cualquier `Tween` activo de cuenta regresiva (`_cancel_resume_countdown()`), ocultan `CountdownLabel` y `PauseOverlay`, rehabilitan `PauseButton`, limpian `input_adapter.reset_input_state()` y (en el caso de `request_restart()`) emiten `restart_requested`.
 
 ---
 
