@@ -16,6 +16,7 @@ Este archivo define las reglas arquitectónicas y técnicas **obligatorias** par
 
 ## 2. Target y Entrada
 - **Plataforma Principal:** Android móvil vertical (`viewport_width=1080`, `viewport_height=1920`, orientación `portrait`, `stretch/mode="canvas_items"`, `stretch/aspect="keep_width"`, `edge_to_edge=true`).
+- **Ventana de Vista Previa en Escritorio (PC):** `window/size/window_width_override=450` y `window/size/window_height_override=800` en `project.godot` para que al ejecutar en monitores horizontales (`F5`) la ventana quepa completa manteniendo la proporción 9:16 sobre el espacio virtual `1080x1920`, sin afectar la resolución nativa en Android.
 - **Entrada Multitáctil (Android):** Soporte completo para múltiples toques simultáneos mediante `InputEventScreenTouch` (rastreando el índice de dedo `index` por carril).
 - **Entrada de Teclado (Pruebas en PC):** Soporte simultáneo para las teclas `D`, `F`, `J`, `K` mapeadas directamente a los 4 carriles (`0`, `1`, `2`, `3`).
 

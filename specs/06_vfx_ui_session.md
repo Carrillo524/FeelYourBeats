@@ -61,3 +61,7 @@ La escena principal `res://ui/game_session.tscn` (configurada como `run/main_sce
 ### 4.2. Sesión Demo Integrada (`start_demo_session() -> void`)
 - Construye un `ChartData` validado a `128.0 BPM` (`15.0 s` de duración) con 28 notas (*tap* y *hold*) distribuidas en los 4 carriles sin solapamiento y 4 bloques `IntensityBlock` contiguos que recorren los tiers `0`, `1`, `2` y `3`.
 - Genera un stream `AudioStreamWAV` en memoria con pulsos de metrónomo a `128.0 BPM`, lo carga en `DSPClock` y `LaneField`, sincroniza `ScreenSafeAdapter` y arranca la partida.
+
+### 4.3. Vista Previa en Escritorio (`window_width_override` / `window_height_override`)
+- En `project.godot` (sección `[display]`), se definen `window/size/window_width_override=450` y `window/size/window_height_override=800`.
+- Esto permite que al ejecutar la escena en Windows (`F5`) la ventana física quepa íntegramente en monitores horizontales conservando la relación 9:16 y el espacio lógico virtual de `1080x1920` escalado mediante `canvas_items` + `keep_width`, sin alterar el despliegue a pantalla completa nativa en dispositivos Android.
