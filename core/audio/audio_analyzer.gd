@@ -134,41 +134,57 @@ func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_
 	var lp_mid: float = 0.0
 
 	playback.start(0.0)
+	var stream_exhausted: bool = false
 	for frame_idx: int in range(frame_count):
-		var mixed_chunk: PackedVector2Array = playback.mix_audio(1.0, samples_per_hop)
-		var count: int = mixed_chunk.size()
-		if count <= 0:
+		if stream_exhausted:
 			rms_frames[frame_idx] = 0.0
 			bass_frames[frame_idx] = 0.0
 			mid_frames[frame_idx] = 0.0
 			high_frames[frame_idx] = 0.0
 			continue
 
+		var acc_samples_in_hop: int = 0
 		var sum_sq_total: float = 0.0
 		var sum_sq_bass: float = 0.0
 		var sum_sq_mid: float = 0.0
 		var sum_sq_high: float = 0.0
 
-		for s_idx: int in range(count):
-			var stereo_frame: Vector2 = mixed_chunk[s_idx]
-			var sample: float = (stereo_frame.x + stereo_frame.y) * 0.5
-			lp_bass += alpha_bass * (sample - lp_bass)
-			lp_mid += alpha_mid * (sample - lp_mid)
+		while acc_samples_in_hop < samples_per_hop:
+			var remaining_in_hop: int = samples_per_hop - acc_samples_in_hop
+			var mixed_chunk: PackedVector2Array = playback.mix_audio(1.0, remaining_in_hop)
+			var chunk_count: int = mixed_chunk.size()
+			if chunk_count <= 0:
+				stream_exhausted = true
+				break
 
-			var s_bass: float = lp_bass
-			var s_mid: float = lp_mid - lp_bass
-			var s_high: float = sample - lp_mid
+			for s_idx: int in range(chunk_count):
+				var stereo_frame: Vector2 = mixed_chunk[s_idx]
+				var sample: float = (stereo_frame.x + stereo_frame.y) * 0.5
+				lp_bass += alpha_bass * (sample - lp_bass)
+				lp_mid += alpha_mid * (sample - lp_mid)
 
-			sum_sq_total += sample * sample
-			sum_sq_bass += s_bass * s_bass
-			sum_sq_mid += s_mid * s_mid
-			sum_sq_high += s_high * s_high
+				var s_bass: float = lp_bass
+				var s_mid: float = lp_mid - lp_bass
+				var s_high: float = sample - lp_mid
 
-		var inv_count: float = 1.0 / float(count)
-		rms_frames[frame_idx] = sqrt(sum_sq_total * inv_count)
-		bass_frames[frame_idx] = sqrt(sum_sq_bass * inv_count)
-		mid_frames[frame_idx] = sqrt(sum_sq_mid * inv_count)
-		high_frames[frame_idx] = sqrt(sum_sq_high * inv_count)
+				sum_sq_total += sample * sample
+				sum_sq_bass += s_bass * s_bass
+				sum_sq_mid += s_mid * s_mid
+				sum_sq_high += s_high * s_high
+
+			acc_samples_in_hop += chunk_count
+
+		if acc_samples_in_hop > 0:
+			var inv_count: float = 1.0 / float(acc_samples_in_hop)
+			rms_frames[frame_idx] = sqrt(sum_sq_total * inv_count)
+			bass_frames[frame_idx] = sqrt(sum_sq_bass * inv_count)
+			mid_frames[frame_idx] = sqrt(sum_sq_mid * inv_count)
+			high_frames[frame_idx] = sqrt(sum_sq_high * inv_count)
+		else:
+			rms_frames[frame_idx] = 0.0
+			bass_frames[frame_idx] = 0.0
+			mid_frames[frame_idx] = 0.0
+			high_frames[frame_idx] = 0.0
 
 	playback.stop()
 	return _finalize_analysis_buffers(
