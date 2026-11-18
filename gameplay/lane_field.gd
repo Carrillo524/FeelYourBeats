@@ -122,6 +122,10 @@ func _ensure_pool() -> void:
 		current_total += 1
 
 
+func connect_dependencies() -> void:
+	_connect_dependencies()
+
+
 func _connect_dependencies() -> void:
 	if screen_safe_adapter != null:
 		if not screen_safe_adapter.safe_play_rect_changed.is_connected(apply_safe_layout):

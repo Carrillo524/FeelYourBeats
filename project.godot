@@ -11,18 +11,18 @@ config_version=5
 [application]
 
 config/name="FeelYourBeats (FyB)"
+run/main_scene="res://ui/game_session.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 
 [display]
 
 window/size/viewport_width=1080
 window/size/viewport_height=1920
-window/size/edge_to_edge=true
-window/handheld/orientation=1
 window/stretch/mode="canvas_items"
 window/stretch/aspect="keep_width"
+window/handheld/orientation=1
+window/size/edge_to_edge=true
 
 [rendering]
 
 renderer/rendering_method="mobile"
-renderer/rendering_method.mobile="mobile"

@@ -1,0 +1,42 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://gameplay/game_session.gd" id="1_po1t6"]
+[ext_resource type="Script" path="res://core/audio/dsp_clock.gd" id="2_ypfxe"]
+[ext_resource type="Script" path="res://platform/screen_safe_adapter.gd" id="3_o4cmb"]
+[ext_resource type="Script" path="res://platform/rhythm_input_adapter.gd" id="4_y545i"]
+[ext_resource type="Script" path="res://gameplay/hit_judge.gd" id="5_o7hyx"]
+[ext_resource type="Script" path="res://vfx/reactive_background.gd" id="6_vuf3u"]
+[ext_resource type="Script" path="res://gameplay/lane_field.gd" id="7_mim0t"]
+[ext_resource type="Script" path="res://ui/safe_hud.gd" id="8_jwo7v"]
+
+[node name="root" type="Control" unique_id=323559794]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_po1t6")
+
+[node name="DSPClock" type="Node" parent="." unique_id=545710028]
+script = ExtResource("2_ypfxe")
+
+[node name="ScreenSafeAdapter" type="Node" parent="." unique_id=482334523]
+script = ExtResource("3_o4cmb")
+
+[node name="RhythmInputAdapter" type="Node" parent="." unique_id=303144098]
+script = ExtResource("4_y545i")
+
+[node name="HitJudge" type="Node" parent="." unique_id=1210981042]
+script = ExtResource("5_o7hyx")
+
+[node name="ReactiveBackground" type="ColorRect" parent="." unique_id=1452237832]
+layout_mode = 0
+mouse_filter = 2
+color = Color(0.05, 0.05, 0.12, 1)
+script = ExtResource("6_vuf3u")
+
+[node name="LaneField" type="Control" parent="." unique_id=901796943]
+anchors_preset = 0
+script = ExtResource("7_mim0t")
+
+[node name="SafeHud" type="Control" parent="." unique_id=717280695]
+anchors_preset = 0
+mouse_filter = 2
+script = ExtResource("8_jwo7v")
