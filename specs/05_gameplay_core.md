@@ -92,3 +92,9 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
 ### 4.2. Carga de Chart y *Object Pooling*
 - `load_chart(p_chart: ChartData) -> bool` valida el chart, delega en `hit_judge.load_chart(p_chart)` si `hit_judge != null`, recicla todas las vistas activas al pool (`_free_pool`) y reinicia el cursor `_next_spawn_index = 0`.
 - En `update_field_at_time(p_dsp_time_sec: float)`, activa desde `_free_pool` únicamente las notas dentro de la ventana de visibilidad superior y recicla inmediatamente aquellas que `hit_judge` reporta como resueltas o que superaron el límite inferior de pantalla.
+
+### 4.3. Renderizado de Divisores y Cajas Receptoras en `_draw()`
+- Sin agregar nodos hijos adicionales ni modificar `.tscn`, `LaneField` implementa `_draw() -> void` para dibujar:
+  1. **Divisores Verticales de Carril:** Líneas sutiles que delimitan los 4 carriles dentro de `play_rect`.
+  2. **Zona de Impacto y Cajas Receptoras en `_hit_line_y`:** Una guía horizontal en `_hit_line_y` y 4 cajas receptoras con líneas paralelas superior e inferior centradas verticalmente en `_hit_line_y` con idénticas dimensiones a la cabeza de `NoteView` (`width = _lane_width - 2 * NoteView.HORIZONTAL_PADDING_PX`, `height = NoteView.DEFAULT_HEAD_HEIGHT_PX`).
+  3. **Iluminación Reactiva por Evento:** Cada receptor se ilumina suavemente cuando su carril está presionado (`lane_input_pressed` / `lane_input_released`) o mantiene una nota *hold* activa (`hold_state_changed`), invocando `queue_redraw()` únicamente cuando cambia el layout o el estado de pulsación/retención del carril.

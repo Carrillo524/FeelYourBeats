@@ -5,6 +5,14 @@ const DEFAULT_LANE_COUNT: int = 4
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
+const LANE_DIVIDER_COLOR: Color = Color(0.45, 0.75, 1.0, 0.16)
+const OUTER_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.32)
+const HIT_LINE_GUIDE_COLOR: Color = Color(0.35, 0.90, 1.0, 0.25)
+const RECEPTOR_IDLE_FILL_COLOR: Color = Color(0.12, 0.22, 0.36, 0.32)
+const RECEPTOR_ACTIVE_FILL_COLOR: Color = Color(0.30, 0.92, 1.0, 0.52)
+const RECEPTOR_HOLD_FILL_COLOR: Color = Color(0.40, 1.0, 0.88, 0.62)
+const RECEPTOR_IDLE_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.58)
+const RECEPTOR_ACTIVE_BORDER_COLOR: Color = Color(0.85, 0.98, 1.0, 0.98)
 
 @export var dsp_clock: DSPClock = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
@@ -23,6 +31,8 @@ var _current_dsp_time_sec: float = 0.0
 var _next_spawn_index: int = 0
 var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
+var _lane_pressed_states: Array[bool] = [false, false, false, false]
+var _lane_hold_states: Array[bool] = [false, false, false, false]
 
 
 func _ready() -> void:
@@ -34,6 +44,61 @@ func _ready() -> void:
 		apply_safe_layout(
 			screen_safe_adapter.get_play_rect(),
 			screen_safe_adapter.get_hud_safe_rect()
+		)
+	else:
+		queue_redraw()
+
+
+func _draw() -> void:
+	var lane_count: int = _get_active_lane_count()
+	var field_width: float = maxf(1.0, size.x)
+	var field_height: float = maxf(1.0, size.y)
+
+	for divider_idx: int in range(lane_count + 1):
+		var x_pos: float = float(divider_idx) * _lane_width
+		var is_outer: bool = divider_idx == 0 or divider_idx == lane_count
+		var divider_color: Color = OUTER_BORDER_COLOR if is_outer else LANE_DIVIDER_COLOR
+		var divider_width: float = 2.0 if is_outer else 1.5
+		draw_line(Vector2(x_pos, 0.0), Vector2(x_pos, field_height), divider_color, divider_width)
+
+	draw_line(Vector2(0.0, _hit_line_y), Vector2(field_width, _hit_line_y), HIT_LINE_GUIDE_COLOR, 1.5)
+
+	var receptor_height: float = NoteView.DEFAULT_HEAD_HEIGHT_PX
+	var receptor_half_h: float = receptor_height * 0.5
+	var receptor_top_y: float = _hit_line_y - receptor_half_h
+	var receptor_bottom_y: float = _hit_line_y + receptor_half_h
+	var receptor_width: float = maxf(4.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
+
+	for lane_idx: int in range(lane_count):
+		var is_pressed: bool = lane_idx < _lane_pressed_states.size() and _lane_pressed_states[lane_idx]
+		var is_holding: bool = lane_idx < _lane_hold_states.size() and _lane_hold_states[lane_idx]
+		var is_active: bool = is_pressed or is_holding
+
+		var receptor_x: float = (float(lane_idx) * _lane_width) + NoteView.HORIZONTAL_PADDING_PX
+		var receptor_rect: Rect2 = Rect2(receptor_x, receptor_top_y, receptor_width, receptor_height)
+
+		var fill_color: Color = RECEPTOR_IDLE_FILL_COLOR
+		if is_holding:
+			fill_color = RECEPTOR_HOLD_FILL_COLOR
+		elif is_pressed:
+			fill_color = RECEPTOR_ACTIVE_FILL_COLOR
+
+		var border_color: Color = RECEPTOR_ACTIVE_BORDER_COLOR if is_active else RECEPTOR_IDLE_BORDER_COLOR
+		var border_width: float = 3.0 if is_active else 2.0
+
+		draw_rect(receptor_rect, fill_color, true)
+		draw_rect(receptor_rect, border_color, false, border_width)
+		draw_line(
+			Vector2(receptor_x, receptor_top_y),
+			Vector2(receptor_x + receptor_width, receptor_top_y),
+			border_color,
+			border_width
+		)
+		draw_line(
+			Vector2(receptor_x, receptor_bottom_y),
+			Vector2(receptor_x + receptor_width, receptor_bottom_y),
+			border_color,
+			border_width
 		)
 
 
@@ -52,8 +117,10 @@ func load_chart(p_chart: ChartData) -> bool:
 
 	_ensure_pool()
 	_recycle_all_active_views()
+	_reset_lane_visual_states()
 	_chart = p_chart
 	_next_spawn_index = 0
+	queue_redraw()
 	return true
 
 
@@ -61,9 +128,7 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	position = p_play_rect.position
 	size = p_play_rect.size
 
-	var lane_count: int = DEFAULT_LANE_COUNT
-	if screen_safe_adapter != null:
-		lane_count = maxi(1, screen_safe_adapter.lane_count)
+	var lane_count: int = _get_active_lane_count()
 	_lane_width = maxf(1.0, p_play_rect.size.x / float(lane_count))
 
 	var max_hit_line_y: float = maxf(0.0, p_hud_safe_rect.end.y - bottom_padding_px)
@@ -79,6 +144,8 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 			view.scroll_speed_px_per_sec = scroll_speed_px_per_sec
 			var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(note)
 			view.update_position(_current_dsp_time_sec, _hit_line_y, is_holding)
+
+	queue_redraw()
 
 
 func update_field_at_time(p_dsp_time_sec: float) -> void:
@@ -135,11 +202,58 @@ func _connect_dependencies() -> void:
 		if not dsp_clock.dsp_time_updated.is_connected(update_field_at_time):
 			dsp_clock.dsp_time_updated.connect(update_field_at_time)
 
+	if input_adapter != null:
+		if not input_adapter.lane_input_pressed.is_connected(_on_lane_input_pressed):
+			input_adapter.lane_input_pressed.connect(_on_lane_input_pressed)
+		if not input_adapter.lane_input_released.is_connected(_on_lane_input_released):
+			input_adapter.lane_input_released.connect(_on_lane_input_released)
+
+	if hit_judge != null:
+		if not hit_judge.hold_state_changed.is_connected(_on_hold_state_changed):
+			hit_judge.hold_state_changed.connect(_on_hold_state_changed)
+
 	if input_adapter != null and hit_judge != null:
 		if not input_adapter.lane_input_pressed.is_connected(hit_judge.on_lane_pressed):
 			input_adapter.lane_input_pressed.connect(hit_judge.on_lane_pressed)
 		if not input_adapter.lane_input_released.is_connected(hit_judge.on_lane_released):
 			input_adapter.lane_input_released.connect(hit_judge.on_lane_released)
+
+
+func _on_lane_input_pressed(p_lane: int, _p_dsp_time_sec: float) -> void:
+	if p_lane < 0 or p_lane >= _lane_pressed_states.size():
+		return
+	if not _lane_pressed_states[p_lane]:
+		_lane_pressed_states[p_lane] = true
+		queue_redraw()
+
+
+func _on_lane_input_released(p_lane: int, _p_dsp_time_sec: float) -> void:
+	if p_lane < 0 or p_lane >= _lane_pressed_states.size():
+		return
+	if _lane_pressed_states[p_lane]:
+		_lane_pressed_states[p_lane] = false
+		queue_redraw()
+
+
+func _on_hold_state_changed(p_lane: int, p_is_holding: bool) -> void:
+	if p_lane < 0 or p_lane >= _lane_hold_states.size():
+		return
+	if _lane_hold_states[p_lane] != p_is_holding:
+		_lane_hold_states[p_lane] = p_is_holding
+		queue_redraw()
+
+
+func _get_active_lane_count() -> int:
+	if screen_safe_adapter != null:
+		return maxi(1, screen_safe_adapter.lane_count)
+	return DEFAULT_LANE_COUNT
+
+
+func _reset_lane_visual_states() -> void:
+	for i: int in range(_lane_pressed_states.size()):
+		_lane_pressed_states[i] = false
+	for j: int in range(_lane_hold_states.size()):
+		_lane_hold_states[j] = false
 
 
 func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
