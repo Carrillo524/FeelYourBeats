@@ -16,6 +16,28 @@ const RAIL_HOLD_GLOW_COLOR: Color = Color(0.28, 1.0, 0.85, 0.95)
 const CONTINUOUS_CORE_THICKNESS: float = 2.6
 const CONTINUOUS_GLOW_SCALE: float = 1.25
 
+const MAX_ACTIVE_RIPPLES: int = 16
+const RIPPLE_DURATION_SEC: float = 0.34
+const RIPPLE_START_RADIUS_PX: float = 14.0
+const RIPPLE_END_RADIUS_PX: float = 78.0
+
+const MAX_ACTIVE_PARTICLES: int = 128
+const PERFECT_PARTICLE_COUNT: int = 14
+const GREAT_PARTICLE_COUNT: int = 8
+const GOOD_PARTICLE_COUNT: int = 4
+const HOLD_TICK_SPARK_COUNT: int = 6
+const HOLD_SPARK_INTERVAL_SEC: float = 0.045
+const PARTICLE_GRAVITY_PX_PER_SEC2: float = 340.0
+
+const COLOR_PERFECT_A: Color = Color(0.35, 1.0, 0.96, 1.0)
+const COLOR_PERFECT_B: Color = Color(1.0, 0.88, 0.28, 1.0)
+const COLOR_PERFECT_C: Color = Color(1.0, 0.36, 0.86, 1.0)
+const COLOR_GREAT_A: Color = Color(0.30, 1.0, 0.62, 1.0)
+const COLOR_GREAT_B: Color = Color(0.25, 0.90, 1.0, 1.0)
+const COLOR_GOOD_A: Color = Color(0.38, 0.76, 1.0, 0.92)
+const COLOR_HOLD_SPARK: Color = Color(0.55, 1.0, 0.92, 1.0)
+const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
+
 @export var dsp_clock: DSPClock = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var input_adapter: RhythmInputAdapter = null
@@ -35,6 +57,11 @@ var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
 var _lane_pressed_states: Array[bool] = [false, false, false, false]
 var _lane_hold_states: Array[bool] = [false, false, false, false]
+var _touch_ripple_consumed_for_lane: Array[bool] = [false, false, false, false]
+var _touch_ripples: Array[Dictionary] = []
+var _hit_particles: Array[Dictionary] = []
+var _hold_spark_accumulator_sec: float = 0.0
+var _fx_seed_counter: int = 1
 
 
 func _ready() -> void:
@@ -48,6 +75,64 @@ func _ready() -> void:
 			screen_safe_adapter.get_hud_safe_rect()
 		)
 	else:
+		queue_redraw()
+
+
+func _process(p_delta: float) -> void:
+	var dt: float = maxf(0.0, p_delta)
+	var needs_redraw: bool = false
+
+	var any_holding: bool = false
+	var lane_count: int = _get_active_lane_count()
+	for lane_idx: int in range(mini(lane_count, _lane_hold_states.size())):
+		if _lane_hold_states[lane_idx]:
+			any_holding = true
+			break
+
+	if any_holding:
+		_hold_spark_accumulator_sec += dt
+		while _hold_spark_accumulator_sec >= HOLD_SPARK_INTERVAL_SEC:
+			_hold_spark_accumulator_sec -= HOLD_SPARK_INTERVAL_SEC
+			for lane_idx: int in range(mini(lane_count, _lane_hold_states.size())):
+				if _lane_hold_states[lane_idx]:
+					_spawn_hold_sparks(lane_idx, 2)
+					needs_redraw = true
+	else:
+		_hold_spark_accumulator_sec = 0.0
+
+	var ripple_idx: int = _touch_ripples.size() - 1
+	while ripple_idx >= 0:
+		var ripple: Dictionary = _touch_ripples[ripple_idx]
+		var next_age: float = (ripple["age"] as float) + dt
+		var duration: float = maxf(0.01, ripple["duration"] as float)
+		if next_age >= duration:
+			_touch_ripples.remove_at(ripple_idx)
+		else:
+			ripple["age"] = next_age
+			_touch_ripples[ripple_idx] = ripple
+		needs_redraw = true
+		ripple_idx -= 1
+
+	var particle_idx: int = _hit_particles.size() - 1
+	while particle_idx >= 0:
+		var particle: Dictionary = _hit_particles[particle_idx]
+		var next_age: float = (particle["age"] as float) + dt
+		var duration: float = maxf(0.01, particle["duration"] as float)
+		if next_age >= duration:
+			_hit_particles.remove_at(particle_idx)
+		else:
+			var pos: Vector2 = particle["pos"] as Vector2
+			var vel: Vector2 = particle["vel"] as Vector2
+			vel.y += PARTICLE_GRAVITY_PX_PER_SEC2 * dt
+			pos += vel * dt
+			particle["age"] = next_age
+			particle["pos"] = pos
+			particle["vel"] = vel
+			_hit_particles[particle_idx] = particle
+		needs_redraw = true
+		particle_idx -= 1
+
+	if needs_redraw:
 		queue_redraw()
 
 
@@ -117,6 +202,61 @@ func _draw() -> void:
 			active_thickness,
 			active_scale
 		)
+
+	_draw_touch_ripples()
+	_draw_hit_particles()
+
+
+func _draw_touch_ripples() -> void:
+	var ripple_count: int = _touch_ripples.size()
+	for i: int in range(ripple_count):
+		var ripple: Dictionary = _touch_ripples[i]
+		var pos: Vector2 = ripple["pos"] as Vector2
+		var age: float = ripple["age"] as float
+		var duration: float = maxf(0.01, ripple["duration"] as float)
+		var base_color: Color = ripple["color"] as Color
+		var t: float = clampf(age / duration, 0.0, 1.0)
+		var eased_t: float = 1.0 - pow(1.0 - t, 2.4)
+		var radius: float = lerpf(RIPPLE_START_RADIUS_PX, RIPPLE_END_RADIUS_PX, eased_t)
+		var alpha: float = (1.0 - t) * base_color.a
+		var stroke_w: float = lerpf(4.2, 1.4, t)
+
+		var halo_col: Color = Color(base_color.r, base_color.g, base_color.b, alpha * 0.34)
+		var core_col: Color = Color(
+			minf(1.0, base_color.r + 0.25),
+			minf(1.0, base_color.g + 0.25),
+			minf(1.0, base_color.b + 0.25),
+			alpha
+		)
+		draw_arc(pos, radius, 0.0, TAU, 28, halo_col, stroke_w * 2.6)
+		draw_arc(pos, radius, 0.0, TAU, 28, core_col, stroke_w)
+
+
+func _draw_hit_particles() -> void:
+	var particle_count: int = _hit_particles.size()
+	for i: int in range(particle_count):
+		var particle: Dictionary = _hit_particles[i]
+		var pos: Vector2 = particle["pos"] as Vector2
+		var vel: Vector2 = particle["vel"] as Vector2
+		var age: float = particle["age"] as float
+		var duration: float = maxf(0.01, particle["duration"] as float)
+		var radius: float = particle["radius"] as float
+		var base_color: Color = particle["color"] as Color
+		var t: float = clampf(age / duration, 0.0, 1.0)
+		var fade: float = 1.0 - (t * t)
+		var curr_radius: float = maxf(1.2, radius * (1.0 - t * 0.55))
+
+		var glow_col: Color = Color(base_color.r, base_color.g, base_color.b, fade * 0.32)
+		var core_col: Color = Color(
+			minf(1.0, base_color.r + 0.22),
+			minf(1.0, base_color.g + 0.22),
+			minf(1.0, base_color.b + 0.22),
+			fade * base_color.a
+		)
+		var tail_offset: Vector2 = -vel * 0.024
+		draw_circle(pos, curr_radius * 2.1, glow_col)
+		draw_line(pos, pos + tail_offset, core_col, curr_radius * 1.15)
+		draw_circle(pos, curr_radius, core_col)
 
 
 func _draw_glowing_horizontal_line(
@@ -217,6 +357,14 @@ func get_free_pool_count() -> int:
 	return _free_pool.size()
 
 
+func get_active_ripple_count() -> int:
+	return _touch_ripples.size()
+
+
+func get_active_particle_count() -> int:
+	return _hit_particles.size()
+
+
 func _ensure_pool() -> void:
 	var target_count: int = maxi(1, pool_size)
 	var current_total: int = _free_pool.size() + _active_views.size()
@@ -242,6 +390,8 @@ func _connect_dependencies() -> void:
 			dsp_clock.dsp_time_updated.connect(update_field_at_time)
 
 	if input_adapter != null:
+		if not input_adapter.touch_ripple_triggered.is_connected(_on_touch_ripple_triggered):
+			input_adapter.touch_ripple_triggered.connect(_on_touch_ripple_triggered)
 		if not input_adapter.lane_input_pressed.is_connected(_on_lane_input_pressed):
 			input_adapter.lane_input_pressed.connect(_on_lane_input_pressed)
 		if not input_adapter.lane_input_released.is_connected(_on_lane_input_released):
@@ -250,6 +400,10 @@ func _connect_dependencies() -> void:
 	if hit_judge != null:
 		if not hit_judge.hold_state_changed.is_connected(_on_hold_state_changed):
 			hit_judge.hold_state_changed.connect(_on_hold_state_changed)
+		if not hit_judge.note_judged.is_connected(_on_note_judged):
+			hit_judge.note_judged.connect(_on_note_judged)
+		if not hit_judge.hold_combo_ticked.is_connected(_on_hold_combo_ticked):
+			hit_judge.hold_combo_ticked.connect(_on_hold_combo_ticked)
 
 	if input_adapter != null and hit_judge != null:
 		if not input_adapter.lane_input_pressed.is_connected(hit_judge.on_lane_pressed):
@@ -258,9 +412,26 @@ func _connect_dependencies() -> void:
 			input_adapter.lane_input_released.connect(hit_judge.on_lane_released)
 
 
+func _on_touch_ripple_triggered(p_local_pos: Vector2, p_lane: int) -> void:
+	if p_lane >= 0 and p_lane < _touch_ripple_consumed_for_lane.size():
+		_touch_ripple_consumed_for_lane[p_lane] = true
+	var clamped_pos: Vector2 = Vector2(
+		clampf(p_local_pos.x, 0.0, maxf(1.0, size.x)),
+		clampf(p_local_pos.y, 0.0, maxf(1.0, size.y))
+	)
+	_spawn_touch_ripple(clamped_pos, COLOR_TOUCH_RIPPLE)
+
+
 func _on_lane_input_pressed(p_lane: int, _p_dsp_time_sec: float) -> void:
 	if p_lane < 0 or p_lane >= _lane_pressed_states.size():
 		return
+
+	if _touch_ripple_consumed_for_lane[p_lane]:
+		_touch_ripple_consumed_for_lane[p_lane] = false
+	else:
+		var lane_center_x: float = (float(p_lane) + 0.5) * _lane_width
+		_spawn_touch_ripple(Vector2(lane_center_x, _hit_line_y), COLOR_TOUCH_RIPPLE)
+
 	if not _lane_pressed_states[p_lane]:
 		_lane_pressed_states[p_lane] = true
 		queue_redraw()
@@ -269,6 +440,7 @@ func _on_lane_input_pressed(p_lane: int, _p_dsp_time_sec: float) -> void:
 func _on_lane_input_released(p_lane: int, _p_dsp_time_sec: float) -> void:
 	if p_lane < 0 or p_lane >= _lane_pressed_states.size():
 		return
+	_touch_ripple_consumed_for_lane[p_lane] = false
 	if _lane_pressed_states[p_lane]:
 		_lane_pressed_states[p_lane] = false
 		queue_redraw()
@@ -279,7 +451,139 @@ func _on_hold_state_changed(p_lane: int, p_is_holding: bool) -> void:
 		return
 	if _lane_hold_states[p_lane] != p_is_holding:
 		_lane_hold_states[p_lane] = p_is_holding
+		if p_is_holding:
+			_spawn_hold_sparks(p_lane, 4)
 		queue_redraw()
+
+
+func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
+	if p_lane < 0 or p_lane >= _get_active_lane_count():
+		return
+	_spawn_judgment_particles(p_lane, p_grade)
+
+
+func _on_hold_combo_ticked(p_lane: int, _p_new_combo: int) -> void:
+	if p_lane < 0 or p_lane >= _get_active_lane_count():
+		return
+	_spawn_hold_sparks(p_lane, HOLD_TICK_SPARK_COUNT)
+
+
+func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
+	if _touch_ripples.size() >= MAX_ACTIVE_RIPPLES:
+		_touch_ripples.remove_at(0)
+
+	_touch_ripples.append({
+		"pos": p_pos,
+		"age": 0.0,
+		"duration": RIPPLE_DURATION_SEC,
+		"color": p_color,
+	})
+	queue_redraw()
+
+
+func _spawn_judgment_particles(p_lane: int, p_grade: int) -> void:
+	var count: int = 0
+	var min_speed: float = 0.0
+	var max_speed: float = 0.0
+	var min_radius: float = 3.0
+	var max_radius: float = 5.0
+	var duration_sec: float = 0.25
+
+	match p_grade:
+		HitJudge.JudgmentGrade.PERFECT:
+			count = PERFECT_PARTICLE_COUNT
+			min_speed = 230.0
+			max_speed = 460.0
+			min_radius = 5.2
+			max_radius = 8.4
+			duration_sec = 0.36
+		HitJudge.JudgmentGrade.GREAT:
+			count = GREAT_PARTICLE_COUNT
+			min_speed = 155.0
+			max_speed = 310.0
+			min_radius = 4.2
+			max_radius = 6.4
+			duration_sec = 0.29
+		HitJudge.JudgmentGrade.GOOD:
+			count = GOOD_PARTICLE_COUNT
+			min_speed = 95.0
+			max_speed = 190.0
+			min_radius = 3.2
+			max_radius = 4.8
+			duration_sec = 0.22
+		_:
+			return
+
+	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	if p_grade == HitJudge.JudgmentGrade.PERFECT:
+		_spawn_touch_ripple(origin, COLOR_PERFECT_B)
+
+	for i: int in range(count):
+		_fx_seed_counter += 1
+		var angle_norm: float = float(i) / float(maxi(1, count))
+		var jitter: float = _pseudo_rand_signed(_fx_seed_counter + i * 17) * 0.28
+		var angle_rad: float = lerpf(-PI * 0.92, -PI * 0.08, angle_norm) + jitter
+		var speed_ratio: float = 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 13 + i * 31)
+		var speed: float = lerpf(min_speed, max_speed, speed_ratio)
+		var vel: Vector2 = Vector2(cos(angle_rad), sin(angle_rad)) * speed
+		var radius: float = lerpf(min_radius, max_radius, speed_ratio)
+
+		var col: Color = COLOR_GOOD_A
+		if p_grade == HitJudge.JudgmentGrade.PERFECT:
+			var mod3: int = i % 3
+			if mod3 == 0:
+				col = COLOR_PERFECT_A
+			elif mod3 == 1:
+				col = COLOR_PERFECT_B
+			else:
+				col = COLOR_PERFECT_C
+		elif p_grade == HitJudge.JudgmentGrade.GREAT:
+			col = COLOR_GREAT_A if (i % 2) == 0 else COLOR_GREAT_B
+
+		_append_particle(origin, vel, radius, duration_sec, col)
+
+	queue_redraw()
+
+
+func _spawn_hold_sparks(p_lane: int, p_count: int) -> void:
+	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	for i: int in range(p_count):
+		_fx_seed_counter += 1
+		var spread: float = _pseudo_rand_signed(_fx_seed_counter * 19 + i * 23)
+		var angle_rad: float = (-PI * 0.5) + (spread * PI * 0.36)
+		var speed_t: float = 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 29 + i * 7)
+		var speed: float = lerpf(135.0, 290.0, speed_t)
+		var vel: Vector2 = Vector2(cos(angle_rad), sin(angle_rad)) * speed
+		var radius: float = lerpf(3.4, 5.8, speed_t)
+		var col: Color = COLOR_HOLD_SPARK if (i % 2) == 0 else COLOR_PERFECT_B
+		_append_particle(origin, vel, radius, 0.24, col)
+
+	queue_redraw()
+
+
+func _append_particle(
+	p_pos: Vector2,
+	p_vel: Vector2,
+	p_radius: float,
+	p_duration: float,
+	p_color: Color
+) -> void:
+	if _hit_particles.size() >= MAX_ACTIVE_PARTICLES:
+		_hit_particles.remove_at(0)
+
+	_hit_particles.append({
+		"pos": p_pos,
+		"vel": p_vel,
+		"age": 0.0,
+		"duration": p_duration,
+		"radius": p_radius,
+		"color": p_color,
+	})
+
+
+func _pseudo_rand_signed(p_seed: int) -> float:
+	var h: int = (p_seed * 1103515245 + 12345) & 0x7fffffff
+	return (float(h % 2000) / 1000.0) - 1.0
 
 
 func _get_active_lane_count() -> int:
@@ -293,6 +597,11 @@ func _reset_lane_visual_states() -> void:
 		_lane_pressed_states[i] = false
 	for j: int in range(_lane_hold_states.size()):
 		_lane_hold_states[j] = false
+	for k: int in range(_touch_ripple_consumed_for_lane.size()):
+		_touch_ripple_consumed_for_lane[k] = false
+	_touch_ripples.clear()
+	_hit_particles.clear()
+	_hold_spark_accumulator_sec = 0.0
 
 
 func _spawn_visible_notes(p_dsp_time_sec: float) -> void:

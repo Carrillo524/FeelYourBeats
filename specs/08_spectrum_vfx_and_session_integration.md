@@ -11,21 +11,27 @@ Este documento especifica la integración de **`AudioAnalyzer`** y **`AutoChartG
 - `mid_energy: float` (`0.0..1.0`): Energía suavizada de medios (`200..2200 Hz`).
 - `high_energy: float` (`0.0..1.0`): Energía suavizada de agudos (`2200..12000 Hz`).
 - `zoom_bounce: float` (`0.0..0.25`): Factor de rebote de escala UV centrado en `vec2(0.5, 0.5)` con `clamp` en `[0.0, 1.0]` para preservar cobertura *full-bleed* sin repeticiones en bordes curvos ni pantallas 1.5K (20:9).
+- `shake_offset: vec2`: Desplazamiento UV de micro-sacudida por bombo y *drops*, combinado con ondas de choque radiales cuando `intensity_tier >= 2`, bandas verticales saturadas en golpes `PERFECT` por carril y refuerzo dinámico de saturación cromática con `energy_level` y `bass_energy`.
 
-### 1.2. Suavizado y Respiración Ambiental (`vfx/reactive_background.gd`)
+### 1.2. Suavizado, Respiración Ambiental y Sacudida por Bombo (`vfx/reactive_background.gd`)
 - `ReactiveBackground` recibe `@export var audio_analyzer: AudioAnalyzer = null` y se conecta a `audio_analyzer.spectrum_updated(bass_energy, mid_energy, high_energy, total_energy)`.
 - En `_process(p_delta: float)`, interpola las tres sub-bandas con ataque rápido (`SPECTRUM_ATTACK_SPEED = 14.0`) y caída suave (`SPECTRUM_DECAY_SPEED = 6.5`), combinando `_smoothed_bass` y `_beat_pulse` con una oscilación sinusoidal de baja amplitud (`_ambient_phase`) para que el fondo conserve una respiración visual sutil incluso durante pausas o silencios.
+- Detecta transitorios de bombo y cambios a tiers de *drop* (`intensity_tier >= 2`), emitiendo:
+  - `signal bass_kick_pulsed(p_strength: float)`: sincroniza el micro-rebote de `COMBO xN` en `SafeHud`.
+  - `signal screen_shake_updated(p_offset: Vector2)`: `GameSession` aplica este desplazamiento amortiguado sobre `LaneField` respecto a `play_rect.position`, restaurándolo a `Vector2.ZERO` al pausar (`reset_shake()`).
 
 ---
 
-## 2. Halo / Blur Concéntrico en Notas Sostenidas (`gameplay/note_view.gd`)
+## 2. Degradado Concéntrico Suave y Núcleo Pulsante en Notas Sostenidas (`gameplay/note_view.gd`)
 
-- `NoteView` incorpora dos capas translúcidas concéntricas detrás de `_hold_body_rect`:
+- `NoteView` estructura el haz de las notas *hold* mediante 4 capas concéntricas suaves sin franjas rígidas:
   - `HoldOuterGlowRect` (`_hold_outer_glow_rect: ColorRect`)
   - `HoldInnerGlowRect` (`_hold_inner_glow_rect: ColorRect`)
-- Cuando `note_data.is_hold() == true`, ambas capas envuelven el haz vertical de la nota sostenida.
-- Durante la retención activa (`p_is_holding == true` en `update_position`), el ancho del halo se expande (`1.68x -> 2.05x` en la capa exterior y `1.32x -> 1.54x` en la interior) y aumenta su luminosidad mientras la barra se consume sobre `hit_line_y`.
-- **Blindaje para Object Pooling:** Tanto al configurar una nota simple (`not note_data.is_hold()`) en `setup()` como al reciclar la vista en `reset_for_pool()`, `_hold_outer_glow_rect.visible`, `_hold_inner_glow_rect.visible` y `_hold_body_rect.visible` se fijan explícitamente en `false` (con tamaño `Vector2.ZERO`) para impedir cualquier residuo visual entre notas recicladas.
+  - `HoldBodyRect` (`_hold_body_rect: ColorRect`)
+  - `HoldCoreBeamRect` (`_hold_core_beam_rect: ColorRect`)
+- Cuando `note_data.is_hold() == true`, las 4 capas conforman un degradado transversal suave con un núcleo central brillante que pulsa determinísticamente con `p_dsp_time_sec` mientras `p_is_holding == true` en `update_position`.
+- **Blindaje para Object Pooling:** Tanto al configurar una nota simple (`not note_data.is_hold()`) en `setup()` como al reciclar la vista en `reset_for_pool()`, las 4 capas se fijan explícitamente en `visible = false` (con tamaño `Vector2.ZERO`) para impedir cualquier residuo visual entre notas recicladas.
+- **Filtro Anticascada de Notas Hold (`core/chart/auto_chart_generator.gd`):** Se establece `MIN_HOLD_DURATION_SEC = 0.45`, un umbral de sostenimiento estricto `maxf(0.26, mean_rms * 0.88)` y un enfriamiento `HOLD_CASCADE_COOLDOWN_SEC = 0.30` entre el final de un *hold* y el siguiente para evitar cascadas consecutivas de holds en pasajes rítmicos cortos.
 
 ---
 

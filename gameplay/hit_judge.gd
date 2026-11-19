@@ -11,9 +11,12 @@ enum JudgmentGrade {
 signal note_judged(lane: int, grade: int, error_ms: float, combo: int)
 signal score_changed(score: int, combo: int, max_combo: int, accuracy: float)
 signal hold_state_changed(lane: int, is_holding: bool)
+signal hold_combo_ticked(p_lane: int, p_new_combo: int)
 
 const LANE_COUNT: int = 4
 const SEC_TO_MS: float = 1000.0
+const HOLD_COMBO_TICK_INTERVAL_SEC: float = 0.25
+const SCORE_HOLD_TICK: int = 150
 const SCORE_PERFECT: int = 1000
 const SCORE_GREAT: int = 700
 const SCORE_GOOD: int = 400
@@ -38,6 +41,7 @@ var _chart: ChartData = null
 var _lane_queues: Array[Array] = [[], [], [], []]
 var _lane_cursors: PackedInt32Array = PackedInt32Array([0, 0, 0, 0])
 var _active_holds: Array[NoteData] = [null, null, null, null]
+var _hold_last_tick_times: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 var _resolved_notes: Dictionary = {}
 var _judged_count: int = 0
 var _accuracy_weight_sum: float = 0.0
@@ -69,6 +73,7 @@ func reset_state() -> void:
 		if _active_holds[lane_idx] != null:
 			_active_holds[lane_idx] = null
 			hold_state_changed.emit(lane_idx, false)
+		_hold_last_tick_times[lane_idx] = 0.0
 		_lane_queues[lane_idx].clear()
 		_lane_cursors[lane_idx] = 0
 
@@ -110,6 +115,7 @@ func on_lane_pressed(p_lane: int, p_dsp_time_sec: float) -> void:
 		_apply_judgment(p_lane, grade, error_ms)
 		if grade != JudgmentGrade.MISS:
 			_active_holds[p_lane] = candidate
+			_hold_last_tick_times[p_lane] = maxf(p_dsp_time_sec, candidate.time_sec)
 			hold_state_changed.emit(p_lane, true)
 		else:
 			_resolved_notes[candidate] = true
@@ -124,6 +130,7 @@ func on_lane_released(p_lane: int, p_dsp_time_sec: float) -> void:
 		return
 
 	_active_holds[p_lane] = null
+	_hold_last_tick_times[p_lane] = 0.0
 	_resolved_notes[hold_note] = true
 	hold_state_changed.emit(p_lane, false)
 
@@ -152,8 +159,16 @@ func update_dsp_time(p_dsp_time_sec: float) -> void:
 		var hold_note: NoteData = _active_holds[lane_idx]
 		if hold_note != null:
 			var end_time_sec: float = _get_note_end_time_sec(hold_note)
-			if p_dsp_time_sec >= end_time_sec:
+			if p_dsp_time_sec < end_time_sec:
+				while (p_dsp_time_sec - _hold_last_tick_times[lane_idx]) >= HOLD_COMBO_TICK_INTERVAL_SEC:
+					_hold_last_tick_times[lane_idx] += HOLD_COMBO_TICK_INTERVAL_SEC
+					_apply_hold_combo_tick(lane_idx)
+			else:
+				while (_hold_last_tick_times[lane_idx] + HOLD_COMBO_TICK_INTERVAL_SEC) < (end_time_sec - 0.001):
+					_hold_last_tick_times[lane_idx] += HOLD_COMBO_TICK_INTERVAL_SEC
+					_apply_hold_combo_tick(lane_idx)
 				_active_holds[lane_idx] = null
+				_hold_last_tick_times[lane_idx] = 0.0
 				_resolved_notes[hold_note] = true
 				hold_state_changed.emit(lane_idx, false)
 				_apply_judgment(lane_idx, JudgmentGrade.PERFECT, 0.0)
@@ -231,6 +246,15 @@ func _apply_judgment(p_lane: int, p_grade: int, p_error_ms: float) -> void:
 
 	accuracy = _accuracy_weight_sum / float(_judged_count)
 	note_judged.emit(p_lane, p_grade, p_error_ms, combo)
+	score_changed.emit(score, combo, max_combo, accuracy)
+
+
+func _apply_hold_combo_tick(p_lane: int) -> void:
+	combo += 1
+	if combo > max_combo:
+		max_combo = combo
+	score += SCORE_HOLD_TICK
+	hold_combo_ticked.emit(p_lane, combo)
 	score_changed.emit(score, combo, max_combo, accuracy)
 
 

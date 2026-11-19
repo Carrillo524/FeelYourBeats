@@ -3,6 +3,7 @@ extends Node
 
 signal lane_input_pressed(lane: int, dsp_time_sec: float)
 signal lane_input_released(lane: int, dsp_time_sec: float)
+signal touch_ripple_triggered(p_local_pos: Vector2, p_lane: int)
 
 const INVALID_LANE: int = -1
 const LANE_0: int = 0
@@ -67,6 +68,11 @@ func _handle_screen_touch(p_touch_event: InputEventScreenTouch) -> void:
 				lane_input_released.emit(previous_lane, timestamp_sec)
 
 		_active_touches[touch_index] = lane
+		var local_pos: Vector2 = viewport_pos
+		if screen_safe_adapter != null:
+			var play_rect: Rect2 = screen_safe_adapter.get_play_rect()
+			local_pos = viewport_pos - play_rect.position
+		touch_ripple_triggered.emit(local_pos, lane)
 		lane_input_pressed.emit(lane, timestamp_sec)
 	else:
 		if not _active_touches.has(touch_index):

@@ -13,8 +13,9 @@ enum NoteTypeMode {
 }
 
 const LANE_COUNT: int = 4
-const MIN_HOLD_DURATION_SEC: float = 0.25
+const MIN_HOLD_DURATION_SEC: float = 0.45
 const HOLD_TAIL_SAFETY_GAP_SEC: float = 0.08
+const HOLD_CASCADE_COOLDOWN_SEC: float = 0.30
 const TRACK_END_MARGIN_SEC: float = 0.10
 const LOCAL_WINDOW_RADIUS_FRAMES: int = 12
 const DEFAULT_BLOCK_BEATS: int = 8
@@ -239,11 +240,16 @@ func _apply_hold_durations(
 	for i: int in range(rms_count):
 		sum_rms += p_rms_frames[i]
 	var mean_rms: float = sum_rms / float(rms_count)
-	var sustain_threshold: float = maxf(0.18, mean_rms * 0.72)
+	var sustain_threshold: float = maxf(0.26, mean_rms * 0.88)
+	var last_hold_end_sec: float = -999.0
 
 	var note_count: int = p_notes.size()
 	for i: int in range(note_count):
 		var note: NoteData = p_notes[i]
+		if note.time_sec < last_hold_end_sec + HOLD_CASCADE_COOLDOWN_SEC:
+			note.duration_sec = 0.0
+			continue
+
 		var start_frame: int = clampi(int(round(note.time_sec / p_hop_sec)), 0, rms_count - 1)
 
 		var next_same_lane_time: float = p_duration_sec - TRACK_END_MARGIN_SEC
@@ -272,6 +278,7 @@ func _apply_hold_durations(
 
 		if clamped_hold_sec >= MIN_HOLD_DURATION_SEC:
 			note.duration_sec = clamped_hold_sec
+			last_hold_end_sec = note.time_sec + clamped_hold_sec
 		else:
 			note.duration_sec = 0.0
 

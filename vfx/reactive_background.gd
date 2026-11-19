@@ -1,6 +1,9 @@
 class_name ReactiveBackground
 extends ColorRect
 
+signal screen_shake_updated(p_offset: Vector2)
+signal bass_kick_pulsed(p_strength: float)
+
 const SHADER_PATH: String = "res://vfx/reactive_backdrop.gdshader"
 const BEAT_DECAY_PER_SEC: float = 4.5
 const LANE_FLASH_DECAY_PER_SEC: float = 5.5
@@ -11,6 +14,9 @@ const ZOOM_DECAY_SPEED: float = 7.0
 const MAX_ZOOM_BOUNCE: float = 0.25
 const AMBIENT_BREATH_SPEED: float = 1.6
 const AMBIENT_ZOOM_AMPLITUDE: float = 0.018
+const SHAKE_DECAY_SPEED: float = 8.5
+const SHAKE_OSCILLATION_SPEED: float = 42.0
+const MAX_SHAKE_PX: float = 6.5
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
@@ -28,8 +34,13 @@ var _target_high: float = 0.0
 var _smoothed_bass: float = 0.0
 var _smoothed_mid: float = 0.0
 var _smoothed_high: float = 0.0
+var _prev_bass_sample: float = 0.0
 var _zoom_bounce: float = 0.0
 var _ambient_phase: float = 0.0
+var _shake_intensity: float = 0.0
+var _shake_phase: float = 0.0
+var _shake_offset_px: Vector2 = Vector2.ZERO
+var _shake_offset_uv: Vector2 = Vector2.ZERO
 var _beat_pulse_count: int = 0
 var _intensity_change_count: int = 0
 var _spectrum_update_count: int = 0
@@ -67,6 +78,7 @@ func connect_dependencies() -> void:
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
 	_ambient_phase += dt * AMBIENT_BREATH_SPEED
+	_shake_phase += dt * SHAKE_OSCILLATION_SPEED
 
 	_beat_pulse = maxf(0.0, _beat_pulse - (BEAT_DECAY_PER_SEC * dt))
 	_current_energy = lerpf(_current_energy, _target_energy, clampf(ENERGY_LERP_SPEED * dt, 0.0, 1.0))
@@ -91,6 +103,24 @@ func _process(p_delta: float) -> void:
 	)
 	_zoom_bounce = lerpf(_zoom_bounce, target_zoom, clampf(ZOOM_DECAY_SPEED * dt, 0.0, 1.0))
 
+	_shake_intensity = maxf(0.0, _shake_intensity - (SHAKE_DECAY_SPEED * dt))
+	if _shake_intensity > 0.001:
+		var tier_mult: float = 1.35 if _current_tier >= 2 else 0.75
+		var amp_px: float = _shake_intensity * MAX_SHAKE_PX * tier_mult
+		_shake_offset_px = Vector2(
+			sin(_shake_phase * 1.73) * amp_px,
+			cos(_shake_phase * 2.29) * amp_px * 0.85
+		)
+		_shake_offset_uv = Vector2(
+			_shake_offset_px.x / 1080.0,
+			_shake_offset_px.y / 1920.0
+		)
+	else:
+		_shake_offset_px = Vector2.ZERO
+		_shake_offset_uv = Vector2.ZERO
+
+	screen_shake_updated.emit(_shake_offset_px)
+
 	var lane_decay: float = LANE_FLASH_DECAY_PER_SEC * dt
 	_lane_flashes.x = maxf(0.0, _lane_flashes.x - lane_decay)
 	_lane_flashes.y = maxf(0.0, _lane_flashes.y - lane_decay)
@@ -98,6 +128,18 @@ func _process(p_delta: float) -> void:
 	_lane_flashes.w = maxf(0.0, _lane_flashes.w - lane_decay)
 
 	_sync_shader_parameters()
+
+
+func reset_shake() -> void:
+	_shake_intensity = 0.0
+	_shake_offset_px = Vector2.ZERO
+	_shake_offset_uv = Vector2.ZERO
+	_sync_shader_parameters()
+	screen_shake_updated.emit(Vector2.ZERO)
+
+
+func get_shake_offset() -> Vector2:
+	return _shake_offset_px
 
 
 func get_current_tier() -> int:
@@ -140,15 +182,24 @@ func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
 	_beat_pulse = 1.0
 	_zoom_bounce = clampf(_zoom_bounce + 0.05, 0.0, MAX_ZOOM_BOUNCE)
 	_beat_pulse_count += 1
+
+	var tier_norm: float = float(_current_tier) / 3.0
+	var kick_strength: float = clampf(0.42 + (0.38 * _smoothed_bass) + (0.20 * tier_norm), 0.25, 1.0)
+	_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+	bass_kick_pulsed.emit(kick_strength)
 	_sync_shader_parameters()
 
 
 func _on_intensity_changed(p_block: IntensityBlock) -> void:
 	if p_block == null:
 		return
+	var prev_tier: int = _current_tier
 	_target_energy = clampf(p_block.energy, 0.0, 1.0)
 	_current_tier = clampi(p_block.tier, IntensityBlock.MIN_TIER, IntensityBlock.MAX_TIER)
 	_intensity_change_count += 1
+	if _current_tier >= 2 and _current_tier > prev_tier:
+		_shake_intensity = clampf(maxf(_shake_intensity, 0.85), 0.0, 1.0)
+		bass_kick_pulsed.emit(0.95)
 	_sync_shader_parameters()
 
 
@@ -158,11 +209,21 @@ func _on_spectrum_updated(
 	p_high_energy: float,
 	p_total_energy: float
 ) -> void:
-	_target_bass = clampf(p_bass_energy, 0.0, 1.0)
+	var clamped_bass: float = clampf(p_bass_energy, 0.0, 1.0)
+	var bass_jump: float = clamped_bass - _prev_bass_sample
+	_prev_bass_sample = clamped_bass
+
+	_target_bass = clamped_bass
 	_target_mid = clampf(p_mid_energy, 0.0, 1.0)
 	_target_high = clampf(p_high_energy, 0.0, 1.0)
 	_target_energy = clampf(maxf(_target_energy * 0.75, p_total_energy), 0.15, 1.0)
 	_spectrum_update_count += 1
+
+	if bass_jump >= 0.14 or (clamped_bass >= 0.58 and bass_jump >= 0.06):
+		var tier_norm: float = float(_current_tier) / 3.0
+		var kick_strength: float = clampf(clamped_bass * 0.72 + bass_jump * 0.65, 0.25, 1.0)
+		_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+		bass_kick_pulsed.emit(kick_strength)
 
 
 func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
@@ -219,3 +280,4 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("mid_energy", _smoothed_mid)
 	_shader_material.set_shader_parameter("high_energy", _smoothed_high)
 	_shader_material.set_shader_parameter("zoom_bounce", _zoom_bounce)
+	_shader_material.set_shader_parameter("shake_offset", _shake_offset_uv)

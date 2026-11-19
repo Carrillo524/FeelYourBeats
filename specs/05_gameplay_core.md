@@ -40,7 +40,8 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
      - Si se soltó antes de la ventana de gracia pero dentro de `great_window_sec` o `good_window_sec`: otorga `GREAT` o `GOOD`.
      - Si se soltó demasiado pronto: emite `JudgmentGrade.MISS` y reinicia `combo = 0`.
 3. **`update_dsp_time(p_dsp_time_sec: float) -> void`:**
-   - Si un *hold* activo alcanza o supera `end_time_sec`, se completa automáticamente con `JudgmentGrade.PERFECT` y emite `hold_state_changed(lane, false)`.
+   - Mientras un *hold* está activo en un carril (`_active_holds[lane] != null`), acumula el tiempo retenido respecto a `_hold_last_tick_times[lane]` y cada **`0.25 s`** (`HOLD_COMBO_TICK_INTERVAL_SEC`) incrementa `combo += 1`, actualiza `max_combo` y suma `SCORE_HOLD_TICK = 150` a `score`, emitiendo `hold_combo_ticked(lane, combo)` y `score_changed`.
+   - Si un *hold* activo alcanza o supera `end_time_sec`, se completa automáticamente con `JudgmentGrade.PERFECT`, reinicia `_hold_last_tick_times[lane] = 0.0` y emite `hold_state_changed(lane, false)`.
    - Expira con `JudgmentGrade.MISS` toda nota no golpeada cuya ventana `note.time_sec + miss_window_sec` haya vencido.
 
 ### 2.3. Contrato Público de `HitJudge`
@@ -48,6 +49,7 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
   - `signal note_judged(lane: int, grade: int, error_ms: float, combo: int)`
   - `signal score_changed(score: int, combo: int, max_combo: int, accuracy: float)`
   - `signal hold_state_changed(lane: int, is_holding: bool)`
+  - `signal hold_combo_ticked(p_lane: int, p_new_combo: int)`
 - **Métodos Públicos:**
   - `func load_chart(p_chart: ChartData) -> bool`
   - `func reset_state() -> void`
@@ -93,8 +95,15 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
 - `load_chart(p_chart: ChartData) -> bool` valida el chart, delega en `hit_judge.load_chart(p_chart)` si `hit_judge != null`, recicla todas las vistas activas al pool (`_free_pool`) y reinicia el cursor `_next_spawn_index = 0`.
 - En `update_field_at_time(p_dsp_time_sec: float)`, activa desde `_free_pool` únicamente las notas dentro de la ventana de visibilidad superior y recicla inmediatamente aquellas que `hit_judge` reporta como resueltas o que superaron el límite inferior de pantalla.
 
-### 4.3. Renderizado de Divisores y Líneas Paralelas Continuas con Halo Brillante Permanente en `_draw()`
+### 4.3. Renderizado de Divisores, Líneas Paralelas con Halo, Ondas de Toque y Partículas por Precisión en `_draw()`
 - Sin agregar nodos hijos adicionales ni modificar `.tscn`, `LaneField` implementa `_draw() -> void` para dibujar:
   1. **Divisores Verticales de Carril:** Líneas sutiles que delimitan los 4 carriles dentro de `play_rect`.
   2. **Dos Líneas Horizontales Paralelas Continuas en `_hit_line_y`:** Dos líneas continuas que cruzan de extremo a extremo todo el ancho de `LaneField` (`x = 0.0` hasta `x = size.x`), ubicadas en `_hit_line_y \pm \text{DEFAULT\_HEAD\_HEIGHT\_PX} / 2` para enmarcar la altura visual de las notas.
   3. **Halo Luminoso Permanente (*Fake Blur*):** Debajo de cada línea continua se dibujan permanentemente 3 capas más anchas con alfa decreciente (`6.0x`, `3.5x` y `1.9x` del grosor central) y un núcleo nítido de alto contraste, añadiendo un refuerzo luminoso adicional sobre el tramo del carril cuando se presiona o retiene (`lane_input_pressed` / `lane_input_released` y `hold_state_changed`).
+  4. **Ondas de Toque (*Touch Ripples*):** Pool circular en `_touch_ripples` (`MAX_ACTIVE_RIPPLES = 16`) alimentado por `RhythmInputAdapter.touch_ripple_triggered(p_local_pos, p_lane)` al tocar la pantalla (o centrado en `_hit_line_y` del carril correspondiente al presionar las teclas `D`, `F`, `J`, `K`).
+  5. **Partículas por Precisión en Todas las Notas:** Pool ligero en `_hit_particles` (`MAX_ACTIVE_PARTICLES = 128`) disparado en `HitJudge.note_judged` para **todas las notas (*tap* y *hold*), exista o no un *drop***:
+     - `PERFECT`: explosión saturada de `14` partículas (cian, dorado y magenta) más onda radial en `_hit_line_y`.
+     - `GREAT`: ráfaga media de `8` partículas (verde neón y cian).
+     - `GOOD`: destello sutil de `4` partículas (azul claro).
+     - `MISS`: `0` partículas.
+     - **Chispas Continuas en *Hold*:** Emisión continua de micro-chispas en `_hit_line_y` mientras una nota *hold* permanece retenida y ráfagas de refuerzo en cada `hold_combo_ticked`.

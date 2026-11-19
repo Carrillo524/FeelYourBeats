@@ -205,6 +205,8 @@ func _resolve_and_wire_nodes() -> void:
 		reactive_background.hit_judge = hit_judge
 		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
+		if not reactive_background.screen_shake_updated.is_connected(_on_screen_shake_updated):
+			reactive_background.screen_shake_updated.connect(_on_screen_shake_updated)
 
 	if lane_field != null:
 		lane_field.dsp_clock = dsp_clock
@@ -223,11 +225,36 @@ func _resolve_and_wire_nodes() -> void:
 		safe_hud.hit_judge = hit_judge
 		safe_hud.dsp_clock = dsp_clock
 		safe_hud.input_adapter = input_adapter
+		safe_hud.reactive_background = reactive_background
 		safe_hud.connect_dependencies()
+		if not safe_hud.pause_requested.is_connected(_on_pause_requested):
+			safe_hud.pause_requested.connect(_on_pause_requested)
 		if not safe_hud.restart_requested.is_connected(_on_restart_requested):
 			safe_hud.restart_requested.connect(_on_restart_requested)
 		if screen_safe_adapter != null:
 			safe_hud.apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
+
+
+func _on_screen_shake_updated(p_offset: Vector2) -> void:
+	if lane_field == null:
+		return
+	var base_pos: Vector2 = screen_safe_adapter.get_play_rect().position if screen_safe_adapter != null else Vector2.ZERO
+	var is_paused_or_counting: bool = (
+		safe_hud != null
+		and (safe_hud.is_pause_menu_open() or safe_hud.is_resume_countdown_active())
+	)
+	if is_paused_or_counting:
+		lane_field.position = base_pos
+	else:
+		lane_field.position = base_pos + p_offset
+
+
+func _on_pause_requested() -> void:
+	if reactive_background != null:
+		reactive_background.reset_shake()
+	if lane_field != null:
+		var base_pos: Vector2 = screen_safe_adapter.get_play_rect().position if screen_safe_adapter != null else Vector2.ZERO
+		lane_field.position = base_pos
 
 
 func _on_restart_requested() -> void:

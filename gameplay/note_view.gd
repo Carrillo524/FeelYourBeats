@@ -3,18 +3,22 @@ extends Control
 
 const DEFAULT_HEAD_HEIGHT_PX: float = 36.0
 const HORIZONTAL_PADDING_PX: float = 8.0
-const HOLD_WIDTH_RATIO: float = 0.56
-const HOLD_INNER_GLOW_IDLE_SCALE: float = 1.32
-const HOLD_OUTER_GLOW_IDLE_SCALE: float = 1.68
-const HOLD_INNER_GLOW_ACTIVE_SCALE: float = 1.54
-const HOLD_OUTER_GLOW_ACTIVE_SCALE: float = 2.05
+const HOLD_WIDTH_RATIO: float = 0.52
+const HOLD_CORE_BEAM_RATIO: float = 0.28
+const HOLD_INNER_GLOW_IDLE_SCALE: float = 1.36
+const HOLD_OUTER_GLOW_IDLE_SCALE: float = 1.78
+const HOLD_INNER_GLOW_ACTIVE_SCALE: float = 1.62
+const HOLD_OUTER_GLOW_ACTIVE_SCALE: float = 2.18
+const HOLD_PULSE_FREQ_RAD: float = 20.0
 
-const HOLD_CORE_IDLE_COLOR: Color = Color(0.28, 0.88, 1.0, 0.62)
-const HOLD_CORE_ACTIVE_COLOR: Color = Color(0.65, 1.0, 0.96, 0.88)
-const HOLD_INNER_GLOW_IDLE_COLOR: Color = Color(0.22, 0.82, 1.0, 0.26)
-const HOLD_INNER_GLOW_ACTIVE_COLOR: Color = Color(0.35, 0.98, 0.92, 0.46)
-const HOLD_OUTER_GLOW_IDLE_COLOR: Color = Color(0.18, 0.72, 1.0, 0.12)
-const HOLD_OUTER_GLOW_ACTIVE_COLOR: Color = Color(0.25, 0.94, 0.88, 0.24)
+const HOLD_BODY_IDLE_COLOR: Color = Color(0.24, 0.86, 1.0, 0.38)
+const HOLD_BODY_ACTIVE_COLOR: Color = Color(0.38, 0.98, 0.92, 0.54)
+const HOLD_CORE_BEAM_IDLE_COLOR: Color = Color(0.72, 0.98, 1.0, 0.78)
+const HOLD_CORE_BEAM_ACTIVE_COLOR: Color = Color(0.92, 1.0, 0.98, 0.98)
+const HOLD_INNER_GLOW_IDLE_COLOR: Color = Color(0.20, 0.82, 1.0, 0.18)
+const HOLD_INNER_GLOW_ACTIVE_COLOR: Color = Color(0.32, 0.98, 0.90, 0.32)
+const HOLD_OUTER_GLOW_IDLE_COLOR: Color = Color(0.16, 0.72, 1.0, 0.08)
+const HOLD_OUTER_GLOW_ACTIVE_COLOR: Color = Color(0.22, 0.94, 0.86, 0.16)
 
 var note_data: NoteData = null
 var lane_width: float = 200.0
@@ -23,6 +27,7 @@ var scroll_speed_px_per_sec: float = 1100.0
 var _hold_outer_glow_rect: ColorRect = null
 var _hold_inner_glow_rect: ColorRect = null
 var _hold_body_rect: ColorRect = null
+var _hold_core_beam_rect: ColorRect = null
 var _head_rect: ColorRect = null
 var _current_tail_height_px: float = 0.0
 var _current_outer_glow_width_px: float = 0.0
@@ -58,7 +63,8 @@ func setup(p_note: NoteData, p_lane_width: float, p_scroll_speed_px_per_sec: flo
 		_hold_outer_glow_rect.visible = true
 		_hold_inner_glow_rect.visible = true
 		_hold_body_rect.visible = true
-		_update_hold_body_geometry(full_tail_height_px, false)
+		_hold_core_beam_rect.visible = true
+		_update_hold_body_geometry(full_tail_height_px, false, 0.0)
 	else:
 		_hide_and_clear_hold_layers()
 
@@ -70,18 +76,19 @@ func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: b
 		return
 
 	position.x = float(note_data.lane) * lane_width
+	var pulse_phase: float = (sin(p_dsp_time_sec * HOLD_PULSE_FREQ_RAD) * 0.5 + 0.5) if p_is_holding else 0.0
 
 	if p_is_holding and note_data.is_hold():
 		position.y = p_hit_line_y
 		var end_time_sec: float = note_data.time_sec + maxf(0.0, note_data.duration_sec)
 		var remaining_sec: float = maxf(0.0, end_time_sec - p_dsp_time_sec)
 		var remaining_tail_height_px: float = remaining_sec * scroll_speed_px_per_sec
-		_update_hold_body_geometry(remaining_tail_height_px, true)
+		_update_hold_body_geometry(remaining_tail_height_px, true, pulse_phase)
 	else:
 		position.y = p_hit_line_y - (note_data.time_sec - p_dsp_time_sec) * scroll_speed_px_per_sec
 		if note_data.is_hold():
 			var full_tail_height_px: float = maxf(0.0, note_data.duration_sec) * scroll_speed_px_per_sec
-			_update_hold_body_geometry(full_tail_height_px, false)
+			_update_hold_body_geometry(full_tail_height_px, false, 0.0)
 
 
 func reset_for_pool() -> void:
@@ -105,6 +112,8 @@ func is_hold_glow_visible() -> bool:
 		and _hold_outer_glow_rect.visible
 		and _hold_inner_glow_rect != null
 		and _hold_inner_glow_rect.visible
+		and _hold_core_beam_rect != null
+		and _hold_core_beam_rect.visible
 	)
 
 
@@ -129,9 +138,17 @@ func _ensure_visual_nodes() -> void:
 		_hold_body_rect = ColorRect.new()
 		_hold_body_rect.name = "HoldBodyRect"
 		_hold_body_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_hold_body_rect.color = HOLD_CORE_IDLE_COLOR
+		_hold_body_rect.color = HOLD_BODY_IDLE_COLOR
 		_hold_body_rect.visible = false
 		add_child(_hold_body_rect)
+
+	if _hold_core_beam_rect == null:
+		_hold_core_beam_rect = ColorRect.new()
+		_hold_core_beam_rect.name = "HoldCoreBeamRect"
+		_hold_core_beam_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_hold_core_beam_rect.color = HOLD_CORE_BEAM_IDLE_COLOR
+		_hold_core_beam_rect.visible = false
+		add_child(_hold_core_beam_rect)
 
 	if _head_rect == null:
 		_head_rect = ColorRect.new()
@@ -153,15 +170,30 @@ func _hide_and_clear_hold_layers() -> void:
 	if _hold_body_rect != null:
 		_hold_body_rect.visible = false
 		_hold_body_rect.size = Vector2.ZERO
+	if _hold_core_beam_rect != null:
+		_hold_core_beam_rect.visible = false
+		_hold_core_beam_rect.size = Vector2.ZERO
 
 
-func _update_hold_body_geometry(p_tail_height_px: float, p_is_holding: bool = false) -> void:
+func _update_hold_body_geometry(
+	p_tail_height_px: float,
+	p_is_holding: bool = false,
+	p_pulse_phase: float = 0.0
+) -> void:
 	_current_tail_height_px = maxf(0.0, p_tail_height_px)
-	var body_width: float = maxf(4.0, lane_width * HOLD_WIDTH_RATIO)
+	var pulse_scale: float = 1.0 + (p_pulse_phase * 0.14) if p_is_holding else 1.0
+	var body_width: float = maxf(4.0, lane_width * HOLD_WIDTH_RATIO * pulse_scale)
 	var body_x: float = (lane_width - body_width) * 0.5
 	_hold_body_rect.position = Vector2(body_x, -_current_tail_height_px)
 	_hold_body_rect.size = Vector2(body_width, _current_tail_height_px)
-	_hold_body_rect.color = HOLD_CORE_ACTIVE_COLOR if p_is_holding else HOLD_CORE_IDLE_COLOR
+	_hold_body_rect.color = HOLD_BODY_ACTIVE_COLOR if p_is_holding else HOLD_BODY_IDLE_COLOR
+
+	var core_ratio: float = HOLD_CORE_BEAM_RATIO * (1.28 + p_pulse_phase * 0.22 if p_is_holding else 1.0)
+	var core_width: float = maxf(2.0, body_width * core_ratio)
+	var core_x: float = (lane_width - core_width) * 0.5
+	_hold_core_beam_rect.position = Vector2(core_x, -_current_tail_height_px)
+	_hold_core_beam_rect.size = Vector2(core_width, _current_tail_height_px)
+	_hold_core_beam_rect.color = HOLD_CORE_BEAM_ACTIVE_COLOR if p_is_holding else HOLD_CORE_BEAM_IDLE_COLOR
 
 	var inner_scale: float = HOLD_INNER_GLOW_ACTIVE_SCALE if p_is_holding else HOLD_INNER_GLOW_IDLE_SCALE
 	var outer_scale: float = HOLD_OUTER_GLOW_ACTIVE_SCALE if p_is_holding else HOLD_OUTER_GLOW_IDLE_SCALE
