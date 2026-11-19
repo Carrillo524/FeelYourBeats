@@ -14,7 +14,8 @@ const MAX_RECENT_TRACKS: int = 16
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
-const SONG_ROW_HEIGHT_PX: float = 145.0
+const SONG_ROW_HEIGHT_PX: float = 252.0
+const DIVIDER_HEIGHT_PX: float = 2.0
 const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
@@ -47,6 +48,11 @@ const COLOR_TEXT_ACTIVE: Color = Color(0.98, 1.0, 1.0, 1.0)
 const COLOR_TEXT_INACTIVE: Color = Color(0.76, 0.84, 0.94, 0.90)
 const COLOR_TEXT_ACCENT: Color = Color(0.38, 0.96, 1.0, 1.0)
 const COLOR_TEXT_GOLD: Color = Color(1.0, 0.88, 0.34, 1.0)
+const COLOR_SHEET_BG: Color = Color(0.84, 0.92, 1.0, 0.12)
+const COLOR_SHEET_BORDER: Color = Color(1.0, 1.0, 1.0, 0.26)
+const COLOR_ROW_REST_BG: Color = Color(1.0, 1.0, 1.0, 0.0)
+const COLOR_ROW_HOVER_BG: Color = Color(1.0, 1.0, 1.0, 0.14)
+const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var reactive_background: ReactiveBackground = null
@@ -72,15 +78,16 @@ var _browser_header_label: Label = null
 var _tab_songs_button: Button = null
 var _tab_import_button: Button = null
 var _tab_settings_button: Button = null
+var _content_sheet_panel: PanelContainer = null
 
 var _songs_tab_container: Control = null
 var _songs_list_vbox: VBoxContainer = null
 
-var _import_tab_container: VBoxContainer = null
+var _import_tab_container: Control = null
 var _browse_button: Button = null
 var _import_list_vbox: VBoxContainer = null
 
-var _settings_tab_container: VBoxContainer = null
+var _settings_tab_container: Control = null
 var _bgm_toggle_button: Button = null
 var _bgm_track_label: Label = null
 var _bgm_prev_button: Button = null
@@ -115,7 +122,9 @@ var _transition_tween: Tween = null
 
 var _style_option_active: StyleBoxFlat = null
 var _style_option_inactive: StyleBoxFlat = null
-var _style_song_row: StyleBoxFlat = null
+var _style_content_sheet: StyleBoxFlat = null
+var _style_song_row_normal: StyleBoxFlat = null
+var _style_song_row_hover: StyleBoxFlat = null
 var _style_modal_panel: StyleBoxFlat = null
 var _style_play_cta: StyleBoxFlat = null
 var _style_floating_play: StyleBoxEmpty = null
@@ -978,6 +987,13 @@ func _rebuild_entry_list(
 		old_children[i].queue_free()
 
 	if p_entries.is_empty():
+		var empty_margin: MarginContainer = MarginContainer.new()
+		empty_margin.name = "%sEmptyMargin" % p_prefix
+		empty_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		empty_margin.add_theme_constant_override("margin_left", 28)
+		empty_margin.add_theme_constant_override("margin_right", 28)
+		empty_margin.add_theme_constant_override("margin_top", 56)
+		empty_margin.add_theme_constant_override("margin_bottom", 32)
 		var empty_label: Label = Label.new()
 		empty_label.name = "%sEmptyLabel" % p_prefix
 		empty_label.text = p_empty_message
@@ -985,7 +1001,8 @@ func _rebuild_entry_list(
 		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty_label.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
 		empty_label.modulate = COLOR_TEXT_INACTIVE
-		p_container.add_child(empty_label)
+		empty_margin.add_child(empty_label)
+		p_container.add_child(empty_margin)
 		return
 
 	var count: int = p_entries.size()
@@ -1002,7 +1019,7 @@ func _rebuild_entry_list(
 		row_btn.text = ""
 		row_btn.custom_minimum_size = Vector2(0.0, SONG_ROW_HEIGHT_PX)
 		row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_apply_stylebox_to_button(row_btn, _style_song_row)
+		_apply_song_row_style(row_btn)
 		row_btn.pressed.connect(open_song_setup_modal.bind(entry))
 		if ui_sfx_player != null:
 			ui_sfx_player.bind_button(row_btn)
@@ -1083,6 +1100,9 @@ func _rebuild_entry_list(
 			rank_zone.add_child(diff_lbl)
 
 		p_container.add_child(row_btn)
+
+		if idx < count - 1:
+			p_container.add_child(_create_white_divider("%sDivider_%d" % [p_prefix, idx], 24))
 
 
 func _create_marquee_title_label(p_name: String, p_text: String) -> Label:
@@ -1258,6 +1278,35 @@ func _apply_stylebox_to_button(p_button: Button, p_style: StyleBox) -> void:
 	p_button.add_theme_stylebox_override("focus", p_style)
 
 
+func _apply_song_row_style(p_button: Button) -> void:
+	if p_button == null:
+		return
+	if _style_song_row_normal != null:
+		p_button.add_theme_stylebox_override("normal", _style_song_row_normal)
+		p_button.add_theme_stylebox_override("focus", _style_song_row_normal)
+	if _style_song_row_hover != null:
+		p_button.add_theme_stylebox_override("hover", _style_song_row_hover)
+		p_button.add_theme_stylebox_override("pressed", _style_song_row_hover)
+
+
+func _create_white_divider(p_name: String, p_margin_x: int = 24) -> MarginContainer:
+	var holder: MarginContainer = MarginContainer.new()
+	holder.name = p_name
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_theme_constant_override("margin_left", p_margin_x)
+	holder.add_theme_constant_override("margin_right", p_margin_x)
+
+	var line: ColorRect = ColorRect.new()
+	line.name = "DividerLine"
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.color = COLOR_WHITE_DIVIDER
+	line.custom_minimum_size = Vector2(0.0, DIVIDER_HEIGHT_PX)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_child(line)
+	return holder
+
+
 func _build_theme_styles() -> void:
 	_style_option_active = StyleBoxFlat.new()
 	_style_option_active.bg_color = Color(0.10, 0.44, 0.58, 0.94)
@@ -1273,13 +1322,22 @@ func _build_theme_styles() -> void:
 	_style_option_inactive.set_border_width_all(1)
 	_style_option_inactive.set_corner_radius_all(12)
 
-	_style_song_row = StyleBoxFlat.new()
-	_style_song_row.bg_color = Color(0.04, 0.12, 0.24, 0.42)
-	_style_song_row.border_color = Color(0.15, 0.85, 1.0, 0.65)
-	_style_song_row.set_border_width_all(2)
-	_style_song_row.set_corner_radius_all(18)
-	_style_song_row.shadow_color = Color(0.15, 0.85, 1.0, 0.22)
-	_style_song_row.shadow_size = 8
+	_style_content_sheet = StyleBoxFlat.new()
+	_style_content_sheet.bg_color = COLOR_SHEET_BG
+	_style_content_sheet.border_color = COLOR_SHEET_BORDER
+	_style_content_sheet.set_border_width_all(2)
+	_style_content_sheet.set_corner_radius_all(22)
+	_style_content_sheet.anti_aliasing = true
+
+	_style_song_row_normal = StyleBoxFlat.new()
+	_style_song_row_normal.bg_color = COLOR_ROW_REST_BG
+	_style_song_row_normal.set_border_width_all(0)
+	_style_song_row_normal.set_corner_radius_all(0)
+
+	_style_song_row_hover = StyleBoxFlat.new()
+	_style_song_row_hover.bg_color = COLOR_ROW_HOVER_BG
+	_style_song_row_hover.set_border_width_all(0)
+	_style_song_row_hover.set_corner_radius_all(0)
 
 	_style_modal_panel = StyleBoxFlat.new()
 	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
@@ -1411,28 +1469,61 @@ func _build_browser_screen_ui() -> void:
 	_tab_settings_button.pressed.connect(select_tab.bind(MenuTab.SETTINGS))
 	tabs_row.add_child(_tab_settings_button)
 
+	# Unified full-height frosted translucent sheet below the top tabs
+	_content_sheet_panel = PanelContainer.new()
+	_content_sheet_panel.name = "ContentSheetPanel"
+	_content_sheet_panel.clip_contents = true
+	_content_sheet_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_content_sheet_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_content_sheet_panel.add_theme_stylebox_override("panel", _style_content_sheet)
+	_browser_screen_container.add_child(_content_sheet_panel)
+
+	var sheet_inner: MarginContainer = MarginContainer.new()
+	sheet_inner.name = "ContentSheetInner"
+	sheet_inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sheet_inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sheet_inner.add_theme_constant_override("margin_left", 0)
+	sheet_inner.add_theme_constant_override("margin_right", 0)
+	sheet_inner.add_theme_constant_override("margin_top", 8)
+	sheet_inner.add_theme_constant_override("margin_bottom", 8)
+	_content_sheet_panel.add_child(sheet_inner)
+
 	# Tab 1: CANCIONES
 	var songs_scroll: ScrollContainer = ScrollContainer.new()
 	songs_scroll.name = "SongsTabScroll"
 	songs_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	songs_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_browser_screen_container.add_child(songs_scroll)
+	sheet_inner.add_child(songs_scroll)
 	_songs_tab_container = songs_scroll
 
 	_songs_list_vbox = VBoxContainer.new()
 	_songs_list_vbox.name = "SongsListVBox"
 	_songs_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_songs_list_vbox.add_theme_constant_override("separation", 16)
+	_songs_list_vbox.add_theme_constant_override("separation", 0)
 	songs_scroll.add_child(_songs_list_vbox)
 
 	# Tab 2: IMPORTAR
-	_import_tab_container = VBoxContainer.new()
-	_import_tab_container.name = "ImportTabContainer"
-	_import_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_import_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_import_tab_container.add_theme_constant_override("separation", 16)
-	_import_tab_container.visible = false
-	_browser_screen_container.add_child(_import_tab_container)
+	var import_vbox: VBoxContainer = VBoxContainer.new()
+	import_vbox.name = "ImportTabContainer"
+	import_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	import_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	import_vbox.add_theme_constant_override("separation", 16)
+	import_vbox.visible = false
+	sheet_inner.add_child(import_vbox)
+	_import_tab_container = import_vbox
+
+	var import_top_margin: MarginContainer = MarginContainer.new()
+	import_top_margin.name = "ImportTopMargin"
+	import_top_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	import_top_margin.add_theme_constant_override("margin_left", 24)
+	import_top_margin.add_theme_constant_override("margin_right", 24)
+	import_top_margin.add_theme_constant_override("margin_top", 18)
+	import_top_margin.add_theme_constant_override("margin_bottom", 6)
+	import_vbox.add_child(import_top_margin)
+
+	var import_top_vbox: VBoxContainer = VBoxContainer.new()
+	import_top_vbox.add_theme_constant_override("separation", 16)
+	import_top_margin.add_child(import_top_vbox)
 
 	_browse_button = Button.new()
 	_browse_button.name = "ImportSongButton"
@@ -1442,42 +1533,55 @@ func _build_browser_screen_ui() -> void:
 	_browse_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	_apply_stylebox_to_button(_browse_button, _style_option_active)
 	_browse_button.pressed.connect(_on_browse_button_pressed)
-	_import_tab_container.add_child(_browse_button)
+	import_top_vbox.add_child(_browse_button)
 
 	var imported_header: Label = Label.new()
 	imported_header.name = "ImportedHeaderLabel"
 	imported_header.text = "CANCIONES IMPORTADAS / RECIENTES"
 	imported_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
 	imported_header.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
-	_import_tab_container.add_child(imported_header)
+	import_top_vbox.add_child(imported_header)
+
+	import_vbox.add_child(_create_white_divider("ImportSectionDivider", 24))
 
 	var import_scroll: ScrollContainer = ScrollContainer.new()
 	import_scroll.name = "ImportedListScroll"
 	import_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	import_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_import_tab_container.add_child(import_scroll)
+	import_vbox.add_child(import_scroll)
 
 	_import_list_vbox = VBoxContainer.new()
 	_import_list_vbox.name = "ImportedListVBox"
 	_import_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_import_list_vbox.add_theme_constant_override("separation", 16)
+	_import_list_vbox.add_theme_constant_override("separation", 0)
 	import_scroll.add_child(_import_list_vbox)
 
-	# Tab 3: AJUSTES
-	_settings_tab_container = VBoxContainer.new()
-	_settings_tab_container.name = "SettingsTabContainer"
-	_settings_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_settings_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_settings_tab_container.add_theme_constant_override("separation", 24)
-	_settings_tab_container.visible = false
-	_browser_screen_container.add_child(_settings_tab_container)
+	# Tab 3: AJUSTES (within the same unified frosted sheet with white dividers)
+	var settings_margin: MarginContainer = MarginContainer.new()
+	settings_margin.name = "SettingsTabContainer"
+	settings_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	settings_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_margin.add_theme_constant_override("margin_left", 28)
+	settings_margin.add_theme_constant_override("margin_right", 28)
+	settings_margin.add_theme_constant_override("margin_top", 28)
+	settings_margin.add_theme_constant_override("margin_bottom", 28)
+	settings_margin.visible = false
+	sheet_inner.add_child(settings_margin)
+	_settings_tab_container = settings_margin
+
+	var settings_vbox: VBoxContainer = VBoxContainer.new()
+	settings_vbox.name = "SettingsContentVBox"
+	settings_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	settings_vbox.add_theme_constant_override("separation", 28)
+	settings_margin.add_child(settings_vbox)
 
 	var settings_header: Label = Label.new()
 	settings_header.name = "SettingsBgmHeader"
 	settings_header.text = "MÚSICA DE FONDO DEL MENÚ (BGM)"
 	settings_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
 	settings_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
-	_settings_tab_container.add_child(settings_header)
+	settings_vbox.add_child(settings_header)
 
 	_bgm_toggle_button = Button.new()
 	_bgm_toggle_button.name = "BgmToggleButton"
@@ -1485,7 +1589,9 @@ func _build_browser_screen_ui() -> void:
 	_bgm_toggle_button.custom_minimum_size = Vector2(0.0, 90.0)
 	_bgm_toggle_button.add_theme_font_size_override("font_size", 38)
 	_bgm_toggle_button.pressed.connect(_on_bgm_toggle_pressed)
-	_settings_tab_container.add_child(_bgm_toggle_button)
+	settings_vbox.add_child(_bgm_toggle_button)
+
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_0", 0))
 
 	_bgm_track_label = Label.new()
 	_bgm_track_label.name = "BgmTrackLabel"
@@ -1494,12 +1600,12 @@ func _build_browser_screen_ui() -> void:
 	_bgm_track_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_bgm_track_label.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
 	_bgm_track_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
-	_settings_tab_container.add_child(_bgm_track_label)
+	settings_vbox.add_child(_bgm_track_label)
 
 	var bgm_nav_row: HBoxContainer = HBoxContainer.new()
 	bgm_nav_row.name = "BgmNavRow"
 	bgm_nav_row.add_theme_constant_override("separation", 14)
-	_settings_tab_container.add_child(bgm_nav_row)
+	settings_vbox.add_child(bgm_nav_row)
 
 	_bgm_prev_button = _create_option_button("BgmPrevButton", "< ANTERIOR")
 	_bgm_prev_button.pressed.connect(_on_bgm_prev_pressed)
@@ -1511,13 +1617,15 @@ func _build_browser_screen_ui() -> void:
 	_apply_stylebox_to_button(_bgm_next_button, _style_option_inactive)
 	bgm_nav_row.add_child(_bgm_next_button)
 
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_1", 0))
+
 	_bgm_mode_button = Button.new()
 	_bgm_mode_button.name = "BgmModeButton"
 	_bgm_mode_button.text = "MODO: AUTO"
 	_bgm_mode_button.custom_minimum_size = Vector2(0.0, 88.0)
 	_bgm_mode_button.add_theme_font_size_override("font_size", 36)
 	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
-	_settings_tab_container.add_child(_bgm_mode_button)
+	settings_vbox.add_child(_bgm_mode_button)
 
 
 func _build_song_setup_modal_ui() -> void:
