@@ -13,27 +13,30 @@ const RECENT_TRACKS_CONFIG_PATH: String = "user://recent_tracks.cfg"
 const MAX_RECENT_TRACKS: int = 16
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 
-const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 64.0
-const SONG_ROW_HEIGHT_PX: float = 78.0
-const MODAL_OPTION_HEIGHT_PX: float = 68.0
-const PLAY_BUTTON_HEIGHT_PX: float = 84.0
+const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
+const SONG_ROW_HEIGHT_PX: float = 134.0
+const MODAL_OPTION_HEIGHT_PX: float = 80.0
+const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
 const USEC_TO_SEC: float = 0.000001
 
-const TITLE_HERO_FONT_SIZE: int = 72
-const TITLE_SUBTITLE_FONT_SIZE: int = 26
-const TITLE_PLAY_FONT_SIZE: int = 50
-const HEADER_TITLE_FONT_SIZE: int = 38
-const TAB_FONT_SIZE: int = 27
-const SECTION_FONT_SIZE: int = 26
-const SONG_ROW_FONT_SIZE: int = 26
-const SONG_BADGE_FONT_SIZE: int = 24
-const MODAL_TITLE_FONT_SIZE: int = 34
-const MODAL_RECORD_FONT_SIZE: int = 24
-const MODAL_OPTION_FONT_SIZE: int = 28
-const PRIMARY_BUTTON_FONT_SIZE: int = 36
-const STATUS_FONT_SIZE: int = 26
+const TITLE_HERO_FONT_SIZE: int = 104
+const TITLE_SUBTITLE_FONT_SIZE: int = 32
+const TITLE_PLAY_FONT_SIZE: int = 82
+const HEADER_TITLE_FONT_SIZE: int = 48
+const TAB_FONT_SIZE: int = 34
+const SECTION_FONT_SIZE: int = 34
+const SETTINGS_LABEL_FONT_SIZE: int = 36
+const SONG_ROW_FONT_SIZE: int = 38
+const SONG_BADGE_FONT_SIZE: int = 36
+const MODAL_TITLE_FONT_SIZE: int = 42
+const MODAL_RECORD_FONT_SIZE: int = 30
+const MODAL_OPTION_FONT_SIZE: int = 36
+const PRIMARY_BUTTON_FONT_SIZE: int = 42
+const STATUS_FONT_SIZE: int = 32
+
+static var open_directly_to_selector: bool = false
 
 const COLOR_TEXT_ACTIVE: Color = Color(0.98, 1.0, 1.0, 1.0)
 const COLOR_TEXT_INACTIVE: Color = Color(0.76, 0.84, 0.94, 0.90)
@@ -120,6 +123,8 @@ var _is_launching: bool = false
 
 var _pulse_phase: float = 0.0
 var _title_bass_boost: float = 0.0
+var _live_menu_bass: float = 0.0
+var _last_launch_sequence: Array[String] = []
 
 
 func _init() -> void:
@@ -139,7 +144,11 @@ func _ready() -> void:
 	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
 	_sync_live_audio_monitoring()
-	show_title_screen()
+	if open_directly_to_selector:
+		open_directly_to_selector = false
+		show_browser_screen(MenuTab.SONGS)
+	else:
+		show_title_screen()
 
 	if screen_safe_adapter != null:
 		apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
@@ -149,21 +158,38 @@ func _ready() -> void:
 
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
-	_pulse_phase += dt * 2.6
-	_title_bass_boost = maxf(0.0, _title_bass_boost - (5.5 * dt))
+	_pulse_phase += dt * 2.8
+	_title_bass_boost = maxf(0.0, _title_bass_boost - (4.8 * dt))
+	_live_menu_bass = maxf(0.0, _live_menu_bass - (3.8 * dt))
+
+	var bgm_active: bool = menu_bgm_player != null and menu_bgm_player.is_bgm_enabled and menu_bgm_player.get_track_count() > 0
+	var combined_energy: float = clampf(maxf(_title_bass_boost, _live_menu_bass), 0.0, 1.0) if bgm_active else 0.0
 
 	if _title_screen_container != null and _title_screen_container.visible:
+		var ambient_wave: float = sin(_pulse_phase) * 0.5 + 0.5
 		if _hero_title_label != null:
 			_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
-			var title_scale: float = 1.0 + (_title_bass_boost * 0.06) + (sin(_pulse_phase * 0.7) * 0.012)
+			var title_scale: float = clampf(1.0 + (combined_energy * 0.14) + (ambient_wave * 0.018), 1.0, 1.14)
 			_hero_title_label.scale = Vector2(title_scale, title_scale)
+			var title_glow: float = clampf(0.35 + (combined_energy * 0.65), 0.35, 1.0)
+			_hero_title_label.modulate = Color(
+				lerpf(0.55, 1.0, title_glow),
+				lerpf(0.95, 1.0, title_glow),
+				1.0,
+				1.0
+			)
 
 		if _hero_play_button != null:
 			_hero_play_button.pivot_offset = _hero_play_button.size * 0.5
-			var wave: float = sin(_pulse_phase) * 0.5 + 0.5
-			var btn_scale: float = 1.0 + (wave * 0.075) + (_title_bass_boost * 0.05)
+			var btn_scale: float = clampf(1.0 + (ambient_wave * 0.045) + (combined_energy * 0.12), 1.0, 1.14)
 			_hero_play_button.scale = Vector2(btn_scale, btn_scale)
-			_hero_play_button.modulate = Color(0.55 + (0.45 * wave), 0.96, 1.0, 0.78 + (0.22 * wave))
+			var glow_mix: float = clampf((ambient_wave * 0.35) + (combined_energy * 0.65), 0.0, 1.0)
+			_hero_play_button.modulate = Color(
+				lerpf(0.45, 1.0, glow_mix),
+				lerpf(0.94, 1.0, glow_mix),
+				1.0,
+				lerpf(0.84, 1.0, glow_mix)
+			)
 
 
 func _exit_tree() -> void:
@@ -183,15 +209,15 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_title_screen_container.position = Vector2.ZERO
 	_title_screen_container.size = Vector2(safe_w, safe_h)
 
-	_hero_title_label.size = Vector2(safe_w - 32.0, 120.0)
-	_hero_title_label.position = Vector2(16.0, safe_h * 0.24)
+	_hero_title_label.size = Vector2(safe_w - 24.0, 260.0)
+	_hero_title_label.position = Vector2(12.0, safe_h * 0.20)
 	_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
 
-	_hero_subtitle_label.size = Vector2(safe_w - 48.0, 48.0)
-	_hero_subtitle_label.position = Vector2(24.0, (safe_h * 0.24) + 114.0)
+	_hero_subtitle_label.size = Vector2(safe_w - 48.0, 56.0)
+	_hero_subtitle_label.position = Vector2(24.0, (safe_h * 0.20) + 258.0)
 
-	var hero_btn_w: float = minf(420.0, safe_w - 64.0)
-	var hero_btn_h: float = 96.0
+	var hero_btn_w: float = minf(560.0, safe_w - 48.0)
+	var hero_btn_h: float = 128.0
 	_hero_play_button.size = Vector2(hero_btn_w, hero_btn_h)
 	_hero_play_button.position = Vector2((safe_w - hero_btn_w) * 0.5, safe_h * 0.60)
 	_hero_play_button.pivot_offset = _hero_play_button.size * 0.5
@@ -207,13 +233,13 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_song_modal_backdrop.position = Vector2.ZERO
 	_song_modal_backdrop.size = Vector2(safe_w, safe_h)
 
-	var modal_w: float = minf(840.0, safe_w - 28.0)
-	var modal_h: float = minf(920.0, safe_h - 64.0)
+	var modal_w: float = minf(900.0, safe_w - 24.0)
+	var modal_h: float = minf(1140.0, safe_h - 48.0)
 	_song_modal_panel.size = Vector2(modal_w, modal_h)
 	_song_modal_panel.position = Vector2((safe_w - modal_w) * 0.5, (safe_h - modal_h) * 0.5)
 
-	_modal_vbox.position = Vector2(24.0, 22.0)
-	_modal_vbox.size = Vector2(maxf(240.0, modal_w - 48.0), maxf(360.0, modal_h - 44.0))
+	_modal_vbox.position = Vector2(26.0, 24.0)
+	_modal_vbox.size = Vector2(maxf(240.0, modal_w - 52.0), maxf(400.0, modal_h - 48.0))
 
 
 func show_title_screen() -> void:
@@ -501,12 +527,20 @@ func _on_hero_play_pressed() -> void:
 	show_browser_screen(MenuTab.SONGS)
 
 
+func get_last_launch_sequence() -> Array[String]:
+	return _last_launch_sequence
+
+
 func _on_play_button_pressed() -> void:
 	if _is_launching:
 		return
 	_is_launching = true
+	_last_launch_sequence.clear()
+
 	if _play_button != null:
 		_play_button.disabled = true
+	if _modal_close_button != null:
+		_modal_close_button.disabled = true
 	if _transition_fade_rect != null:
 		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_STOP
 		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
@@ -515,10 +549,6 @@ func _on_play_button_pressed() -> void:
 		menu_bgm_player.stop_bgm()
 	if audio_analyzer != null:
 		audio_analyzer.set_live_monitoring(false)
-
-	var transition_start_usec: int = Time.get_ticks_usec()
-	if ui_sfx_player != null:
-		ui_sfx_player.play_cassette_insert()
 
 	var selected: Dictionary = get_selected_track()
 	var is_demo: bool = selected.get("is_demo", true) as bool
@@ -533,7 +563,38 @@ func _on_play_button_pressed() -> void:
 		needs_analysis_banner = not _chart_cache_repo.has_cached_file(key)
 
 	if _status_label != null:
-		_status_label.text = "Analizando pista..." if needs_analysis_banner else "Iniciando sesión..."
+		_status_label.text = "ANALIZANDO PISTA..." if needs_analysis_banner else "PREPARANDO PISTA..."
+
+	var tree: SceneTree = get_tree()
+	if tree != null:
+		await tree.process_frame
+
+	# Step 1 & 2: Perform analysis/cache load completely BEFORE starting cassette SFX + fade
+	var payload: Dictionary = prepare_session_launch_payload()
+	if payload.has("error"):
+		if _transition_fade_rect != null:
+			_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
+			_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if _status_label != null:
+			_status_label.text = str(payload["error"])
+		_is_launching = false
+		if _play_button != null:
+			_play_button.disabled = false
+		if _modal_close_button != null:
+			_modal_close_button.disabled = false
+		return
+
+	GameSession.set_pending_session(payload)
+	_last_launch_sequence.append("analysis_done")
+
+	# Step 3: Chart is ready (no more CPU stalls) -> trigger cassette SFX + 2.5s fade simultaneously
+	if _status_label != null:
+		_status_label.text = "INICIANDO..."
+
+	var transition_start_usec: int = Time.get_ticks_usec()
+	if ui_sfx_player != null:
+		ui_sfx_player.play_cassette_insert()
+	_last_launch_sequence.append("cassette_started")
 
 	if _transition_tween != null:
 		_transition_tween.kill()
@@ -547,25 +608,7 @@ func _on_play_button_pressed() -> void:
 			1.0,
 			TRANSITION_FADE_DURATION_SEC
 		).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-
-	var tree: SceneTree = get_tree()
-	if tree != null:
-		await tree.process_frame
-
-	var payload: Dictionary = prepare_session_launch_payload()
-	if payload.has("error"):
-		if _transition_tween != null:
-			_transition_tween.kill()
-			_transition_tween = null
-		if _transition_fade_rect != null:
-			_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
-			_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		if _status_label != null:
-			_status_label.text = str(payload["error"])
-		_is_launching = false
-		if _play_button != null:
-			_play_button.disabled = false
-		return
+	_last_launch_sequence.append("fade_started")
 
 	if _transition_tween != null and _transition_tween.is_running():
 		await _transition_tween.finished
@@ -580,7 +623,6 @@ func _on_play_button_pressed() -> void:
 	if _transition_fade_rect != null:
 		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
-	GameSession.set_pending_session(payload)
 	if tree != null and ResourceLoader.exists(GAME_SESSION_SCENE_PATH):
 		tree.change_scene_to_file(GAME_SESSION_SCENE_PATH)
 
@@ -631,6 +673,15 @@ func _on_bgm_enabled_changed(_p_enabled: bool) -> void:
 
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	_title_bass_boost = maxf(_title_bass_boost, clampf(p_strength, 0.0, 1.0))
+
+
+func _on_menu_spectrum_updated(
+	p_bass_energy: float,
+	_p_mid_energy: float,
+	_p_high_energy: float,
+	_p_total_energy: float
+) -> void:
+	_live_menu_bass = maxf(_live_menu_bass, clampf(p_bass_energy, 0.0, 1.0))
 
 
 func _on_modal_backdrop_gui_input(p_event: InputEvent) -> void:
@@ -701,6 +752,8 @@ func _connect_dependencies() -> void:
 		reactive_background.connect_dependencies()
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
 			reactive_background.bass_kick_pulsed.connect(_on_bass_kick_pulsed)
+		if not audio_analyzer.spectrum_updated.is_connected(_on_menu_spectrum_updated):
+			audio_analyzer.spectrum_updated.connect(_on_menu_spectrum_updated)
 
 	if menu_bgm_player != null:
 		if not menu_bgm_player.track_changed.is_connected(_on_bgm_track_changed):
@@ -903,13 +956,13 @@ func _rebuild_entry_list(
 		var row_margin: MarginContainer = MarginContainer.new()
 		row_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		row_margin.add_theme_constant_override("margin_left", 20)
-		row_margin.add_theme_constant_override("margin_right", 20)
+		row_margin.add_theme_constant_override("margin_left", 26)
+		row_margin.add_theme_constant_override("margin_right", 26)
 		row_btn.add_child(row_margin)
 
 		var row_hbox: HBoxContainer = HBoxContainer.new()
 		row_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row_hbox.add_theme_constant_override("separation", 12)
+		row_hbox.add_theme_constant_override("separation", 14)
 		row_margin.add_child(row_hbox)
 
 		var title_lbl: Label = Label.new()
@@ -919,8 +972,11 @@ func _rebuild_entry_list(
 		title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		title_lbl.clip_text = true
+		title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		title_lbl.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
 		title_lbl.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+		if _font_registry != null:
+			_font_registry.apply_global_font_override(title_lbl, 3)
 		row_hbox.add_child(title_lbl)
 
 		var rank_lbl: Label = Label.new()
@@ -929,11 +985,11 @@ func _rebuild_entry_list(
 		rank_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		rank_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		rank_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		rank_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE + 4)
+		rank_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
 		var badge_col: Color = SafeHud.get_rank_color(best_rank) if has_record else COLOR_TEXT_INACTIVE
 		rank_lbl.add_theme_color_override("font_color", badge_col)
 		if _font_registry != null:
-			_font_registry.apply_rank_role(rank_lbl, 4)
+			_font_registry.apply_rank_role(rank_lbl, 5)
 		row_hbox.add_child(rank_lbl)
 
 		if has_record:
@@ -944,8 +1000,10 @@ func _rebuild_entry_list(
 			diff_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			diff_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			diff_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			diff_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE - 2)
+			diff_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE - 4)
 			diff_lbl.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+			if _font_registry != null:
+				_font_registry.apply_global_font_override(diff_lbl, 2)
 			row_hbox.add_child(diff_lbl)
 
 		p_container.add_child(row_btn)
@@ -1064,10 +1122,12 @@ func _build_theme_styles() -> void:
 	_style_option_inactive.set_corner_radius_all(12)
 
 	_style_song_row = StyleBoxFlat.new()
-	_style_song_row.bg_color = Color(0.06, 0.10, 0.18, 0.86)
-	_style_song_row.border_color = Color(0.26, 0.68, 0.92, 0.55)
+	_style_song_row.bg_color = Color(0.04, 0.12, 0.24, 0.42)
+	_style_song_row.border_color = Color(0.15, 0.85, 1.0, 0.65)
 	_style_song_row.set_border_width_all(2)
-	_style_song_row.set_corner_radius_all(14)
+	_style_song_row.set_corner_radius_all(18)
+	_style_song_row.shadow_color = Color(0.15, 0.85, 1.0, 0.22)
+	_style_song_row.shadow_size = 8
 
 	_style_modal_panel = StyleBoxFlat.new()
 	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
@@ -1140,6 +1200,7 @@ func _build_title_screen_ui() -> void:
 	_hero_title_label.text = "FEEL YOUR BEATS"
 	_hero_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hero_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hero_title_label.add_theme_font_size_override("font_size", TITLE_HERO_FONT_SIZE)
 	_hero_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_title_screen_container.add_child(_hero_title_label)
@@ -1209,7 +1270,7 @@ func _build_browser_screen_ui() -> void:
 	_songs_list_vbox = VBoxContainer.new()
 	_songs_list_vbox.name = "SongsListVBox"
 	_songs_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_songs_list_vbox.add_theme_constant_override("separation", 12)
+	_songs_list_vbox.add_theme_constant_override("separation", 16)
 	songs_scroll.add_child(_songs_list_vbox)
 
 	# Tab 2: IMPORTAR
@@ -1224,8 +1285,8 @@ func _build_browser_screen_ui() -> void:
 	_browse_button = Button.new()
 	_browse_button.name = "ImportSongButton"
 	_browse_button.text = "IMPORTAR CANCIÓN DEL DISPOSITIVO"
-	_browse_button.custom_minimum_size = Vector2(0.0, 78.0)
-	_browse_button.add_theme_font_size_override("font_size", 30)
+	_browse_button.custom_minimum_size = Vector2(0.0, 92.0)
+	_browse_button.add_theme_font_size_override("font_size", 36)
 	_browse_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	_apply_stylebox_to_button(_browse_button, _style_option_active)
 	_browse_button.pressed.connect(_on_browse_button_pressed)
@@ -1247,7 +1308,7 @@ func _build_browser_screen_ui() -> void:
 	_import_list_vbox = VBoxContainer.new()
 	_import_list_vbox.name = "ImportedListVBox"
 	_import_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_import_list_vbox.add_theme_constant_override("separation", 12)
+	_import_list_vbox.add_theme_constant_override("separation", 16)
 	import_scroll.add_child(_import_list_vbox)
 
 	# Tab 3: AJUSTES
@@ -1255,22 +1316,22 @@ func _build_browser_screen_ui() -> void:
 	_settings_tab_container.name = "SettingsTabContainer"
 	_settings_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_settings_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_settings_tab_container.add_theme_constant_override("separation", 20)
+	_settings_tab_container.add_theme_constant_override("separation", 24)
 	_settings_tab_container.visible = false
 	_browser_screen_container.add_child(_settings_tab_container)
 
 	var settings_header: Label = Label.new()
 	settings_header.name = "SettingsBgmHeader"
 	settings_header.text = "MÚSICA DE FONDO DEL MENÚ (BGM)"
-	settings_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	settings_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
 	settings_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_settings_tab_container.add_child(settings_header)
 
 	_bgm_toggle_button = Button.new()
 	_bgm_toggle_button.name = "BgmToggleButton"
 	_bgm_toggle_button.text = "BGM: ACTIVADO"
-	_bgm_toggle_button.custom_minimum_size = Vector2(0.0, 76.0)
-	_bgm_toggle_button.add_theme_font_size_override("font_size", 30)
+	_bgm_toggle_button.custom_minimum_size = Vector2(0.0, 90.0)
+	_bgm_toggle_button.add_theme_font_size_override("font_size", 38)
 	_bgm_toggle_button.pressed.connect(_on_bgm_toggle_pressed)
 	_settings_tab_container.add_child(_bgm_toggle_button)
 
@@ -1278,7 +1339,8 @@ func _build_browser_screen_ui() -> void:
 	_bgm_track_label.name = "BgmTrackLabel"
 	_bgm_track_label.text = "PISTA ACTUAL: Sin BGM"
 	_bgm_track_label.clip_text = true
-	_bgm_track_label.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
+	_bgm_track_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_bgm_track_label.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
 	_bgm_track_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	_settings_tab_container.add_child(_bgm_track_label)
 
@@ -1300,8 +1362,8 @@ func _build_browser_screen_ui() -> void:
 	_bgm_mode_button = Button.new()
 	_bgm_mode_button.name = "BgmModeButton"
 	_bgm_mode_button.text = "MODO: AUTO"
-	_bgm_mode_button.custom_minimum_size = Vector2(0.0, 72.0)
-	_bgm_mode_button.add_theme_font_size_override("font_size", MODAL_OPTION_FONT_SIZE)
+	_bgm_mode_button.custom_minimum_size = Vector2(0.0, 88.0)
+	_bgm_mode_button.add_theme_font_size_override("font_size", 36)
 	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
 	_settings_tab_container.add_child(_bgm_mode_button)
 
@@ -1337,6 +1399,7 @@ func _build_song_setup_modal_ui() -> void:
 	_modal_song_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_modal_song_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_modal_song_title_label.clip_text = true
+	_modal_song_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_modal_song_title_label.add_theme_font_size_override("font_size", MODAL_TITLE_FONT_SIZE)
 	_modal_song_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	header_row.add_child(_modal_song_title_label)
@@ -1344,8 +1407,8 @@ func _build_song_setup_modal_ui() -> void:
 	_modal_close_button = Button.new()
 	_modal_close_button.name = "ModalCloseButton"
 	_modal_close_button.text = "CERRAR"
-	_modal_close_button.custom_minimum_size = Vector2(140.0, MIN_TOUCH_BUTTON_HEIGHT_PX)
-	_modal_close_button.add_theme_font_size_override("font_size", 24)
+	_modal_close_button.custom_minimum_size = Vector2(168.0, 72.0)
+	_modal_close_button.add_theme_font_size_override("font_size", 30)
 	_apply_stylebox_to_button(_modal_close_button, _style_option_inactive)
 	_modal_close_button.pressed.connect(close_song_setup_modal)
 	header_row.add_child(_modal_close_button)
@@ -1454,7 +1517,7 @@ func _create_tab_button(p_name: String, p_text: String) -> Button:
 	btn.name = p_name
 	btn.text = p_text
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0.0, 70.0)
+	btn.custom_minimum_size = Vector2(0.0, 84.0)
 	btn.add_theme_font_size_override("font_size", TAB_FONT_SIZE)
 	return btn
 

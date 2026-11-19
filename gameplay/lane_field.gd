@@ -4,7 +4,7 @@ extends Control
 const DEFAULT_LANE_COUNT: int = 4
 const MIN_SPEED_MULTIPLIER: int = 1
 const MAX_SPEED_MULTIPLIER: int = 4
-const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 1100.0
+const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 550.0
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
@@ -46,7 +46,7 @@ const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
 @export var input_adapter: RhythmInputAdapter = null
 @export var hit_judge: HitJudge = null
 @export var hit_line_height_ratio: float = 0.84
-@export var scroll_speed_px_per_sec: float = 1100.0
+@export var scroll_speed_px_per_sec: float = DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC
 @export var pool_size: int = 64
 @export var bottom_padding_px: float = 48.0
 @export var despawn_past_hit_line_px: float = 220.0
@@ -54,6 +54,7 @@ const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
 var _chart: ChartData = null
 var _base_scroll_speed_px_per_sec: float = DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC
 var _speed_multiplier: int = MIN_SPEED_MULTIPLIER
+var _speed_multiplier_configured: bool = false
 var _hit_line_y: float = DEFAULT_PLAY_HEIGHT * 0.84
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
 var _current_dsp_time_sec: float = 0.0
@@ -71,7 +72,7 @@ var _fx_seed_counter: int = 1
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if _speed_multiplier == MIN_SPEED_MULTIPLIER:
+	if not _speed_multiplier_configured:
 		_base_scroll_speed_px_per_sec = maxf(100.0, scroll_speed_px_per_sec)
 	scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * float(_speed_multiplier)
 	_ensure_pool()
@@ -351,6 +352,7 @@ func update_field_at_time(p_dsp_time_sec: float) -> void:
 
 func set_speed_multiplier(p_multiplier: int) -> void:
 	_speed_multiplier = clampi(p_multiplier, MIN_SPEED_MULTIPLIER, MAX_SPEED_MULTIPLIER)
+	_speed_multiplier_configured = true
 	scroll_speed_px_per_sec = maxf(100.0, _base_scroll_speed_px_per_sec) * float(_speed_multiplier)
 
 	var active_count: int = _active_views.size()

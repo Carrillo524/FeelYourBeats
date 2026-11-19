@@ -7,28 +7,30 @@ signal restart_requested()
 signal main_menu_requested()
 signal results_requested()
 
-const TOP_BAR_HEIGHT_PX: float = 96.0
-const PAUSE_BUTTON_WIDTH_PX: float = 156.0
-const PAUSE_BUTTON_HEIGHT_PX: float = 66.0
-const CENTER_BANNER_HEIGHT_PX: float = 148.0
-const MODAL_WIDTH_PX: float = 520.0
-const MODAL_HEIGHT_PX: float = 470.0
-const RESULTS_WIDTH_PX: float = 760.0
-const RESULTS_HEIGHT_PX: float = 920.0
-const COUNTDOWN_BOX_WIDTH_PX: float = 260.0
-const COUNTDOWN_BOX_HEIGHT_PX: float = 160.0
+const TOP_BAR_HEIGHT_PX: float = 132.0
+const PAUSE_BUTTON_WIDTH_PX: float = 212.0
+const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
+const CENTER_BANNER_HEIGHT_PX: float = 156.0
+const MODAL_WIDTH_PX: float = 640.0
+const MODAL_HEIGHT_PX: float = 590.0
+const RESULTS_WIDTH_PX: float = 880.0
+const RESULTS_HEIGHT_PX: float = 1280.0
+const COUNTDOWN_BOX_WIDTH_PX: float = 280.0
+const COUNTDOWN_BOX_HEIGHT_PX: float = 180.0
 
-const SCORE_FONT_SIZE: int = 34
-const ACCURACY_FONT_SIZE: int = 26
-const PAUSE_BUTTON_FONT_SIZE: int = 28
-const MODAL_BUTTON_FONT_SIZE: int = 28
-const COMBO_FONT_SIZE: int = 50
-const JUDGMENT_FONT_SIZE: int = 46
-const COUNTDOWN_FONT_SIZE: int = 110
-const RESULTS_TITLE_FONT_SIZE: int = 34
-const RESULTS_RANK_FONT_SIZE: int = 124
-const RESULTS_STATS_FONT_SIZE: int = 30
-const RESULTS_BREAKDOWN_FONT_SIZE: int = 26
+const SCORE_FONT_SIZE: int = 50
+const ACCURACY_FONT_SIZE: int = 40
+const PAUSE_BUTTON_FONT_SIZE: int = 38
+const MODAL_BUTTON_FONT_SIZE: int = 36
+const COMBO_FONT_SIZE: int = 52
+const JUDGMENT_FONT_SIZE: int = 48
+const COUNTDOWN_FONT_SIZE: int = 120
+const RESULTS_TITLE_FONT_SIZE: int = 42
+const RESULTS_RECORD_FONT_SIZE: int = 32
+const RESULTS_RANK_FONT_SIZE: int = 204
+const RESULTS_STATS_FONT_SIZE: int = 44
+const RESULTS_BREAKDOWN_FONT_SIZE: int = 36
+const RESULTS_BUTTON_FONT_SIZE: int = 42
 
 const COUNTDOWN_STEP_DURATION_SEC: float = 1.0
 const COUNTDOWN_START_SCALE: float = 1.35
@@ -67,6 +69,7 @@ var _pause_button: Button = null
 
 var _pause_overlay: ColorRect = null
 var _pause_panel: Panel = null
+var _pause_vbox: VBoxContainer = null
 var _pause_title_label: Label = null
 var _resume_button: Button = null
 var _restart_button: Button = null
@@ -75,6 +78,7 @@ var _pause_menu_button: Button = null
 
 var _results_overlay: ColorRect = null
 var _results_panel: Panel = null
+var _results_vbox: VBoxContainer = null
 var _results_title_label: Label = null
 var _results_record_label: Label = null
 var _results_rank_label: Label = null
@@ -212,12 +216,12 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
 
 	_score_label.position = Vector2(16.0, 12.0)
-	_score_label.size = Vector2(safe_w * 0.55, TOP_BAR_HEIGHT_PX * 0.52)
+	_score_label.size = Vector2(maxf(200.0, safe_w - PAUSE_BUTTON_WIDTH_PX - 40.0), 64.0)
 
-	_accuracy_label.position = Vector2(16.0, 58.0)
-	_accuracy_label.size = Vector2(safe_w * 0.55, TOP_BAR_HEIGHT_PX * 0.45)
+	_accuracy_label.position = Vector2(16.0, 74.0)
+	_accuracy_label.size = Vector2(maxf(200.0, safe_w - PAUSE_BUTTON_WIDTH_PX - 40.0), 54.0)
 
-	_pause_button.position = Vector2(safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0, 12.0)
+	_pause_button.position = Vector2(safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0, 14.0)
 	_pause_button.size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
 
 	var banner_w: float = safe_w * COMBO_MAX_WIDTH_RATIO
@@ -229,7 +233,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_combo_label.pivot_offset = _combo_label.size * 0.5
 
 	_judgment_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.48)
-	_judgment_label.position = Vector2(banner_x, center_y + 68.0)
+	_judgment_label.position = Vector2(banner_x, center_y + 72.0)
 	_judgment_label.pivot_offset = _judgment_label.size * 0.5
 
 	var countdown_size: Vector2 = Vector2(COUNTDOWN_BOX_WIDTH_PX, COUNTDOWN_BOX_HEIGHT_PX)
@@ -247,56 +251,18 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	var panel_h: float = minf(MODAL_HEIGHT_PX, safe_h - 64.0)
 	_pause_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
 	_pause_panel.size = Vector2(panel_w, panel_h)
-
-	var btn_w: float = panel_w - 64.0
-	_pause_title_label.position = Vector2(16.0, 20.0)
-	_pause_title_label.size = Vector2(panel_w - 32.0, 48.0)
-
-	_resume_button.position = Vector2(32.0, 86.0)
-	_resume_button.size = Vector2(btn_w, 68.0)
-
-	_restart_button.position = Vector2(32.0, 174.0)
-	_restart_button.size = Vector2(btn_w, 68.0)
-
-	_pause_results_button.position = Vector2(32.0, 262.0)
-	_pause_results_button.size = Vector2(btn_w, 68.0)
-
-	_pause_menu_button.position = Vector2(32.0, 350.0)
-	_pause_menu_button.size = Vector2(btn_w, 68.0)
+	_pause_vbox.position = Vector2(28.0, 24.0)
+	_pause_vbox.size = Vector2(maxf(200.0, panel_w - 56.0), maxf(300.0, panel_h - 48.0))
 
 	_results_overlay.position = Vector2.ZERO
 	_results_overlay.size = p_hud_safe_rect.size
 
-	var res_w: float = minf(RESULTS_WIDTH_PX, safe_w - 32.0)
-	var res_h: float = minf(RESULTS_HEIGHT_PX, safe_h - 64.0)
+	var res_w: float = minf(RESULTS_WIDTH_PX, safe_w - 28.0)
+	var res_h: float = minf(RESULTS_HEIGHT_PX, safe_h - 48.0)
 	_results_panel.position = Vector2((safe_w - res_w) * 0.5, (safe_h - res_h) * 0.5)
 	_results_panel.size = Vector2(res_w, res_h)
-
-	var pad_x: float = 32.0
-	var inner_w: float = maxf(200.0, res_w - (pad_x * 2.0))
-	_results_title_label.position = Vector2(pad_x, 28.0)
-	_results_title_label.size = Vector2(inner_w, 54.0)
-
-	_results_record_label.position = Vector2(pad_x, 82.0)
-	_results_record_label.size = Vector2(inner_w, 40.0)
-
-	_results_rank_label.position = Vector2(pad_x, 128.0)
-	_results_rank_label.size = Vector2(inner_w, 168.0)
-
-	_results_stats_label.position = Vector2(pad_x, 308.0)
-	_results_stats_label.size = Vector2(inner_w, 150.0)
-
-	_results_breakdown_label.position = Vector2(pad_x, 472.0)
-	_results_breakdown_label.size = Vector2(inner_w, 180.0)
-
-	var res_btn_h: float = 72.0
-	var retry_y: float = maxf(664.0, res_h - 178.0)
-	var menu_y: float = maxf(750.0, res_h - 92.0)
-	_results_retry_button.position = Vector2(pad_x, retry_y)
-	_results_retry_button.size = Vector2(inner_w, res_btn_h)
-
-	_results_menu_button.position = Vector2(pad_x, menu_y)
-	_results_menu_button.size = Vector2(inner_w, res_btn_h)
+	_results_vbox.position = Vector2(28.0, 24.0)
+	_results_vbox.size = Vector2(maxf(240.0, res_w - 56.0), maxf(400.0, res_h - 48.0))
 
 	_apply_banner_visual_transform()
 
@@ -537,6 +503,8 @@ func get_font_registry() -> UiFontRegistry:
 func get_role_control_fonts() -> Dictionary:
 	return {
 		"score": _score_label.get_theme_font("font") if _score_label != null else null,
+		"accuracy": _accuracy_label.get_theme_font("font") if _accuracy_label != null else null,
+		"pause": _pause_button.get_theme_font("font") if _pause_button != null else null,
 		"combo": _combo_label.get_theme_font("font") if _combo_label != null else null,
 		"judgment": _judgment_label.get_theme_font("font") if _judgment_label != null else null,
 		"rank": _results_rank_label.get_theme_font("font") if _results_rank_label != null else null,
@@ -758,49 +726,58 @@ func _ensure_ui_nodes() -> void:
 	_pause_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_overlay.add_child(_pause_panel)
 
+	_pause_vbox = VBoxContainer.new()
+	_pause_vbox.name = "PauseVBox"
+	_pause_vbox.add_theme_constant_override("separation", 18)
+	_pause_panel.add_child(_pause_vbox)
+
 	_pause_title_label = Label.new()
 	_pause_title_label.name = "PauseTitleLabel"
 	_pause_title_label.text = "PAUSA"
 	_pause_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_pause_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_pause_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
-	_pause_panel.add_child(_pause_title_label)
+	_pause_vbox.add_child(_pause_title_label)
 
 	_resume_button = Button.new()
 	_resume_button.name = "ResumeButton"
 	_resume_button.text = "REANUDAR"
+	_resume_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_resume_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_resume_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_resume_button.pressed.connect(close_pause_menu_and_resume)
-	_pause_panel.add_child(_resume_button)
+	_pause_vbox.add_child(_resume_button)
 
 	_restart_button = Button.new()
 	_restart_button.name = "RestartButton"
 	_restart_button.text = "REINICIAR"
+	_restart_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_restart_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_restart_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_restart_button.pressed.connect(request_restart)
-	_pause_panel.add_child(_restart_button)
+	_pause_vbox.add_child(_restart_button)
 
 	_pause_results_button = Button.new()
 	_pause_results_button.name = "PauseResultsButton"
 	_pause_results_button.text = "RESULTADOS"
+	_pause_results_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_pause_results_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_results_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_pause_results_button.pressed.connect(request_results_from_pause)
-	_pause_panel.add_child(_pause_results_button)
+	_pause_vbox.add_child(_pause_results_button)
 
 	_pause_menu_button = Button.new()
 	_pause_menu_button.name = "PauseMenuButton"
 	_pause_menu_button.text = "MENÚ PRINCIPAL"
+	_pause_menu_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_pause_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_pause_menu_button.pressed.connect(request_main_menu)
-	_pause_panel.add_child(_pause_menu_button)
+	_pause_vbox.add_child(_pause_menu_button)
 
 	_results_overlay = ColorRect.new()
 	_results_overlay.name = "ResultsOverlay"
-	_results_overlay.color = Color(0.02, 0.03, 0.08, 0.88)
+	_results_overlay.color = Color(0.02, 0.03, 0.08, 0.90)
 	_results_overlay.visible = false
 	_results_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_safe_container.add_child(_results_overlay)
@@ -810,57 +787,71 @@ func _ensure_ui_nodes() -> void:
 	_results_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_results_overlay.add_child(_results_panel)
 
+	_results_vbox = VBoxContainer.new()
+	_results_vbox.name = "ResultsVBox"
+	_results_vbox.add_theme_constant_override("separation", 18)
+	_results_panel.add_child(_results_vbox)
+
 	_results_title_label = Label.new()
 	_results_title_label.name = "ResultsTitleLabel"
 	_results_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_results_title_label.clip_text = true
+	_results_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_results_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
-	_results_panel.add_child(_results_title_label)
+	_results_vbox.add_child(_results_title_label)
 
 	_results_record_label = Label.new()
 	_results_record_label.name = "ResultsRecordLabel"
 	_results_record_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_record_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_results_record_label.add_theme_font_size_override("font_size", ACCURACY_FONT_SIZE)
-	_results_panel.add_child(_results_record_label)
+	_results_record_label.add_theme_font_size_override("font_size", RESULTS_RECORD_FONT_SIZE)
+	_results_vbox.add_child(_results_record_label)
 
 	_results_rank_label = Label.new()
 	_results_rank_label.name = "ResultsRankLabel"
 	_results_rank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_rank_label.custom_minimum_size = Vector2(0.0, 224.0)
 	_results_rank_label.add_theme_font_size_override("font_size", RESULTS_RANK_FONT_SIZE)
-	_results_panel.add_child(_results_rank_label)
+	_results_vbox.add_child(_results_rank_label)
 
 	_results_stats_label = Label.new()
 	_results_stats_label.name = "ResultsStatsLabel"
 	_results_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_stats_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_results_stats_label.add_theme_font_size_override("font_size", RESULTS_STATS_FONT_SIZE)
-	_results_panel.add_child(_results_stats_label)
+	_results_vbox.add_child(_results_stats_label)
 
 	_results_breakdown_label = Label.new()
 	_results_breakdown_label.name = "ResultsBreakdownLabel"
 	_results_breakdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_breakdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_results_breakdown_label.add_theme_font_size_override("font_size", RESULTS_BREAKDOWN_FONT_SIZE)
-	_results_panel.add_child(_results_breakdown_label)
+	_results_vbox.add_child(_results_breakdown_label)
+
+	var results_spacer: Control = Control.new()
+	results_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	results_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_results_vbox.add_child(results_spacer)
 
 	_results_retry_button = Button.new()
 	_results_retry_button.name = "ResultsRetryButton"
 	_results_retry_button.text = "REINTENTAR"
+	_results_retry_button.custom_minimum_size = Vector2(0.0, 88.0)
 	_results_retry_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_results_retry_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_results_retry_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
 	_results_retry_button.pressed.connect(request_restart)
-	_results_panel.add_child(_results_retry_button)
+	_results_vbox.add_child(_results_retry_button)
 
 	_results_menu_button = Button.new()
 	_results_menu_button.name = "ResultsMenuButton"
 	_results_menu_button.text = "MENÚ PRINCIPAL"
+	_results_menu_button.custom_minimum_size = Vector2(0.0, 88.0)
 	_results_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_results_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_results_menu_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
 	_results_menu_button.pressed.connect(request_main_menu)
-	_results_panel.add_child(_results_menu_button)
+	_results_vbox.add_child(_results_menu_button)
 
 	ui_sfx_player.bind_buttons_in_tree(_safe_container)
 	_refresh_labels()
@@ -871,9 +862,27 @@ func _apply_external_fonts() -> void:
 	if _font_registry == null:
 		_font_registry = UiFontRegistry.new()
 	_font_registry.apply_global_theme(get_tree())
+
+	var global_font: Font = _font_registry.get_global_font()
+	if global_font != null:
+		_font_registry.apply_global_font_override(_score_label, 5)
+		_font_registry.apply_global_font_override(_accuracy_label, 4)
+		_font_registry.apply_global_font_override(_pause_button, 4)
+		_font_registry.apply_global_font_override(_pause_title_label, 4)
+		_font_registry.apply_global_font_override(_resume_button)
+		_font_registry.apply_global_font_override(_restart_button)
+		_font_registry.apply_global_font_override(_pause_results_button)
+		_font_registry.apply_global_font_override(_pause_menu_button)
+		_font_registry.apply_global_font_override(_results_title_label, 4)
+		_font_registry.apply_global_font_override(_results_record_label, 3)
+		_font_registry.apply_global_font_override(_results_stats_label, 4)
+		_font_registry.apply_global_font_override(_results_breakdown_label, 3)
+		_font_registry.apply_global_font_override(_results_retry_button)
+		_font_registry.apply_global_font_override(_results_menu_button)
+
 	_font_registry.apply_combo_role(_combo_label, 8)
 	_font_registry.apply_combo_role(_judgment_label, 7)
-	_font_registry.apply_rank_role(_results_rank_label, 12)
+	_font_registry.apply_rank_role(_results_rank_label, 14)
 	_font_registry.apply_global_font_override(_countdown_label, 8)
 
 

@@ -441,6 +441,7 @@ func _on_main_menu_requested() -> void:
 	if input_adapter != null:
 		input_adapter.reset_input_state()
 	clear_pending_session()
+	MainMenu.open_directly_to_selector = true
 
 	var tree: SceneTree = get_tree()
 	if tree != null and ResourceLoader.exists(MAIN_MENU_SCENE_PATH):

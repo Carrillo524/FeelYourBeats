@@ -39,8 +39,13 @@ Este documento especifica el flujo completo de portada, navegación por pestaña
 
 ## 3. Velocidad de Caída `1x..4x`, Escala `D..SSS+` y Resultados (`gameplay/`, `ui/`)
 
-### 3.1. Multiplicador de Velocidad Visual (`gameplay/lane_field.gd` y `gameplay/game_session.gd`)
-- `LaneField.set_speed_multiplier(p_multiplier: int) -> void` (acepta `1`, `2`, `3`, `4`) escala `scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * float(multiplier)`, reduciendo proporcionalmente la ventana visual de anticipación y aumentando los píxeles por segundo **sin modificar el reloj DSP (`DSPClock`) ni los tiempos de impacto**.
+### 3.1. Multiplicador de Velocidad Visual Recalibrado (`gameplay/lane_field.gd` y `gameplay/game_session.gd`)
+- `LaneField.set_speed_multiplier(p_multiplier: int) -> void` (acepta `1`, `2`, `3`, `4`) escala `scroll_speed_px_per_sec = 550.0 * float(multiplier)` (`DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC = 550.0`), calibrando la curva a la mitad de la velocidad inicial:
+  - `1x` (`550 px/s`): caída pausada y muy legible.
+  - `2x` (`1100 px/s`): velocidad estándar cómoda.
+  - `3x` (`1650 px/s`): punto dulce arcade rápido y legible.
+  - `4x` (`2200 px/s`): velocidad alta para expertos sin perder legibilidad.
+- Mantiene intacta la sincronización exacta con `DSPClock` y las ventanas de juicio (solo cambia el tiempo de anticipación visual / píxeles por segundo).
 - `GameSession` propaga `speed_multiplier` desde `pending_session_config` hacia `LaneField` tanto para canciones reales como para la demo integrada.
 
 ### 3.2. Función Estática `SafeHud.compute_letter_rank(p_accuracy_percent: float) -> String`
@@ -72,20 +77,16 @@ Configurada como `application/run/main_scene="res://ui/main_menu.tscn"` en `proj
   - `UiSfxPlayer` (`ui/ui_sfx_player.gd`)
   - `AudioAnalyzer` (`core/audio/audio_analyzer.gd`)
 
-### 4.2. Fondo Reactivo al BGM y Flujo de 2 Pantallas + Modal Flotante (1.5K / 20:9 / Moto Edge)
-- **Fondo Reactivo al BGM:** `MainMenu` conecta `AudioAnalyzer` (con `set_live_monitoring(true)` cuando el BGM está activado y tiene pistas) hacia `ReactiveBackground` para que el fondo y el título `FEEL YOUR BEATS` pulsen al ritmo del BGM, volviendo a la respiración ambiental suave cuando el BGM se apaga.
-- **Pantalla 1 — Portada Minimalista:** Título grande `FEEL YOUR BEATS` (`72 px`) y botón flotante suspendido `JUGAR` (`50 px`, sin caja, con animación suave de pulso) que al tocarse reproduce `button_click` y entra a la Pantalla 2.
-- **Pantalla 2 — Navegador con 3 Pestañas Superiores (`CANCIONES` | `IMPORTAR` | `AJUSTES`):**
-  1. **`CANCIONES`:** Lista scrollable de la Demo Integrada y las pistas en `res://assets/songs/`, cada una con su insignia de récord (`[SSS · NORMAL]`, `[--]`) alineada a la derecha.
-  2. **`IMPORTAR`:** Botón grande `IMPORTAR CANCIÓN DEL DISPOSITIVO` (`FileDialog` nativo `ACCESS_FILESYSTEM`, `*.mp3, *.ogg, *.wav`) + lista de pistas importadas recientes (`user://recent_tracks.cfg`) con sus insignias; al importar una pista nueva, se abre automáticamente su modal de configuración.
-  3. **`AJUSTES`:** Encendido/apagado de BGM (`BGM: ACTIVADO / APAGADO`), nombre de pista actual, botones `< ANTERIOR` / `SIGUIENTE >` y `MODO: AUTO / FIJA`, persistidos al instante en `user://user_settings.cfg`.
-- **Modal Flotante de Configuración de Canción:** Al tocar cualquier pista se abre un panel centrado sobre una capa atenuada (cancelable con `CERRAR` o tocando fuera) con:
-  - Título de la canción y récord actual.
-  - 3 grupos con resaltado activo permanente (`StyleBoxFlat` cian iluminado vs. oscuro atenuado):
-    - **Dificultad:** `FÁCIL` | `NORMAL` | `DIFÍCIL`
-    - **Modo de Notas:** `TAP + HOLD` | `SOLO TAP`
-    - **Velocidad:** `1x` | `2x` | `3x` | `4x`
-  - Botón grande **`JUGAR`** (`84 px` de alto): bloquea la UI (`_play_button.disabled = true` y `_transition_fade_rect.mouse_filter = MOUSE_FILTER_STOP`), detiene `MenuBgmPlayer`, dispara `cassette_insert`, anima el difuminado a negro de `2.5 s` mientras prepara el payload/análisis offline sin interrumpir el SFX y luego cambia a `res://ui/game_session.tscn`.
+### 4.2. Fondo Reactivo al BGM, Retorno Directo al Selector y Flujo de 2 Pantallas + Modal Flotante (1.5K / 20:9 / Moto Edge)
+- **Fondo y Portada Reactivos al BGM:** `MainMenu` conecta `AudioAnalyzer` (`set_live_monitoring(true)` mientras el BGM está activo) a `ReactiveBackground` y al pulso de portada para que el fondo, el título `FEEL YOUR BEATS` (`104 px`, `title_font`) y el botón flotante `JUGAR` (`82 px`, `global_font` con borde neón) pulsen visiblemente (`1.0x -> 1.14x` con brillo cian/blanco) al ritmo de `bass_energy` y `beat_pulsed`, volviendo a respiración ambiental suave al apagar el BGM.
+- **Retorno Directo al Selector (`MainMenu.open_directly_to_selector`):** Cuando el jugador pulsa `MENÚ PRINCIPAL` desde Pausa o Resultados en `GameSession`, se establece `MainMenu.open_directly_to_selector = true` antes de cargar `res://ui/main_menu.tscn`, haciendo que `MainMenu` omita la portada y abra directamente la pantalla de pestañas/selector de canciones (reiniciando la bandera a `false`).
+- **Pantalla 2 — Navegador con 3 Pestañas Superiores (`CANCIONES` | `IMPORTAR` | `AJUSTES`, `34 px`, `84 px` de alto):**
+  1. **`CANCIONES` e `IMPORTAR`:** Tarjetas altas neón translúcidas (`134 px` de alto, `StyleBoxFlat` `Color(0.04, 0.12, 0.24, 0.42)` con borde `Color(0.15, 0.85, 1.0, 0.65)` y esquinas redondeadas) para que ~5 pistas ocupen la pantalla con scroll táctil fluido; títulos grandes (`38 px`, `global_font`, `OVERRUN_TRIM_ELLIPSIS`) e insignia de récord a la derecha (`36 px`, `rank_font` en la letra y `global_font` en la dificultad). En `IMPORTAR`, botón grande `IMPORTAR CANCIÓN DEL DISPOSITIVO` (`36 px`) + recientes que abren el modal tras importar.
+  2. **`AJUSTES`:** Etiquetas grandes (`36 px`), encendido/apagado de BGM (`38 px`), pista actual, `< ANTERIOR` / `SIGUIENTE >` y `MODO: AUTO / FIJA`, persistidos al instante en `user://user_settings.cfg`.
+- **Modal Flotante de Configuración y Sincronización Exacta del Casete:** Al tocar cualquier pista se abre el panel flotante centrado (`CERRAR` o toque fuera para cancelar) con título (`42 px`), récord, 3 grupos con resaltado activo permanente (`StyleBoxFlat` cian iluminado vs. oscuro atenuado, opciones a `36 px`) para **Dificultad**, **Modo de Notas** y **Velocidad (`1x..4x`)**, y botón grande **`JUGAR`** (`42 px`, `94 px` de alto):
+  1. Bloquea la interacción de la UI, detiene `MenuBgmPlayer` y muestra `"ANALIZANDO PISTA..."` (cediendo `await get_tree().process_frame` para pintar el texto).
+  2. Ejecuta primero la búsqueda en caché o análisis/generación del `ChartData` (dejándolo guardado en caché y listo en `GameSession.pending_session_config`).
+  3. **Solo después** de tener el chart listo (sin congelamientos de CPU pendientes), dispara simultáneamente `ui_sfx_player.play_cassette_insert()` y el difuminado visual de `2.5 s` (`_transition_fade_rect` de `0.0 -> 1.0`), cambiando a `res://ui/game_session.tscn` al cumplirse los `2.5 s`.
 
 ---
 

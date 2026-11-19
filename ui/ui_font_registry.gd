@@ -33,6 +33,22 @@ func reload_fonts() -> void:
 	rank_font = _find_and_load_font(RANK_FONT_STEM)
 
 
+func get_global_font() -> Font:
+	return global_font
+
+
+func get_title_font() -> Font:
+	return title_font
+
+
+func get_combo_font() -> Font:
+	return combo_font
+
+
+func get_rank_font() -> Font:
+	return rank_font
+
+
 func apply_global_theme(p_tree: SceneTree) -> void:
 	if p_tree == null or p_tree.root == null or global_font == null:
 		return
