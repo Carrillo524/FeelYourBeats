@@ -2,6 +2,9 @@ class_name LaneField
 extends Control
 
 const DEFAULT_LANE_COUNT: int = 4
+const MIN_SPEED_MULTIPLIER: int = 1
+const MAX_SPEED_MULTIPLIER: int = 4
+const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 1100.0
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
@@ -49,6 +52,8 @@ const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
 @export var despawn_past_hit_line_px: float = 220.0
 
 var _chart: ChartData = null
+var _base_scroll_speed_px_per_sec: float = DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC
+var _speed_multiplier: int = MIN_SPEED_MULTIPLIER
 var _hit_line_y: float = DEFAULT_PLAY_HEIGHT * 0.84
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
 var _current_dsp_time_sec: float = 0.0
@@ -66,6 +71,9 @@ var _fx_seed_counter: int = 1
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _speed_multiplier == MIN_SPEED_MULTIPLIER:
+		_base_scroll_speed_px_per_sec = maxf(100.0, scroll_speed_px_per_sec)
+	scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * float(_speed_multiplier)
 	_ensure_pool()
 	_connect_dependencies()
 
@@ -339,6 +347,28 @@ func update_field_at_time(p_dsp_time_sec: float) -> void:
 	_ensure_pool()
 	_spawn_visible_notes(p_dsp_time_sec)
 	_update_and_cull_active_views(p_dsp_time_sec)
+
+
+func set_speed_multiplier(p_multiplier: int) -> void:
+	_speed_multiplier = clampi(p_multiplier, MIN_SPEED_MULTIPLIER, MAX_SPEED_MULTIPLIER)
+	scroll_speed_px_per_sec = maxf(100.0, _base_scroll_speed_px_per_sec) * float(_speed_multiplier)
+
+	var active_count: int = _active_views.size()
+	for i: int in range(active_count):
+		var view: NoteView = _active_views[i]
+		var note: NoteData = view.note_data
+		if note != null:
+			view.scroll_speed_px_per_sec = scroll_speed_px_per_sec
+			var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(note)
+			view.update_position(_current_dsp_time_sec, _hit_line_y, is_holding)
+
+
+func get_speed_multiplier() -> int:
+	return _speed_multiplier
+
+
+func get_effective_scroll_speed() -> float:
+	return scroll_speed_px_per_sec
 
 
 func get_hit_line_y() -> float:

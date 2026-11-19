@@ -1,27 +1,44 @@
 class_name MainMenu
 extends Control
 
+enum MenuTab {
+	SONGS = 0,
+	IMPORT = 1,
+	SETTINGS = 2,
+}
+
 const GAME_SESSION_SCENE_PATH: String = "res://ui/game_session.tscn"
 const SONGS_DIR_PATH: String = "res://assets/songs"
 const RECENT_TRACKS_CONFIG_PATH: String = "user://recent_tracks.cfg"
-const MAX_RECENT_TRACKS: int = 12
+const MAX_RECENT_TRACKS: int = 16
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 64.0
-const PLAY_BUTTON_HEIGHT_PX: float = 82.0
+const SONG_ROW_HEIGHT_PX: float = 78.0
+const MODAL_OPTION_HEIGHT_PX: float = 68.0
+const PLAY_BUTTON_HEIGHT_PX: float = 84.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
 const USEC_TO_SEC: float = 0.000001
-const TITLE_FONT_SIZE: int = 56
-const SUBTITLE_FONT_SIZE: int = 24
-const SECTION_FONT_SIZE: int = 24
-const BUTTON_FONT_SIZE: int = 26
-const PLAY_BUTTON_FONT_SIZE: int = 36
+
+const TITLE_HERO_FONT_SIZE: int = 72
+const TITLE_SUBTITLE_FONT_SIZE: int = 26
+const TITLE_PLAY_FONT_SIZE: int = 50
+const HEADER_TITLE_FONT_SIZE: int = 38
+const TAB_FONT_SIZE: int = 27
+const SECTION_FONT_SIZE: int = 26
+const SONG_ROW_FONT_SIZE: int = 26
+const SONG_BADGE_FONT_SIZE: int = 24
+const MODAL_TITLE_FONT_SIZE: int = 34
+const MODAL_RECORD_FONT_SIZE: int = 24
+const MODAL_OPTION_FONT_SIZE: int = 28
+const PRIMARY_BUTTON_FONT_SIZE: int = 36
 const STATUS_FONT_SIZE: int = 26
 
-const COLOR_BUTTON_SELECTED: Color = Color(0.28, 0.92, 1.0, 1.0)
-const COLOR_BUTTON_IDLE: Color = Color(0.86, 0.92, 0.98, 1.0)
-const COLOR_PLAY_BUTTON: Color = Color(0.32, 1.0, 0.88, 1.0)
+const COLOR_TEXT_ACTIVE: Color = Color(0.98, 1.0, 1.0, 1.0)
+const COLOR_TEXT_INACTIVE: Color = Color(0.76, 0.84, 0.94, 0.90)
+const COLOR_TEXT_ACCENT: Color = Color(0.38, 0.96, 1.0, 1.0)
+const COLOR_TEXT_GOLD: Color = Color(1.0, 0.88, 0.34, 1.0)
 
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var reactive_background: ReactiveBackground = null
@@ -33,36 +50,75 @@ var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
 
 var _safe_container: Control = null
-var _root_vbox: VBoxContainer = null
-var _title_label: Label = null
-var _subtitle_label: Label = null
-var _browse_button: Button = null
-var _selected_track_label: Label = null
-var _track_scroll: ScrollContainer = null
-var _track_list_vbox: VBoxContainer = null
 
+# Screen 1: Title Screen
+var _title_screen_container: Control = null
+var _hero_title_label: Label = null
+var _hero_subtitle_label: Label = null
+var _hero_play_button: Button = null
+
+# Screen 2: Tabbed Browser
+var _browser_screen_container: VBoxContainer = null
+var _browser_header_label: Label = null
+var _tab_songs_button: Button = null
+var _tab_import_button: Button = null
+var _tab_settings_button: Button = null
+
+var _songs_tab_container: Control = null
+var _songs_list_vbox: VBoxContainer = null
+
+var _import_tab_container: VBoxContainer = null
+var _browse_button: Button = null
+var _import_list_vbox: VBoxContainer = null
+
+var _settings_tab_container: VBoxContainer = null
+var _bgm_toggle_button: Button = null
+var _bgm_track_label: Label = null
+var _bgm_prev_button: Button = null
+var _bgm_next_button: Button = null
+var _bgm_mode_button: Button = null
+
+# Floating Song Setup Modal
+var _song_modal_backdrop: ColorRect = null
+var _song_modal_panel: Panel = null
+var _modal_vbox: VBoxContainer = null
+var _modal_song_title_label: Label = null
+var _modal_close_button: Button = null
+var _modal_record_label: Label = null
 var _diff_easy_button: Button = null
 var _diff_normal_button: Button = null
 var _diff_hard_button: Button = null
 var _mode_tap_hold_button: Button = null
 var _mode_tap_only_button: Button = null
-
-var _bgm_label: Label = null
-var _bgm_prev_button: Button = null
-var _bgm_next_button: Button = null
-var _bgm_mode_button: Button = null
-
+var _speed_1x_button: Button = null
+var _speed_2x_button: Button = null
+var _speed_3x_button: Button = null
+var _speed_4x_button: Button = null
 var _status_label: Label = null
 var _play_button: Button = null
+
 var _file_dialog: FileDialog = null
 var _transition_fade_rect: ColorRect = null
 var _transition_tween: Tween = null
 
-var _track_entries: Array[Dictionary] = []
-var _selected_track_index: int = 0
+var _style_option_active: StyleBoxFlat = null
+var _style_option_inactive: StyleBoxFlat = null
+var _style_song_row: StyleBoxFlat = null
+var _style_modal_panel: StyleBoxFlat = null
+var _style_play_cta: StyleBoxFlat = null
+var _style_floating_play: StyleBoxEmpty = null
+
+var _song_entries: Array[Dictionary] = []
+var _imported_entries: Array[Dictionary] = []
+var _selected_entry: Dictionary = {}
+var _active_tab: int = MenuTab.SONGS
 var _selected_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 var _selected_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
+var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
+
+var _pulse_phase: float = 0.0
+var _title_bass_boost: float = 0.0
 
 
 func _init() -> void:
@@ -72,17 +128,40 @@ func _init() -> void:
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_build_theme_styles()
 	_resolve_scene_nodes()
 	_ensure_ui_nodes()
 	_connect_dependencies()
-	_reload_track_list()
-	_refresh_option_buttons()
+	_reload_all_track_lists()
+	_refresh_tab_visuals()
+	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
+	_sync_live_audio_monitoring()
+	show_title_screen()
 
 	if screen_safe_adapter != null:
 		apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
 	else:
 		apply_hud_safe_rect(Rect2(64.8, 0.0, 950.4, 1920.0))
+
+
+func _process(p_delta: float) -> void:
+	var dt: float = maxf(0.0, p_delta)
+	_pulse_phase += dt * 2.6
+	_title_bass_boost = maxf(0.0, _title_bass_boost - (5.5 * dt))
+
+	if _title_screen_container != null and _title_screen_container.visible:
+		if _hero_title_label != null:
+			_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
+			var title_scale: float = 1.0 + (_title_bass_boost * 0.06) + (sin(_pulse_phase * 0.7) * 0.012)
+			_hero_title_label.scale = Vector2(title_scale, title_scale)
+
+		if _hero_play_button != null:
+			_hero_play_button.pivot_offset = _hero_play_button.size * 0.5
+			var wave: float = sin(_pulse_phase) * 0.5 + 0.5
+			var btn_scale: float = 1.0 + (wave * 0.075) + (_title_bass_boost * 0.05)
+			_hero_play_button.scale = Vector2(btn_scale, btn_scale)
+			_hero_play_button.modulate = Color(0.55 + (0.45 * wave), 0.96, 1.0, 0.78 + (0.22 * wave))
 
 
 func _exit_tree() -> void:
@@ -96,12 +175,101 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_safe_container.position = p_hud_safe_rect.position
 	_safe_container.size = p_hud_safe_rect.size
 
+	var safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
+	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
+
+	_title_screen_container.position = Vector2.ZERO
+	_title_screen_container.size = Vector2(safe_w, safe_h)
+
+	_hero_title_label.size = Vector2(safe_w - 32.0, 120.0)
+	_hero_title_label.position = Vector2(16.0, safe_h * 0.24)
+	_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
+
+	_hero_subtitle_label.size = Vector2(safe_w - 48.0, 48.0)
+	_hero_subtitle_label.position = Vector2(24.0, (safe_h * 0.24) + 114.0)
+
+	var hero_btn_w: float = minf(420.0, safe_w - 64.0)
+	var hero_btn_h: float = 96.0
+	_hero_play_button.size = Vector2(hero_btn_w, hero_btn_h)
+	_hero_play_button.position = Vector2((safe_w - hero_btn_w) * 0.5, safe_h * 0.60)
+	_hero_play_button.pivot_offset = _hero_play_button.size * 0.5
+
 	var pad_x: float = 16.0
 	var pad_y: float = 18.0
-	var content_w: float = maxf(280.0, p_hud_safe_rect.size.x - (pad_x * 2.0))
-	var content_h: float = maxf(480.0, p_hud_safe_rect.size.y - (pad_y * 2.0))
-	_root_vbox.position = Vector2(pad_x, pad_y)
-	_root_vbox.size = Vector2(content_w, content_h)
+	_browser_screen_container.position = Vector2(pad_x, pad_y)
+	_browser_screen_container.size = Vector2(
+		maxf(280.0, safe_w - (pad_x * 2.0)),
+		maxf(440.0, safe_h - (pad_y * 2.0))
+	)
+
+	_song_modal_backdrop.position = Vector2.ZERO
+	_song_modal_backdrop.size = Vector2(safe_w, safe_h)
+
+	var modal_w: float = minf(840.0, safe_w - 28.0)
+	var modal_h: float = minf(920.0, safe_h - 64.0)
+	_song_modal_panel.size = Vector2(modal_w, modal_h)
+	_song_modal_panel.position = Vector2((safe_w - modal_w) * 0.5, (safe_h - modal_h) * 0.5)
+
+	_modal_vbox.position = Vector2(24.0, 22.0)
+	_modal_vbox.size = Vector2(maxf(240.0, modal_w - 48.0), maxf(360.0, modal_h - 44.0))
+
+
+func show_title_screen() -> void:
+	_ensure_ui_nodes()
+	_title_screen_container.visible = true
+	_browser_screen_container.visible = false
+	_song_modal_backdrop.visible = false
+
+
+func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
+	_ensure_ui_nodes()
+	_title_screen_container.visible = false
+	_browser_screen_container.visible = true
+	_song_modal_backdrop.visible = false
+	select_tab(p_tab)
+
+
+func select_tab(p_tab: int) -> void:
+	_active_tab = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
+	_refresh_tab_visuals()
+
+
+func get_active_tab() -> int:
+	return _active_tab
+
+
+func is_title_screen_visible() -> bool:
+	return _title_screen_container != null and _title_screen_container.visible
+
+
+func is_browser_screen_visible() -> bool:
+	return _browser_screen_container != null and _browser_screen_container.visible
+
+
+func is_song_modal_open() -> bool:
+	return _song_modal_backdrop != null and _song_modal_backdrop.visible
+
+
+func open_song_setup_modal(p_entry: Dictionary) -> void:
+	_ensure_ui_nodes()
+	if p_entry.is_empty():
+		return
+	_selected_entry = p_entry.duplicate()
+	_modal_song_title_label.text = str(_selected_entry.get("title", "Pista"))
+	_refresh_modal_record_label()
+	_refresh_modal_option_styles()
+	if _status_label != null:
+		_status_label.text = ""
+	if _play_button != null and not _is_launching:
+		_play_button.disabled = false
+	_song_modal_backdrop.visible = true
+
+
+func close_song_setup_modal() -> void:
+	if _is_launching:
+		return
+	if _song_modal_backdrop != null:
+		_song_modal_backdrop.visible = false
 
 
 func select_difficulty(p_difficulty: int) -> void:
@@ -110,8 +278,8 @@ func select_difficulty(p_difficulty: int) -> void:
 		AutoChartGenerator.Difficulty.EASY,
 		AutoChartGenerator.Difficulty.HARD
 	)
-	_refresh_option_buttons()
-	_rebuild_track_list_ui()
+	_refresh_modal_option_styles()
+	_refresh_modal_record_label()
 
 
 func select_note_type_mode(p_mode: int) -> void:
@@ -120,43 +288,67 @@ func select_note_type_mode(p_mode: int) -> void:
 		AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD,
 		AutoChartGenerator.NoteTypeMode.TAP_ONLY
 	)
-	_refresh_option_buttons()
-	_rebuild_track_list_ui()
+	_refresh_modal_option_styles()
+	_refresh_modal_record_label()
+
+
+func select_speed_multiplier(p_multiplier: int) -> void:
+	_selected_speed_multiplier = clampi(
+		p_multiplier,
+		LaneField.MIN_SPEED_MULTIPLIER,
+		LaneField.MAX_SPEED_MULTIPLIER
+	)
+	_refresh_modal_option_styles()
 
 
 func select_track_by_index(p_index: int) -> void:
-	if _track_entries.is_empty():
-		_selected_track_index = 0
+	if _song_entries.is_empty():
 		return
-	_selected_track_index = clampi(p_index, 0, _track_entries.size() - 1)
-	_rebuild_track_list_ui()
-	_refresh_selected_track_label()
+	var clamped: int = clampi(p_index, 0, _song_entries.size() - 1)
+	open_song_setup_modal(_song_entries[clamped])
 
 
-func register_external_track(p_audio_path: String) -> void:
+func register_external_track(p_audio_path: String, p_open_modal: bool = true) -> void:
 	var cleaned: String = p_audio_path.strip_edges()
 	if cleaned.is_empty():
 		return
 
 	_save_recent_track(cleaned)
-	_reload_track_list()
+	_reload_all_track_lists()
 
-	var count: int = _track_entries.size()
+	var norm_target: String = ChartCacheRepository.normalize_song_key(cleaned)
+	var count: int = _imported_entries.size()
 	for i: int in range(count):
-		var entry: Dictionary = _track_entries[i]
-		if str(entry.get("audio_path", "")) == cleaned:
-			select_track_by_index(i)
+		var entry: Dictionary = _imported_entries[i]
+		if str(entry.get("song_key", "")) == norm_target:
+			_selected_entry = entry.duplicate()
+			if p_open_modal:
+				show_browser_screen(MenuTab.IMPORT)
+				open_song_setup_modal(entry)
 			return
 
 
 func get_track_entries() -> Array[Dictionary]:
-	return _track_entries
+	var combined: Array[Dictionary] = []
+	combined.append_array(_song_entries)
+	combined.append_array(_imported_entries)
+	return combined
+
+
+func get_song_entries() -> Array[Dictionary]:
+	return _song_entries
+
+
+func get_imported_entries() -> Array[Dictionary]:
+	return _imported_entries
 
 
 func get_selected_track() -> Dictionary:
-	if _track_entries.is_empty():
-		return {}
-	return _track_entries[clampi(_selected_track_index, 0, _track_entries.size() - 1)]
+	if not _selected_entry.is_empty():
+		return _selected_entry
+	if not _song_entries.is_empty():
+		return _song_entries[0]
+	return {}
 
 
 func get_selected_difficulty() -> int:
@@ -165,6 +357,10 @@ func get_selected_difficulty() -> int:
 
 func get_selected_note_type_mode() -> int:
 	return _selected_note_type_mode
+
+
+func get_selected_speed_multiplier() -> int:
+	return _selected_speed_multiplier
 
 
 func is_play_button_disabled() -> bool:
@@ -188,7 +384,29 @@ func get_safe_container_rect() -> Rect2:
 func set_chart_cache_repository(p_repo: ChartCacheRepository) -> void:
 	if p_repo != null:
 		_chart_cache_repo = p_repo
-		_rebuild_track_list_ui()
+		_rebuild_songs_list_ui()
+		_rebuild_imported_list_ui()
+		_refresh_modal_record_label()
+
+
+func is_option_button_highlighted(p_button: Button) -> bool:
+	if p_button == null or _style_option_active == null:
+		return false
+	return p_button.get_theme_stylebox("normal") == _style_option_active
+
+
+func get_modal_option_buttons() -> Dictionary:
+	return {
+		"diff_easy": _diff_easy_button,
+		"diff_normal": _diff_normal_button,
+		"diff_hard": _diff_hard_button,
+		"mode_tap_hold": _mode_tap_hold_button,
+		"mode_tap_only": _mode_tap_only_button,
+		"speed_1x": _speed_1x_button,
+		"speed_2x": _speed_2x_button,
+		"speed_3x": _speed_3x_button,
+		"speed_4x": _speed_4x_button,
+	}
 
 
 func prepare_session_launch_payload() -> Dictionary:
@@ -203,6 +421,7 @@ func prepare_session_launch_payload() -> Dictionary:
 		"title": title,
 		"difficulty": _selected_difficulty,
 		"note_type_mode": _selected_note_type_mode,
+		"speed_multiplier": _selected_speed_multiplier,
 		"preloaded_chart": null,
 		"preloaded_stream": null,
 		"from_cache": false,
@@ -253,6 +472,10 @@ func prepare_session_launch_payload() -> Dictionary:
 	payload["preloaded_stream"] = stream
 	payload["from_cache"] = false
 	return payload
+
+
+func _on_hero_play_pressed() -> void:
+	show_browser_screen(MenuTab.SONGS)
 
 
 func _on_play_button_pressed() -> void:
@@ -346,9 +569,14 @@ func _on_browse_button_pressed() -> void:
 
 
 func _on_file_selected(p_path: String) -> void:
-	register_external_track(p_path)
-	if _status_label != null:
-		_status_label.text = "Pista lista: %s" % p_path.get_file().get_basename()
+	register_external_track(p_path, true)
+
+
+func _on_bgm_toggle_pressed() -> void:
+	if menu_bgm_player != null:
+		menu_bgm_player.set_bgm_enabled(not menu_bgm_player.is_bgm_enabled)
+	_refresh_bgm_controls()
+	_sync_live_audio_monitoring()
 
 
 func _on_bgm_prev_pressed() -> void:
@@ -371,6 +599,30 @@ func _on_bgm_mode_pressed() -> void:
 
 func _on_bgm_track_changed(_p_index: int, _p_name: String) -> void:
 	_refresh_bgm_controls()
+
+
+func _on_bgm_enabled_changed(_p_enabled: bool) -> void:
+	_refresh_bgm_controls()
+	_sync_live_audio_monitoring()
+
+
+func _on_bass_kick_pulsed(p_strength: float) -> void:
+	_title_bass_boost = maxf(_title_bass_boost, clampf(p_strength, 0.0, 1.0))
+
+
+func _on_modal_backdrop_gui_input(p_event: InputEvent) -> void:
+	if _is_launching:
+		return
+	if p_event is InputEventMouseButton:
+		var mb: InputEventMouseButton = p_event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if _song_modal_panel != null and not _song_modal_panel.get_rect().has_point(mb.position):
+				close_song_setup_modal()
+	elif p_event is InputEventScreenTouch:
+		var st: InputEventScreenTouch = p_event as InputEventScreenTouch
+		if st.pressed:
+			if _song_modal_panel != null and not _song_modal_panel.get_rect().has_point(st.position):
+				close_song_setup_modal()
 
 
 func _on_safe_play_rect_changed(_p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
@@ -424,12 +676,14 @@ func _connect_dependencies() -> void:
 	if reactive_background != null and audio_analyzer != null:
 		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
-		if menu_bgm_player != null and menu_bgm_player.get_track_count() > 0:
-			audio_analyzer.set_live_monitoring(true)
+		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
+			reactive_background.bass_kick_pulsed.connect(_on_bass_kick_pulsed)
 
 	if menu_bgm_player != null:
 		if not menu_bgm_player.track_changed.is_connected(_on_bgm_track_changed):
 			menu_bgm_player.track_changed.connect(_on_bgm_track_changed)
+		if not menu_bgm_player.bgm_enabled_changed.is_connected(_on_bgm_enabled_changed):
+			menu_bgm_player.bgm_enabled_changed.connect(_on_bgm_enabled_changed)
 
 	if ui_sfx_player != null and _safe_container != null:
 		var excluded: Array[BaseButton] = []
@@ -438,49 +692,66 @@ func _connect_dependencies() -> void:
 		ui_sfx_player.bind_buttons_in_tree(_safe_container, excluded)
 
 
-func _reload_track_list() -> void:
-	_track_entries.clear()
-	var seen_paths: Dictionary = {}
+func _sync_live_audio_monitoring() -> void:
+	if audio_analyzer == null:
+		return
+	var should_monitor: bool = (
+		not _is_launching
+		and menu_bgm_player != null
+		and menu_bgm_player.is_bgm_enabled
+		and menu_bgm_player.get_track_count() > 0
+	)
+	audio_analyzer.set_live_monitoring(should_monitor)
 
-	_track_entries.append({
+
+func _reload_all_track_lists() -> void:
+	_song_entries.clear()
+	_imported_entries.clear()
+
+	var seen_songs: Dictionary = {}
+	_song_entries.append({
 		"is_demo": true,
-		"song_key": GameSession.DEMO_SONG_KEY,
+		"song_key": ChartCacheRepository.BUILTIN_DEMO_SONG_KEY,
 		"audio_path": "",
 		"title": "Demo Integrada (128 BPM)",
 		"source_tag": "DEMO",
 	})
+	seen_songs[ChartCacheRepository.BUILTIN_DEMO_SONG_KEY] = true
 
 	var bundled_paths: PackedStringArray = _scan_bundled_songs()
 	for i: int in range(bundled_paths.size()):
 		var song_path: String = bundled_paths[i]
-		if not seen_paths.has(song_path):
-			seen_paths[song_path] = true
-			_track_entries.append({
+		var song_key: String = ChartCacheRepository.normalize_song_key(song_path)
+		if not seen_songs.has(song_key):
+			seen_songs[song_key] = true
+			_song_entries.append({
 				"is_demo": false,
-				"song_key": song_path,
+				"song_key": song_key,
 				"audio_path": song_path,
 				"title": song_path.get_file().get_basename(),
 				"source_tag": "LOCAL",
 			})
 
+	var seen_imported: Dictionary = {}
 	var recent_paths: PackedStringArray = _load_recent_tracks()
 	for j: int in range(recent_paths.size()):
 		var recent_path: String = recent_paths[j]
-		if not seen_paths.has(recent_path) and FileAccess.file_exists(recent_path):
-			seen_paths[recent_path] = true
-			_track_entries.append({
+		var recent_key: String = ChartCacheRepository.normalize_song_key(recent_path)
+		if not seen_imported.has(recent_key) and FileAccess.file_exists(recent_path):
+			seen_imported[recent_key] = true
+			_imported_entries.append({
 				"is_demo": false,
-				"song_key": recent_path,
+				"song_key": recent_key,
 				"audio_path": recent_path,
 				"title": recent_path.get_file().get_basename(),
-				"source_tag": "RECIENTE",
+				"source_tag": "IMPORTADA",
 			})
 
-	if _selected_track_index >= _track_entries.size():
-		_selected_track_index = 0
+	if _selected_entry.is_empty() and not _song_entries.is_empty():
+		_selected_entry = _song_entries[0].duplicate()
 
-	_rebuild_track_list_ui()
-	_refresh_selected_track_label()
+	_rebuild_songs_list_ui()
+	_rebuild_imported_list_ui()
 
 
 func _scan_bundled_songs() -> PackedStringArray:
@@ -538,10 +809,11 @@ func _load_recent_tracks() -> PackedStringArray:
 
 func _save_recent_track(p_audio_path: String) -> void:
 	var existing: PackedStringArray = _load_recent_tracks()
+	var target_norm: String = ChartCacheRepository.normalize_song_key(p_audio_path)
 	var updated: Array[String] = [p_audio_path]
 	for i: int in range(existing.size()):
 		var item: String = existing[i]
-		if item != p_audio_path and updated.size() < MAX_RECENT_TRACKS:
+		if ChartCacheRepository.normalize_song_key(item) != target_norm and updated.size() < MAX_RECENT_TRACKS:
 			updated.append(item)
 
 	var cfg: ConfigFile = ConfigFile.new()
@@ -549,91 +821,235 @@ func _save_recent_track(p_audio_path: String) -> void:
 	cfg.save(_recent_tracks_path)
 
 
-func _rebuild_track_list_ui() -> void:
-	if _track_list_vbox == null:
+func _rebuild_songs_list_ui() -> void:
+	_rebuild_entry_list(_songs_list_vbox, _song_entries, "SongRow", "No hay canciones disponibles.")
+
+
+func _rebuild_imported_list_ui() -> void:
+	_rebuild_entry_list(
+		_import_list_vbox,
+		_imported_entries,
+		"ImportedRow",
+		"Aún no has importado canciones desde tu dispositivo."
+	)
+
+
+func _rebuild_entry_list(
+	p_container: VBoxContainer,
+	p_entries: Array[Dictionary],
+	p_prefix: String,
+	p_empty_message: String
+) -> void:
+	if p_container == null:
 		return
 
-	var old_children: Array[Node] = _track_list_vbox.get_children()
+	var old_children: Array[Node] = p_container.get_children()
 	for i: int in range(old_children.size()):
 		old_children[i].queue_free()
 
-	var entry_count: int = _track_entries.size()
-	for idx: int in range(entry_count):
-		var entry: Dictionary = _track_entries[idx]
+	if p_entries.is_empty():
+		var empty_label: Label = Label.new()
+		empty_label.name = "%sEmptyLabel" % p_prefix
+		empty_label.text = p_empty_message
+		empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_label.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
+		empty_label.modulate = COLOR_TEXT_INACTIVE
+		p_container.add_child(empty_label)
+		return
+
+	var count: int = p_entries.size()
+	for idx: int in range(count):
+		var entry: Dictionary = p_entries[idx]
 		var song_key: String = str(entry.get("song_key", ""))
 		var title: String = str(entry.get("title", "Pista"))
-		var tag: String = str(entry.get("source_tag", ""))
-		var best_rank: String = _chart_cache_repo.load_best_rank_for_song(
-			song_key,
-			_selected_difficulty,
-			_selected_note_type_mode
-		)
-		var rank_badge: String = "[%s]" % best_rank if not best_rank.is_empty() else "[--]"
-		var prefix: String = "▶ " if idx == _selected_track_index else "   "
+		var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
+		var badge_text: String = str(summary.get("badge_text", "[--]"))
+		var has_record: bool = summary.get("has_record", false) as bool
+		var best_rank: String = str(summary.get("best_rank", ""))
 
 		var row_btn: Button = Button.new()
-		row_btn.name = "TrackButton_%d" % idx
-		row_btn.text = "%s%s  (%s)  %s" % [prefix, title, tag, rank_badge]
-		row_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		row_btn.clip_text = true
-		row_btn.custom_minimum_size = Vector2(0.0, 68.0)
+		row_btn.name = "%s_%d" % [p_prefix, idx]
+		row_btn.text = ""
+		row_btn.custom_minimum_size = Vector2(0.0, SONG_ROW_HEIGHT_PX)
 		row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row_btn.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
-		row_btn.modulate = COLOR_BUTTON_SELECTED if idx == _selected_track_index else COLOR_BUTTON_IDLE
-		row_btn.pressed.connect(select_track_by_index.bind(idx))
+		_apply_stylebox_to_button(row_btn, _style_song_row)
+		row_btn.pressed.connect(open_song_setup_modal.bind(entry))
 		if ui_sfx_player != null:
 			ui_sfx_player.bind_button(row_btn)
-		_track_list_vbox.add_child(row_btn)
+
+		var row_margin: MarginContainer = MarginContainer.new()
+		row_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		row_margin.add_theme_constant_override("margin_left", 20)
+		row_margin.add_theme_constant_override("margin_right", 20)
+		row_btn.add_child(row_margin)
+
+		var row_hbox: HBoxContainer = HBoxContainer.new()
+		row_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row_hbox.add_theme_constant_override("separation", 12)
+		row_margin.add_child(row_hbox)
+
+		var title_lbl: Label = Label.new()
+		title_lbl.name = "RowTitle"
+		title_lbl.text = title
+		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		title_lbl.clip_text = true
+		title_lbl.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
+		title_lbl.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+		row_hbox.add_child(title_lbl)
+
+		var badge_lbl: Label = Label.new()
+		badge_lbl.name = "RowBadge"
+		badge_lbl.text = badge_text
+		badge_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		badge_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
+		var badge_col: Color = SafeHud.get_rank_color(best_rank) if has_record else COLOR_TEXT_INACTIVE
+		badge_lbl.add_theme_color_override("font_color", badge_col)
+		row_hbox.add_child(badge_lbl)
+
+		p_container.add_child(row_btn)
 
 
-func _refresh_selected_track_label() -> void:
-	if _selected_track_label == null:
+func _refresh_tab_visuals() -> void:
+	if _songs_tab_container != null:
+		_songs_tab_container.visible = (_active_tab == MenuTab.SONGS)
+	if _import_tab_container != null:
+		_import_tab_container.visible = (_active_tab == MenuTab.IMPORT)
+	if _settings_tab_container != null:
+		_settings_tab_container.visible = (_active_tab == MenuTab.SETTINGS)
+
+	_set_option_highlight(_tab_songs_button, _active_tab == MenuTab.SONGS)
+	_set_option_highlight(_tab_import_button, _active_tab == MenuTab.IMPORT)
+	_set_option_highlight(_tab_settings_button, _active_tab == MenuTab.SETTINGS)
+
+
+func _refresh_modal_option_styles() -> void:
+	_set_option_highlight(_diff_easy_button, _selected_difficulty == AutoChartGenerator.Difficulty.EASY)
+	_set_option_highlight(_diff_normal_button, _selected_difficulty == AutoChartGenerator.Difficulty.NORMAL)
+	_set_option_highlight(_diff_hard_button, _selected_difficulty == AutoChartGenerator.Difficulty.HARD)
+
+	_set_option_highlight(_mode_tap_hold_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD)
+	_set_option_highlight(_mode_tap_only_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_ONLY)
+
+	_set_option_highlight(_speed_1x_button, _selected_speed_multiplier == 1)
+	_set_option_highlight(_speed_2x_button, _selected_speed_multiplier == 2)
+	_set_option_highlight(_speed_3x_button, _selected_speed_multiplier == 3)
+	_set_option_highlight(_speed_4x_button, _selected_speed_multiplier == 4)
+
+
+func _refresh_modal_record_label() -> void:
+	if _modal_record_label == null:
 		return
 	var selected: Dictionary = get_selected_track()
-	var title: String = str(selected.get("title", "Sin selección"))
-	_selected_track_label.text = "SELECCIONADA: %s" % title
+	var song_key: String = str(selected.get("song_key", ""))
+	if song_key.is_empty():
+		_modal_record_label.text = "RÉCORD: [--]"
+		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+		return
 
-
-func _refresh_option_buttons() -> void:
-	if _diff_easy_button != null:
-		_diff_easy_button.modulate = (
-			COLOR_BUTTON_SELECTED
-			if _selected_difficulty == AutoChartGenerator.Difficulty.EASY
-			else COLOR_BUTTON_IDLE
-		)
-	if _diff_normal_button != null:
-		_diff_normal_button.modulate = (
-			COLOR_BUTTON_SELECTED
-			if _selected_difficulty == AutoChartGenerator.Difficulty.NORMAL
-			else COLOR_BUTTON_IDLE
-		)
-	if _diff_hard_button != null:
-		_diff_hard_button.modulate = (
-			COLOR_BUTTON_SELECTED
-			if _selected_difficulty == AutoChartGenerator.Difficulty.HARD
-			else COLOR_BUTTON_IDLE
-		)
-	if _mode_tap_hold_button != null:
-		_mode_tap_hold_button.modulate = (
-			COLOR_BUTTON_SELECTED
-			if _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
-			else COLOR_BUTTON_IDLE
-		)
-	if _mode_tap_only_button != null:
-		_mode_tap_only_button.modulate = (
-			COLOR_BUTTON_SELECTED
-			if _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_ONLY
-			else COLOR_BUTTON_IDLE
-		)
+	var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
+	var specific: Dictionary = _chart_cache_repo.load_song_record(
+		song_key,
+		_selected_difficulty,
+		_selected_note_type_mode
+	)
+	if specific.get("has_record", false) as bool:
+		var rank: String = str(specific.get("best_rank", ""))
+		var score_val: int = int(specific.get("best_score", 0))
+		var acc_val: float = float(specific.get("best_accuracy", 0.0))
+		_modal_record_label.text = "MEJOR EN ESTE MODO: [%s] · %d pts (%.1f%%)" % [rank, score_val, acc_val]
+		_modal_record_label.add_theme_color_override("font_color", SafeHud.get_rank_color(rank))
+	elif summary.get("has_record", false) as bool:
+		var badge: String = str(summary.get("badge_text", "[--]"))
+		var best_rank: String = str(summary.get("best_rank", ""))
+		_modal_record_label.text = "MEJOR GLOBAL: %s" % badge
+		_modal_record_label.add_theme_color_override("font_color", SafeHud.get_rank_color(best_rank))
+	else:
+		_modal_record_label.text = "SIN RÉCORD TODAVÍA [--]"
+		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
 
 
 func _refresh_bgm_controls() -> void:
+	var bgm_enabled: bool = menu_bgm_player.is_bgm_enabled if menu_bgm_player != null else true
 	var track_name: String = menu_bgm_player.get_current_track_name() if menu_bgm_player != null else MenuBgmPlayer.EMPTY_TRACK_LABEL
 	var auto_rotate: bool = menu_bgm_player.is_auto_rotate if menu_bgm_player != null else true
-	if _bgm_label != null:
-		_bgm_label.text = "BGM: %s" % track_name
+
+	if _bgm_toggle_button != null:
+		_bgm_toggle_button.text = "BGM: ACTIVADO" if bgm_enabled else "BGM: APAGADO"
+		_set_option_highlight(_bgm_toggle_button, bgm_enabled)
+
+	if _bgm_track_label != null:
+		_bgm_track_label.text = "PISTA ACTUAL: %s" % track_name
+
 	if _bgm_mode_button != null:
-		_bgm_mode_button.text = "AUTO" if auto_rotate else "FIJA"
+		_bgm_mode_button.text = "MODO: AUTO" if auto_rotate else "MODO: FIJA"
+		_set_option_highlight(_bgm_mode_button, auto_rotate)
+
+
+func _set_option_highlight(p_button: Button, p_is_active: bool) -> void:
+	if p_button == null:
+		return
+	var target_style: StyleBox = _style_option_active if p_is_active else _style_option_inactive
+	_apply_stylebox_to_button(p_button, target_style)
+	var text_col: Color = COLOR_TEXT_ACTIVE if p_is_active else COLOR_TEXT_INACTIVE
+	p_button.add_theme_color_override("font_color", text_col)
+	p_button.add_theme_color_override("font_hover_color", COLOR_TEXT_ACTIVE)
+	p_button.add_theme_color_override("font_pressed_color", COLOR_TEXT_ACTIVE)
+	p_button.add_theme_color_override("font_focus_color", text_col)
+
+
+func _apply_stylebox_to_button(p_button: Button, p_style: StyleBox) -> void:
+	if p_button == null or p_style == null:
+		return
+	p_button.add_theme_stylebox_override("normal", p_style)
+	p_button.add_theme_stylebox_override("hover", p_style)
+	p_button.add_theme_stylebox_override("pressed", p_style)
+	p_button.add_theme_stylebox_override("focus", p_style)
+
+
+func _build_theme_styles() -> void:
+	_style_option_active = StyleBoxFlat.new()
+	_style_option_active.bg_color = Color(0.10, 0.44, 0.58, 0.94)
+	_style_option_active.border_color = Color(0.38, 0.96, 1.0, 1.0)
+	_style_option_active.set_border_width_all(3)
+	_style_option_active.set_corner_radius_all(12)
+	_style_option_active.shadow_color = Color(0.20, 0.90, 1.0, 0.35)
+	_style_option_active.shadow_size = 6
+
+	_style_option_inactive = StyleBoxFlat.new()
+	_style_option_inactive.bg_color = Color(0.06, 0.09, 0.16, 0.84)
+	_style_option_inactive.border_color = Color(0.26, 0.36, 0.52, 0.55)
+	_style_option_inactive.set_border_width_all(1)
+	_style_option_inactive.set_corner_radius_all(12)
+
+	_style_song_row = StyleBoxFlat.new()
+	_style_song_row.bg_color = Color(0.06, 0.10, 0.18, 0.86)
+	_style_song_row.border_color = Color(0.26, 0.68, 0.92, 0.55)
+	_style_song_row.set_border_width_all(2)
+	_style_song_row.set_corner_radius_all(14)
+
+	_style_modal_panel = StyleBoxFlat.new()
+	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
+	_style_modal_panel.border_color = Color(0.35, 0.92, 1.0, 0.92)
+	_style_modal_panel.set_border_width_all(3)
+	_style_modal_panel.set_corner_radius_all(18)
+	_style_modal_panel.shadow_color = Color(0.0, 0.0, 0.0, 0.65)
+	_style_modal_panel.shadow_size = 18
+
+	_style_play_cta = StyleBoxFlat.new()
+	_style_play_cta.bg_color = Color(0.10, 0.68, 0.64, 0.98)
+	_style_play_cta.border_color = Color(0.65, 1.0, 0.94, 1.0)
+	_style_play_cta.set_border_width_all(3)
+	_style_play_cta.set_corner_radius_all(16)
+	_style_play_cta.shadow_color = Color(0.22, 1.0, 0.88, 0.40)
+	_style_play_cta.shadow_size = 10
+
+	_style_floating_play = StyleBoxEmpty.new()
 
 
 func _ensure_ui_nodes() -> void:
@@ -645,151 +1061,9 @@ func _ensure_ui_nodes() -> void:
 	_safe_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_safe_container)
 
-	_root_vbox = VBoxContainer.new()
-	_root_vbox.name = "MenuRootVBox"
-	_root_vbox.add_theme_constant_override("separation", 18)
-	_safe_container.add_child(_root_vbox)
-
-	_title_label = Label.new()
-	_title_label.name = "TitleLabel"
-	_title_label.text = "FEEL YOUR BEATS"
-	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title_label.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
-	_title_label.modulate = Color(0.45, 0.96, 1.0, 1.0)
-	_root_vbox.add_child(_title_label)
-
-	_subtitle_label = Label.new()
-	_subtitle_label.name = "SubtitleLabel"
-	_subtitle_label.text = "Juega con cualquier canción de tu dispositivo"
-	_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_subtitle_label.add_theme_font_size_override("font_size", SUBTITLE_FONT_SIZE)
-	_subtitle_label.modulate = Color(0.84, 0.90, 1.0, 0.90)
-	_root_vbox.add_child(_subtitle_label)
-
-	_browse_button = Button.new()
-	_browse_button.name = "BrowseAudioButton"
-	_browse_button.text = "ELEGIR CANCIÓN DEL DISPOSITIVO"
-	_browse_button.custom_minimum_size = Vector2(0.0, 72.0)
-	_browse_button.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
-	_browse_button.pressed.connect(_on_browse_button_pressed)
-	_root_vbox.add_child(_browse_button)
-
-	_selected_track_label = Label.new()
-	_selected_track_label.name = "SelectedTrackLabel"
-	_selected_track_label.text = "SELECCIONADA: Demo Integrada (128 BPM)"
-	_selected_track_label.clip_text = true
-	_selected_track_label.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
-	_selected_track_label.modulate = Color(0.96, 0.98, 1.0, 1.0)
-	_root_vbox.add_child(_selected_track_label)
-
-	_track_scroll = ScrollContainer.new()
-	_track_scroll.name = "TrackListScroll"
-	_track_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_track_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_root_vbox.add_child(_track_scroll)
-
-	_track_list_vbox = VBoxContainer.new()
-	_track_list_vbox.name = "TrackListVBox"
-	_track_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_track_list_vbox.add_theme_constant_override("separation", 10)
-	_track_scroll.add_child(_track_list_vbox)
-
-	var diff_header: Label = Label.new()
-	diff_header.name = "DifficultyHeader"
-	diff_header.text = "DIFICULTAD"
-	diff_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
-	_root_vbox.add_child(diff_header)
-
-	var diff_row: HBoxContainer = HBoxContainer.new()
-	diff_row.name = "DifficultyRow"
-	diff_row.add_theme_constant_override("separation", 12)
-	_root_vbox.add_child(diff_row)
-
-	_diff_easy_button = _create_option_button("DiffEasyButton", "FÁCIL")
-	_diff_easy_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.EASY))
-	diff_row.add_child(_diff_easy_button)
-
-	_diff_normal_button = _create_option_button("DiffNormalButton", "NORMAL")
-	_diff_normal_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.NORMAL))
-	diff_row.add_child(_diff_normal_button)
-
-	_diff_hard_button = _create_option_button("DiffHardButton", "DIFÍCIL")
-	_diff_hard_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.HARD))
-	diff_row.add_child(_diff_hard_button)
-
-	var mode_header: Label = Label.new()
-	mode_header.name = "NoteModeHeader"
-	mode_header.text = "MODO DE NOTAS"
-	mode_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
-	_root_vbox.add_child(mode_header)
-
-	var mode_row: HBoxContainer = HBoxContainer.new()
-	mode_row.name = "NoteModeRow"
-	mode_row.add_theme_constant_override("separation", 12)
-	_root_vbox.add_child(mode_row)
-
-	_mode_tap_hold_button = _create_option_button("ModeTapHoldButton", "TAP + HOLD")
-	_mode_tap_hold_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD))
-	mode_row.add_child(_mode_tap_hold_button)
-
-	_mode_tap_only_button = _create_option_button("ModeTapOnlyButton", "SOLO TAP")
-	_mode_tap_only_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_ONLY))
-	mode_row.add_child(_mode_tap_only_button)
-
-	var bgm_row: HBoxContainer = HBoxContainer.new()
-	bgm_row.name = "BgmControlRow"
-	bgm_row.add_theme_constant_override("separation", 10)
-	_root_vbox.add_child(bgm_row)
-
-	_bgm_label = Label.new()
-	_bgm_label.name = "BgmTrackLabel"
-	_bgm_label.text = "BGM: Sin BGM"
-	_bgm_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_bgm_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_bgm_label.clip_text = true
-	_bgm_label.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
-	bgm_row.add_child(_bgm_label)
-
-	_bgm_prev_button = Button.new()
-	_bgm_prev_button.name = "BgmPrevButton"
-	_bgm_prev_button.text = "<"
-	_bgm_prev_button.custom_minimum_size = Vector2(72.0, MIN_TOUCH_BUTTON_HEIGHT_PX)
-	_bgm_prev_button.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
-	_bgm_prev_button.pressed.connect(_on_bgm_prev_pressed)
-	bgm_row.add_child(_bgm_prev_button)
-
-	_bgm_next_button = Button.new()
-	_bgm_next_button.name = "BgmNextButton"
-	_bgm_next_button.text = ">"
-	_bgm_next_button.custom_minimum_size = Vector2(72.0, MIN_TOUCH_BUTTON_HEIGHT_PX)
-	_bgm_next_button.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
-	_bgm_next_button.pressed.connect(_on_bgm_next_pressed)
-	bgm_row.add_child(_bgm_next_button)
-
-	_bgm_mode_button = Button.new()
-	_bgm_mode_button.name = "BgmModeButton"
-	_bgm_mode_button.text = "AUTO"
-	_bgm_mode_button.custom_minimum_size = Vector2(128.0, MIN_TOUCH_BUTTON_HEIGHT_PX)
-	_bgm_mode_button.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
-	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
-	bgm_row.add_child(_bgm_mode_button)
-
-	_status_label = Label.new()
-	_status_label.name = "StatusLabel"
-	_status_label.text = ""
-	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_status_label.add_theme_font_size_override("font_size", STATUS_FONT_SIZE)
-	_status_label.modulate = Color(1.0, 0.90, 0.42, 1.0)
-	_root_vbox.add_child(_status_label)
-
-	_play_button = Button.new()
-	_play_button.name = "PlayButton"
-	_play_button.text = "JUGAR"
-	_play_button.custom_minimum_size = Vector2(0.0, PLAY_BUTTON_HEIGHT_PX)
-	_play_button.add_theme_font_size_override("font_size", PLAY_BUTTON_FONT_SIZE)
-	_play_button.modulate = COLOR_PLAY_BUTTON
-	_play_button.pressed.connect(_on_play_button_pressed)
-	_root_vbox.add_child(_play_button)
+	_build_title_screen_ui()
+	_build_browser_screen_ui()
+	_build_song_setup_modal_ui()
 
 	_file_dialog = FileDialog.new()
 	_file_dialog.name = "AudioFileDialog"
@@ -810,11 +1084,341 @@ func _ensure_ui_nodes() -> void:
 	_transition_fade_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 
+func _build_title_screen_ui() -> void:
+	_title_screen_container = Control.new()
+	_title_screen_container.name = "TitleScreenContainer"
+	_title_screen_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_safe_container.add_child(_title_screen_container)
+
+	_hero_title_label = Label.new()
+	_hero_title_label.name = "HeroTitleLabel"
+	_hero_title_label.text = "FEEL YOUR BEATS"
+	_hero_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hero_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hero_title_label.add_theme_font_size_override("font_size", TITLE_HERO_FONT_SIZE)
+	_hero_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_title_screen_container.add_child(_hero_title_label)
+
+	_hero_subtitle_label = Label.new()
+	_hero_subtitle_label.name = "HeroSubtitleLabel"
+	_hero_subtitle_label.text = "TU MÚSICA · TU RITMO"
+	_hero_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hero_subtitle_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hero_subtitle_label.add_theme_font_size_override("font_size", TITLE_SUBTITLE_FONT_SIZE)
+	_hero_subtitle_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	_title_screen_container.add_child(_hero_subtitle_label)
+
+	_hero_play_button = Button.new()
+	_hero_play_button.name = "HeroPlayButton"
+	_hero_play_button.text = "JUGAR"
+	_hero_play_button.flat = true
+	_hero_play_button.add_theme_font_size_override("font_size", TITLE_PLAY_FONT_SIZE)
+	_hero_play_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_hero_play_button.add_theme_color_override("font_hover_color", COLOR_TEXT_ACCENT)
+	_hero_play_button.add_theme_color_override("font_pressed_color", COLOR_TEXT_GOLD)
+	_apply_stylebox_to_button(_hero_play_button, _style_floating_play)
+	_hero_play_button.pressed.connect(_on_hero_play_pressed)
+	_title_screen_container.add_child(_hero_play_button)
+
+
+func _build_browser_screen_ui() -> void:
+	_browser_screen_container = VBoxContainer.new()
+	_browser_screen_container.name = "BrowserScreenContainer"
+	_browser_screen_container.visible = false
+	_browser_screen_container.add_theme_constant_override("separation", 18)
+	_safe_container.add_child(_browser_screen_container)
+
+	_browser_header_label = Label.new()
+	_browser_header_label.name = "BrowserHeaderLabel"
+	_browser_header_label.text = "FEEL YOUR BEATS"
+	_browser_header_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_browser_header_label.add_theme_font_size_override("font_size", HEADER_TITLE_FONT_SIZE)
+	_browser_header_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_browser_screen_container.add_child(_browser_header_label)
+
+	var tabs_row: HBoxContainer = HBoxContainer.new()
+	tabs_row.name = "TopTabsRow"
+	tabs_row.add_theme_constant_override("separation", 10)
+	_browser_screen_container.add_child(tabs_row)
+
+	_tab_songs_button = _create_tab_button("TabSongsButton", "CANCIONES")
+	_tab_songs_button.pressed.connect(select_tab.bind(MenuTab.SONGS))
+	tabs_row.add_child(_tab_songs_button)
+
+	_tab_import_button = _create_tab_button("TabImportButton", "IMPORTAR")
+	_tab_import_button.pressed.connect(select_tab.bind(MenuTab.IMPORT))
+	tabs_row.add_child(_tab_import_button)
+
+	_tab_settings_button = _create_tab_button("TabSettingsButton", "AJUSTES")
+	_tab_settings_button.pressed.connect(select_tab.bind(MenuTab.SETTINGS))
+	tabs_row.add_child(_tab_settings_button)
+
+	# Tab 1: CANCIONES
+	var songs_scroll: ScrollContainer = ScrollContainer.new()
+	songs_scroll.name = "SongsTabScroll"
+	songs_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	songs_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_browser_screen_container.add_child(songs_scroll)
+	_songs_tab_container = songs_scroll
+
+	_songs_list_vbox = VBoxContainer.new()
+	_songs_list_vbox.name = "SongsListVBox"
+	_songs_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_songs_list_vbox.add_theme_constant_override("separation", 12)
+	songs_scroll.add_child(_songs_list_vbox)
+
+	# Tab 2: IMPORTAR
+	_import_tab_container = VBoxContainer.new()
+	_import_tab_container.name = "ImportTabContainer"
+	_import_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_import_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_import_tab_container.add_theme_constant_override("separation", 16)
+	_import_tab_container.visible = false
+	_browser_screen_container.add_child(_import_tab_container)
+
+	_browse_button = Button.new()
+	_browse_button.name = "ImportSongButton"
+	_browse_button.text = "IMPORTAR CANCIÓN DEL DISPOSITIVO"
+	_browse_button.custom_minimum_size = Vector2(0.0, 78.0)
+	_browse_button.add_theme_font_size_override("font_size", 30)
+	_browse_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_browse_button, _style_option_active)
+	_browse_button.pressed.connect(_on_browse_button_pressed)
+	_import_tab_container.add_child(_browse_button)
+
+	var imported_header: Label = Label.new()
+	imported_header.name = "ImportedHeaderLabel"
+	imported_header.text = "CANCIONES IMPORTADAS / RECIENTES"
+	imported_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	imported_header.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	_import_tab_container.add_child(imported_header)
+
+	var import_scroll: ScrollContainer = ScrollContainer.new()
+	import_scroll.name = "ImportedListScroll"
+	import_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	import_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_import_tab_container.add_child(import_scroll)
+
+	_import_list_vbox = VBoxContainer.new()
+	_import_list_vbox.name = "ImportedListVBox"
+	_import_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_import_list_vbox.add_theme_constant_override("separation", 12)
+	import_scroll.add_child(_import_list_vbox)
+
+	# Tab 3: AJUSTES
+	_settings_tab_container = VBoxContainer.new()
+	_settings_tab_container.name = "SettingsTabContainer"
+	_settings_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_settings_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_settings_tab_container.add_theme_constant_override("separation", 20)
+	_settings_tab_container.visible = false
+	_browser_screen_container.add_child(_settings_tab_container)
+
+	var settings_header: Label = Label.new()
+	settings_header.name = "SettingsBgmHeader"
+	settings_header.text = "MÚSICA DE FONDO DEL MENÚ (BGM)"
+	settings_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	settings_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_settings_tab_container.add_child(settings_header)
+
+	_bgm_toggle_button = Button.new()
+	_bgm_toggle_button.name = "BgmToggleButton"
+	_bgm_toggle_button.text = "BGM: ACTIVADO"
+	_bgm_toggle_button.custom_minimum_size = Vector2(0.0, 76.0)
+	_bgm_toggle_button.add_theme_font_size_override("font_size", 30)
+	_bgm_toggle_button.pressed.connect(_on_bgm_toggle_pressed)
+	_settings_tab_container.add_child(_bgm_toggle_button)
+
+	_bgm_track_label = Label.new()
+	_bgm_track_label.name = "BgmTrackLabel"
+	_bgm_track_label.text = "PISTA ACTUAL: Sin BGM"
+	_bgm_track_label.clip_text = true
+	_bgm_track_label.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
+	_bgm_track_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_settings_tab_container.add_child(_bgm_track_label)
+
+	var bgm_nav_row: HBoxContainer = HBoxContainer.new()
+	bgm_nav_row.name = "BgmNavRow"
+	bgm_nav_row.add_theme_constant_override("separation", 14)
+	_settings_tab_container.add_child(bgm_nav_row)
+
+	_bgm_prev_button = _create_option_button("BgmPrevButton", "< ANTERIOR")
+	_bgm_prev_button.pressed.connect(_on_bgm_prev_pressed)
+	_apply_stylebox_to_button(_bgm_prev_button, _style_option_inactive)
+	bgm_nav_row.add_child(_bgm_prev_button)
+
+	_bgm_next_button = _create_option_button("BgmNextButton", "SIGUIENTE >")
+	_bgm_next_button.pressed.connect(_on_bgm_next_pressed)
+	_apply_stylebox_to_button(_bgm_next_button, _style_option_inactive)
+	bgm_nav_row.add_child(_bgm_next_button)
+
+	_bgm_mode_button = Button.new()
+	_bgm_mode_button.name = "BgmModeButton"
+	_bgm_mode_button.text = "MODO: AUTO"
+	_bgm_mode_button.custom_minimum_size = Vector2(0.0, 72.0)
+	_bgm_mode_button.add_theme_font_size_override("font_size", MODAL_OPTION_FONT_SIZE)
+	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
+	_settings_tab_container.add_child(_bgm_mode_button)
+
+
+func _build_song_setup_modal_ui() -> void:
+	_song_modal_backdrop = ColorRect.new()
+	_song_modal_backdrop.name = "SongModalBackdrop"
+	_song_modal_backdrop.color = Color(0.01, 0.02, 0.05, 0.80)
+	_song_modal_backdrop.visible = false
+	_song_modal_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_song_modal_backdrop.gui_input.connect(_on_modal_backdrop_gui_input)
+	_safe_container.add_child(_song_modal_backdrop)
+
+	_song_modal_panel = Panel.new()
+	_song_modal_panel.name = "SongModalPanel"
+	_song_modal_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_song_modal_panel.add_theme_stylebox_override("panel", _style_modal_panel)
+	_song_modal_backdrop.add_child(_song_modal_panel)
+
+	_modal_vbox = VBoxContainer.new()
+	_modal_vbox.name = "SongModalVBox"
+	_modal_vbox.add_theme_constant_override("separation", 18)
+	_song_modal_panel.add_child(_modal_vbox)
+
+	var header_row: HBoxContainer = HBoxContainer.new()
+	header_row.name = "ModalHeaderRow"
+	header_row.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(header_row)
+
+	_modal_song_title_label = Label.new()
+	_modal_song_title_label.name = "ModalSongTitleLabel"
+	_modal_song_title_label.text = "Canción"
+	_modal_song_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_modal_song_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_modal_song_title_label.clip_text = true
+	_modal_song_title_label.add_theme_font_size_override("font_size", MODAL_TITLE_FONT_SIZE)
+	_modal_song_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	header_row.add_child(_modal_song_title_label)
+
+	_modal_close_button = Button.new()
+	_modal_close_button.name = "ModalCloseButton"
+	_modal_close_button.text = "CERRAR"
+	_modal_close_button.custom_minimum_size = Vector2(140.0, MIN_TOUCH_BUTTON_HEIGHT_PX)
+	_modal_close_button.add_theme_font_size_override("font_size", 24)
+	_apply_stylebox_to_button(_modal_close_button, _style_option_inactive)
+	_modal_close_button.pressed.connect(close_song_setup_modal)
+	header_row.add_child(_modal_close_button)
+
+	_modal_record_label = Label.new()
+	_modal_record_label.name = "ModalRecordLabel"
+	_modal_record_label.text = "SIN RÉCORD TODAVÍA [--]"
+	_modal_record_label.add_theme_font_size_override("font_size", MODAL_RECORD_FONT_SIZE)
+	_modal_vbox.add_child(_modal_record_label)
+
+	var diff_header: Label = Label.new()
+	diff_header.text = "DIFICULTAD"
+	diff_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	diff_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_modal_vbox.add_child(diff_header)
+
+	var diff_row: HBoxContainer = HBoxContainer.new()
+	diff_row.name = "ModalDifficultyRow"
+	diff_row.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(diff_row)
+
+	_diff_easy_button = _create_option_button("DiffEasyButton", "FÁCIL")
+	_diff_easy_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.EASY))
+	diff_row.add_child(_diff_easy_button)
+
+	_diff_normal_button = _create_option_button("DiffNormalButton", "NORMAL")
+	_diff_normal_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.NORMAL))
+	diff_row.add_child(_diff_normal_button)
+
+	_diff_hard_button = _create_option_button("DiffHardButton", "DIFÍCIL")
+	_diff_hard_button.pressed.connect(select_difficulty.bind(AutoChartGenerator.Difficulty.HARD))
+	diff_row.add_child(_diff_hard_button)
+
+	var mode_header: Label = Label.new()
+	mode_header.text = "MODO DE NOTAS"
+	mode_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	mode_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_modal_vbox.add_child(mode_header)
+
+	var mode_row: HBoxContainer = HBoxContainer.new()
+	mode_row.name = "ModalNoteModeRow"
+	mode_row.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(mode_row)
+
+	_mode_tap_hold_button = _create_option_button("ModeTapHoldButton", "TAP + HOLD")
+	_mode_tap_hold_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD))
+	mode_row.add_child(_mode_tap_hold_button)
+
+	_mode_tap_only_button = _create_option_button("ModeTapOnlyButton", "SOLO TAP")
+	_mode_tap_only_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_ONLY))
+	mode_row.add_child(_mode_tap_only_button)
+
+	var speed_header: Label = Label.new()
+	speed_header.text = "VELOCIDAD"
+	speed_header.add_theme_font_size_override("font_size", SECTION_FONT_SIZE)
+	speed_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_modal_vbox.add_child(speed_header)
+
+	var speed_row: HBoxContainer = HBoxContainer.new()
+	speed_row.name = "ModalSpeedRow"
+	speed_row.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(speed_row)
+
+	_speed_1x_button = _create_option_button("Speed1xButton", "1x")
+	_speed_1x_button.pressed.connect(select_speed_multiplier.bind(1))
+	speed_row.add_child(_speed_1x_button)
+
+	_speed_2x_button = _create_option_button("Speed2xButton", "2x")
+	_speed_2x_button.pressed.connect(select_speed_multiplier.bind(2))
+	speed_row.add_child(_speed_2x_button)
+
+	_speed_3x_button = _create_option_button("Speed3xButton", "3x")
+	_speed_3x_button.pressed.connect(select_speed_multiplier.bind(3))
+	speed_row.add_child(_speed_3x_button)
+
+	_speed_4x_button = _create_option_button("Speed4xButton", "4x")
+	_speed_4x_button.pressed.connect(select_speed_multiplier.bind(4))
+	speed_row.add_child(_speed_4x_button)
+
+	var spacer: Control = Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_modal_vbox.add_child(spacer)
+
+	_status_label = Label.new()
+	_status_label.name = "StatusLabel"
+	_status_label.text = ""
+	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_label.add_theme_font_size_override("font_size", STATUS_FONT_SIZE)
+	_status_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+	_modal_vbox.add_child(_status_label)
+
+	_play_button = Button.new()
+	_play_button.name = "PlayButton"
+	_play_button.text = "JUGAR"
+	_play_button.custom_minimum_size = Vector2(0.0, PLAY_BUTTON_HEIGHT_PX)
+	_play_button.add_theme_font_size_override("font_size", PRIMARY_BUTTON_FONT_SIZE)
+	_play_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_play_button, _style_play_cta)
+	_play_button.pressed.connect(_on_play_button_pressed)
+	_modal_vbox.add_child(_play_button)
+
+
+func _create_tab_button(p_name: String, p_text: String) -> Button:
+	var btn: Button = Button.new()
+	btn.name = p_name
+	btn.text = p_text
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.custom_minimum_size = Vector2(0.0, 70.0)
+	btn.add_theme_font_size_override("font_size", TAB_FONT_SIZE)
+	return btn
+
+
 func _create_option_button(p_name: String, p_text: String) -> Button:
 	var btn: Button = Button.new()
 	btn.name = p_name
 	btn.text = p_text
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0.0, 68.0)
-	btn.add_theme_font_size_override("font_size", BUTTON_FONT_SIZE)
+	btn.custom_minimum_size = Vector2(0.0, MODAL_OPTION_HEIGHT_PX)
+	btn.add_theme_font_size_override("font_size", MODAL_OPTION_FONT_SIZE)
 	return btn

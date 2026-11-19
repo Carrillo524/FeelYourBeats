@@ -2,7 +2,7 @@ class_name GameSession
 extends Control
 
 const MAIN_MENU_SCENE_PATH: String = "res://ui/main_menu.tscn"
-const DEMO_SONG_KEY: String = "fyb_demo_128bpm"
+const DEMO_SONG_KEY: String = ChartCacheRepository.BUILTIN_DEMO_SONG_KEY
 const DEMO_BPM: float = 128.0
 const DEMO_DURATION_SEC: float = 15.0
 const DEMO_SAMPLE_RATE: int = 8000
@@ -27,6 +27,7 @@ var _active_audio_stream: AudioStream = null
 var _active_song_key: String = DEMO_SONG_KEY
 var _active_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 var _active_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
+var _active_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _last_chart_loaded_from_cache: bool = false
 
@@ -66,9 +67,12 @@ func start_demo_session(
 	p_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 ) -> void:
 	_resolve_and_wire_nodes()
-	_active_song_key = DEMO_SONG_KEY
+	_active_song_key = ChartCacheRepository.normalize_song_key(DEMO_SONG_KEY)
 	_active_note_type_mode = p_note_type_mode
 	_last_chart_loaded_from_cache = false
+
+	if lane_field != null:
+		lane_field.set_speed_multiplier(_active_speed_multiplier)
 
 	var demo_chart: ChartData = build_demo_chart(p_note_type_mode)
 	_active_audio_stream = _generate_metronome_stream(
@@ -94,9 +98,12 @@ func start_audio_file_session(
 	if stream == null:
 		return false
 
-	_active_song_key = p_audio_path
+	_active_song_key = ChartCacheRepository.normalize_song_key(p_audio_path)
 	_active_difficulty = p_difficulty
 	_active_note_type_mode = p_note_type_mode
+
+	if lane_field != null:
+		lane_field.set_speed_multiplier(_active_speed_multiplier)
 
 	var cache_key: String = _chart_cache_repo.build_cache_key(
 		p_audio_path,
@@ -167,6 +174,7 @@ func start_chart_session(p_chart: ChartData) -> bool:
 				)
 
 	if lane_field != null:
+		lane_field.set_speed_multiplier(_active_speed_multiplier)
 		if not lane_field.load_chart(p_chart):
 			return false
 	elif hit_judge != null:
@@ -241,15 +249,27 @@ func was_last_chart_from_cache() -> bool:
 	return _last_chart_loaded_from_cache
 
 
+func get_active_speed_multiplier() -> int:
+	return _active_speed_multiplier
+
+
 func _start_from_pending_config(p_cfg: Dictionary) -> void:
 	var is_demo: bool = p_cfg.get("is_demo", false) as bool
 	var difficulty: int = int(p_cfg.get("difficulty", default_difficulty))
 	var note_type_mode: int = int(p_cfg.get("note_type_mode", default_note_type_mode))
+	var speed_multiplier: int = clampi(
+		int(p_cfg.get("speed_multiplier", LaneField.MIN_SPEED_MULTIPLIER)),
+		LaneField.MIN_SPEED_MULTIPLIER,
+		LaneField.MAX_SPEED_MULTIPLIER
+	)
 	var audio_path: String = str(p_cfg.get("audio_path", ""))
 	var title: String = str(p_cfg.get("title", ""))
 
 	_active_difficulty = difficulty
 	_active_note_type_mode = note_type_mode
+	_active_speed_multiplier = speed_multiplier
+	if lane_field != null:
+		lane_field.set_speed_multiplier(_active_speed_multiplier)
 
 	if is_demo or audio_path.is_empty():
 		start_demo_session(note_type_mode)
@@ -258,7 +278,7 @@ func _start_from_pending_config(p_cfg: Dictionary) -> void:
 	var preloaded_chart: ChartData = p_cfg.get("preloaded_chart", null) as ChartData
 	var preloaded_stream: AudioStream = p_cfg.get("preloaded_stream", null) as AudioStream
 	if preloaded_chart != null and preloaded_stream != null:
-		_active_song_key = audio_path
+		_active_song_key = ChartCacheRepository.normalize_song_key(audio_path)
 		_active_audio_stream = preloaded_stream
 		_last_chart_loaded_from_cache = p_cfg.get("from_cache", false) as bool
 		if audio_analyzer != null:
