@@ -131,6 +131,7 @@ func _ready() -> void:
 	_build_theme_styles()
 	_resolve_scene_nodes()
 	_ensure_ui_nodes()
+	_apply_external_fonts()
 	_connect_dependencies()
 	_reload_all_track_lists()
 	_refresh_tab_visuals()
@@ -1050,6 +1051,18 @@ func _build_theme_styles() -> void:
 	_style_play_cta.shadow_size = 10
 
 	_style_floating_play = StyleBoxEmpty.new()
+
+
+func _apply_external_fonts() -> void:
+	var loaded_fonts: Dictionary = SafeHud.load_external_fonts()
+	var ui_font: Font = loaded_fonts.get("ui_font", null) as Font
+	var title_font: Font = loaded_fonts.get("title_font", null) as Font
+
+	SafeHud.apply_root_ui_font(get_tree(), ui_font)
+
+	SafeHud.apply_title_font_styling(_hero_title_label, title_font, 10)
+	SafeHud.apply_title_font_styling(_hero_play_button, title_font, 8)
+	SafeHud.apply_title_font_styling(_browser_header_label, title_font, 7)
 
 
 func _ensure_ui_nodes() -> void:

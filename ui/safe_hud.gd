@@ -50,6 +50,13 @@ const COLOR_JUDGMENT_GREAT: Color = Color(0.35, 1.0, 0.52, 1.0)
 const COLOR_JUDGMENT_GOOD: Color = Color(0.42, 0.78, 1.0, 1.0)
 const COLOR_JUDGMENT_MISS: Color = Color(1.0, 0.34, 0.44, 1.0)
 
+const FONTS_DIR_PATH: String = "res://assets/fonts"
+const TITLE_FONT_STEM: String = "title_font"
+const UI_FONT_STEM: String = "ui_font"
+const SUPPORTED_FONT_EXTENSIONS: PackedStringArray = ["ttf", "otf"]
+const COLOR_TITLE_OUTLINE: Color = Color(0.03, 0.08, 0.16, 0.96)
+const COLOR_TITLE_SHADOW: Color = Color(0.10, 0.86, 1.0, 0.42)
+
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var hit_judge: HitJudge = null
 @export var dsp_clock: DSPClock = null
@@ -143,6 +150,122 @@ static func get_rank_color(p_rank: String) -> Color:
 			return Color(1.0, 0.36, 0.44, 1.0)
 
 
+static func load_external_fonts(p_fonts_dir: String = FONTS_DIR_PATH) -> Dictionary:
+	var base_dir: String = p_fonts_dir.trim_suffix("/")
+	var discovered_paths: Array[String] = []
+	var seen_paths: Dictionary = {}
+
+	var dir: DirAccess = DirAccess.open(base_dir)
+	if dir != null:
+		dir.list_dir_begin()
+		var entry: String = dir.get_next()
+		while not entry.is_empty():
+			if not dir.current_is_dir() and not entry.begins_with("."):
+				var cleaned: String = entry
+				if cleaned.ends_with(".import"):
+					cleaned = cleaned.trim_suffix(".import")
+				elif cleaned.ends_with(".remap"):
+					cleaned = cleaned.trim_suffix(".remap")
+
+				var ext_lower: String = cleaned.get_extension().to_lower()
+				if SUPPORTED_FONT_EXTENSIONS.has(ext_lower):
+					var full_path: String = "%s/%s" % [base_dir, cleaned]
+					if not seen_paths.has(full_path):
+						seen_paths[full_path] = true
+						discovered_paths.append(full_path)
+			entry = dir.get_next()
+		dir.list_dir_end()
+
+	discovered_paths.sort()
+
+	var title_font_path: String = ""
+	var ui_font_path: String = ""
+	var first_other_font_path: String = ""
+	var first_any_font_path: String = ""
+
+	var count: int = discovered_paths.size()
+	for i: int in range(count):
+		var font_path: String = discovered_paths[i]
+		var stem_lower: String = font_path.get_file().get_basename().to_lower()
+		if first_any_font_path.is_empty():
+			first_any_font_path = font_path
+		if stem_lower == TITLE_FONT_STEM and title_font_path.is_empty():
+			title_font_path = font_path
+		elif stem_lower == UI_FONT_STEM and ui_font_path.is_empty():
+			ui_font_path = font_path
+		elif first_other_font_path.is_empty():
+			first_other_font_path = font_path
+
+	if title_font_path.is_empty():
+		title_font_path = _find_direct_font_path(base_dir, TITLE_FONT_STEM)
+	if ui_font_path.is_empty():
+		ui_font_path = _find_direct_font_path(base_dir, UI_FONT_STEM)
+	if ui_font_path.is_empty():
+		ui_font_path = first_other_font_path if not first_other_font_path.is_empty() else first_any_font_path
+
+	var title_font: Font = _load_font_resource(title_font_path) if not title_font_path.is_empty() else null
+	var ui_font: Font = _load_font_resource(ui_font_path) if not ui_font_path.is_empty() else null
+
+	return {
+		"title_font": title_font,
+		"ui_font": ui_font,
+	}
+
+
+static func apply_root_ui_font(p_tree: SceneTree, p_ui_font: Font) -> void:
+	if p_tree == null or p_tree.root == null or p_ui_font == null:
+		return
+	var root_theme: Theme = p_tree.root.theme
+	if root_theme == null:
+		root_theme = Theme.new()
+		p_tree.root.theme = root_theme
+	root_theme.default_font = p_ui_font
+
+
+static func apply_title_font_styling(
+	p_control: Control,
+	p_title_font: Font,
+	p_outline_size: int = 8,
+	p_outline_color: Color = COLOR_TITLE_OUTLINE,
+	p_shadow_color: Color = COLOR_TITLE_SHADOW
+) -> void:
+	if p_control == null:
+		return
+	if p_title_font != null:
+		p_control.add_theme_font_override("font", p_title_font)
+	p_control.add_theme_constant_override("outline_size", p_outline_size)
+	p_control.add_theme_color_override("font_outline_color", p_outline_color)
+	if p_control is Label:
+		p_control.add_theme_color_override("font_shadow_color", p_shadow_color)
+		p_control.add_theme_constant_override("shadow_offset_x", 0)
+		p_control.add_theme_constant_override("shadow_offset_y", 4)
+		p_control.add_theme_constant_override("shadow_outline_size", maxi(2, p_outline_size / 2))
+
+
+static func _find_direct_font_path(p_base_dir: String, p_stem: String) -> String:
+	var ext_count: int = SUPPORTED_FONT_EXTENSIONS.size()
+	for i: int in range(ext_count):
+		var ext: String = SUPPORTED_FONT_EXTENSIONS[i]
+		var candidate: String = "%s/%s.%s" % [p_base_dir, p_stem, ext]
+		if ResourceLoader.exists(candidate) or FileAccess.file_exists(candidate):
+			return candidate
+	return ""
+
+
+static func _load_font_resource(p_path: String) -> Font:
+	if p_path.is_empty():
+		return null
+	if p_path.begins_with("res://") and ResourceLoader.exists(p_path):
+		var res: Resource = ResourceLoader.load(p_path)
+		if res is Font:
+			return res as Font
+	if FileAccess.file_exists(p_path):
+		var dynamic_font: FontFile = FontFile.new()
+		if dynamic_font.load_dynamic_font(p_path) == OK:
+			return dynamic_font
+	return null
+
+
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
@@ -151,6 +274,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ensure_ui_nodes()
+	_apply_external_fonts()
 	connect_dependencies()
 
 	if screen_safe_adapter != null:
@@ -850,6 +974,19 @@ func _ensure_ui_nodes() -> void:
 	ui_sfx_player.bind_buttons_in_tree(_safe_container)
 	_refresh_labels()
 	_apply_banner_visual_transform()
+
+
+func _apply_external_fonts() -> void:
+	var loaded_fonts: Dictionary = load_external_fonts()
+	var ui_font: Font = loaded_fonts.get("ui_font", null) as Font
+	var title_font: Font = loaded_fonts.get("title_font", null) as Font
+
+	apply_root_ui_font(get_tree(), ui_font)
+
+	apply_title_font_styling(_combo_label, title_font, 8)
+	apply_title_font_styling(_judgment_label, title_font, 7)
+	apply_title_font_styling(_countdown_label, title_font, 10)
+	apply_title_font_styling(_results_rank_label, title_font, 12)
 
 
 func _refresh_labels() -> void:
