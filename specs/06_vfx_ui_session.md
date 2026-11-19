@@ -36,11 +36,11 @@ En cumplimiento con `AGENTS.md`:
 - **Herencia:** `class_name SafeHud extends Control`
 - **Señales:** `pause_requested()`, `resume_requested()` y `restart_requested()`.
 - **Propiedades Exportadas:** `screen_safe_adapter: ScreenSafeAdapter`, `hit_judge: HitJudge`, `dsp_clock: DSPClock`, `input_adapter: RhythmInputAdapter` y `reactive_background: ReactiveBackground`.
-- **Tipografía y Controles para Pantallas 1.5K:**
-  - `SCORE`: `34 px` (`SCORE_FONT_SIZE`).
-  - `ACC`: `26 px` (`ACCURACY_FONT_SIZE`).
-  - Botón `PAUSA`: `28 px` de fuente con área táctil amplia de `156x66 px` (`>= 150x64 px`).
-  - `COMBO xN`: `50 px` (`COMBO_FONT_SIZE`) y etiqueta de juicio `PERFECT / GREAT / GOOD / MISS`: `46 px` (`JUDGMENT_FONT_SIZE`) con color saturado específico por grado.
+- **Tipografía y Controles para Pantallas 1.5K (`UiFontRegistry` en `ui/ui_font_registry.gd`):**
+  - `SCORE`: `34 px` (`SCORE_FONT_SIZE`), `ACC`: `26 px` (`ACCURACY_FONT_SIZE`) y botón `PAUSA`: `28 px` (`156x66 px`, `>= 150x64 px`) heredan la tipografía base **`global_font.{ttf,otf}`** del `Theme` raíz (`get_tree().root.theme`).
+  - `COMBO xN` (`50 px`, `COMBO_FONT_SIZE`) y etiqueta de juicio `PERFECT / GREAT / GOOD / MISS` (`46 px`, `JUDGMENT_FONT_SIZE`) usan exclusivamente **`combo_font.{ttf,otf}`** con borde oscuro nítido (`outline_size`) para máxima legibilidad sobre las notas.
+  - La letra de rango gigante (`D..SSS+`, `124 px`) en el overlay de resultados usa exclusivamente **`rank_font.{ttf,otf}`** con borde nítido y sombra sutil.
+  - Si falta cualquiera de los archivos `.ttf`/`.otf` en `res://assets/fonts/`, `UiFontRegistry` mantiene la fuente por defecto de Godot sin emitir errores ni advertencias.
 - **Escala Progresiva Acotada, Rebote al Bombo y Auto-Fade de `1.0 s`:**
   - `COMBO xN` incrementa su escala base progresivamente con cada `+1` de combo desde `1.0x` hasta un **tope máximo estricto de `1.30x`** (`COMBO_MAX_SCALE`), sumando un micro-rebote en cada golpe de bombo (`ReactiveBackground.bass_kick_pulsed`) y un *pop* en `note_judged` y `hold_combo_ticked` sin superar jamás `1.30x`.
   - Su contenedor horizontal está acotado a `COMBO_MAX_WIDTH_RATIO = 0.44` (`<= 44%` del ancho jugable seguro, estrictamente menor que los 2 carriles centrales) con `clip_text = true` y `pivot_offset` centrado para no tapar las notas en caída.

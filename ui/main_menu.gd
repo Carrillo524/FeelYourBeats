@@ -47,6 +47,7 @@ const COLOR_TEXT_GOLD: Color = Color(1.0, 0.88, 0.34, 1.0)
 @export var audio_analyzer: AudioAnalyzer = null
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
+var _font_registry: UiFontRegistry = null
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
 
 var _safe_container: Control = null
@@ -394,6 +395,27 @@ func is_option_button_highlighted(p_button: Button) -> bool:
 	if p_button == null or _style_option_active == null:
 		return false
 	return p_button.get_theme_stylebox("normal") == _style_option_active
+
+
+func get_font_registry() -> UiFontRegistry:
+	return _font_registry
+
+
+func get_role_control_fonts() -> Dictionary:
+	var first_rank_font: Font = null
+	if _songs_list_vbox != null and _songs_list_vbox.get_child_count() > 0:
+		var first_row: Node = _songs_list_vbox.get_child(0)
+		var rank_lbl: Label = first_row.find_child("RowRankBadge", true, false) as Label
+		if rank_lbl != null:
+			first_rank_font = rank_lbl.get_theme_font("font")
+
+	return {
+		"title": _hero_title_label.get_theme_font("font") if _hero_title_label != null else null,
+		"header_title": _browser_header_label.get_theme_font("font") if _browser_header_label != null else null,
+		"hero_play": _hero_play_button.get_theme_font("font") if _hero_play_button != null else null,
+		"tab": _tab_songs_button.get_theme_font("font") if _tab_songs_button != null else null,
+		"rank_badge": first_rank_font,
+	}
 
 
 func get_modal_option_buttons() -> Dictionary:
@@ -865,7 +887,6 @@ func _rebuild_entry_list(
 		var song_key: String = str(entry.get("song_key", ""))
 		var title: String = str(entry.get("title", "Pista"))
 		var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
-		var badge_text: String = str(summary.get("badge_text", "[--]"))
 		var has_record: bool = summary.get("has_record", false) as bool
 		var best_rank: String = str(summary.get("best_rank", ""))
 
@@ -902,16 +923,30 @@ func _rebuild_entry_list(
 		title_lbl.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 		row_hbox.add_child(title_lbl)
 
-		var badge_lbl: Label = Label.new()
-		badge_lbl.name = "RowBadge"
-		badge_lbl.text = badge_text
-		badge_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		badge_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		badge_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
+		var rank_lbl: Label = Label.new()
+		rank_lbl.name = "RowRankBadge"
+		rank_lbl.text = best_rank if has_record else "--"
+		rank_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rank_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		rank_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		rank_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE + 4)
 		var badge_col: Color = SafeHud.get_rank_color(best_rank) if has_record else COLOR_TEXT_INACTIVE
-		badge_lbl.add_theme_color_override("font_color", badge_col)
-		row_hbox.add_child(badge_lbl)
+		rank_lbl.add_theme_color_override("font_color", badge_col)
+		if _font_registry != null:
+			_font_registry.apply_rank_role(rank_lbl, 4)
+		row_hbox.add_child(rank_lbl)
+
+		if has_record:
+			var best_diff: int = int(summary.get("best_difficulty", AutoChartGenerator.Difficulty.NORMAL))
+			var diff_lbl: Label = Label.new()
+			diff_lbl.name = "RowDiffBadge"
+			diff_lbl.text = "· %s" % ChartCacheRepository.difficulty_to_label(best_diff)
+			diff_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			diff_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			diff_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			diff_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE - 2)
+			diff_lbl.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+			row_hbox.add_child(diff_lbl)
 
 		p_container.add_child(row_btn)
 
@@ -1054,15 +1089,12 @@ func _build_theme_styles() -> void:
 
 
 func _apply_external_fonts() -> void:
-	var loaded_fonts: Dictionary = SafeHud.load_external_fonts()
-	var ui_font: Font = loaded_fonts.get("ui_font", null) as Font
-	var title_font: Font = loaded_fonts.get("title_font", null) as Font
-
-	SafeHud.apply_root_ui_font(get_tree(), ui_font)
-
-	SafeHud.apply_title_font_styling(_hero_title_label, title_font, 10)
-	SafeHud.apply_title_font_styling(_hero_play_button, title_font, 8)
-	SafeHud.apply_title_font_styling(_browser_header_label, title_font, 7)
+	if _font_registry == null:
+		_font_registry = UiFontRegistry.new()
+	_font_registry.apply_global_theme(get_tree())
+	_font_registry.apply_title_role(_hero_title_label, 10)
+	_font_registry.apply_title_role(_browser_header_label, 7)
+	_font_registry.apply_global_font_override(_hero_play_button, 6)
 
 
 func _ensure_ui_nodes() -> void:

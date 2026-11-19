@@ -86,3 +86,16 @@ Configurada como `application/run/main_scene="res://ui/main_menu.tscn"` en `proj
     - **Modo de Notas:** `TAP + HOLD` | `SOLO TAP`
     - **Velocidad:** `1x` | `2x` | `3x` | `4x`
   - Botón grande **`JUGAR`** (`84 px` de alto): bloquea la UI (`_play_button.disabled = true` y `_transition_fade_rect.mouse_filter = MOUSE_FILTER_STOP`), detiene `MenuBgmPlayer`, dispara `cassette_insert`, anima el difuminado a negro de `2.5 s` mientras prepara el payload/análisis offline sin interrumpir el SFX y luego cambia a `res://ui/game_session.tscn`.
+
+---
+
+## 5. Registro Centralizado de Tipografías Externas por Rol (`ui/ui_font_registry.gd`)
+
+`UiFontRegistry` (`class_name UiFontRegistry extends RefCounted`) escanea `res://assets/fonts/` de forma insensible a mayúsculas/minúsculas soportando `.ttf` y `.otf` (tolerando ausencia parcial o total sin errores) para asignar 4 roles estrictamente separados:
+
+| Rol | Archivo en `res://assets/fonts/` | Aplicación Exclusiva |
+| :--- | :--- | :--- |
+| **Global** | `global_font.{ttf,otf}` | Fuente base del `Theme` raíz (`get_tree().root.theme`) para pestañas, listas, modal, botones, `SCORE`, `ACC`, `PAUSA` y explícitamente el botón flotante `JUGAR` de la portada (que nunca usa `title_font`). |
+| **Título** | `title_font.{ttf,otf}` | Exclusivamente en `FEEL YOUR BEATS` (portada y encabezado del menú), con borde luminoso (`outline_size` / `font_outline_color`) y sombra sutil. |
+| **Combo y Juicios** | `combo_font.{ttf,otf}` | Exclusivamente en `COMBO xN` y la etiqueta de juicio (`PERFECT`, `GREAT`, `GOOD`, `MISS`) en `SafeHud`, con borde nítido sobre las notas. |
+| **Letras de Rango** | `rank_font.{ttf,otf}` | Exclusivamente en las letras de rango (`D`..`SSS+`), tanto en la letra gigante de `ResultsOverlay` (`SafeHud`) como en las insignias de récord junto a cada canción en `MainMenu`. |
