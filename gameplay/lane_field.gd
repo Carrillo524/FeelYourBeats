@@ -58,6 +58,7 @@ var _speed_multiplier_configured: bool = false
 var _hit_line_y: float = DEFAULT_PLAY_HEIGHT * 0.84
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
 var _current_dsp_time_sec: float = 0.0
+var _visual_time_sec: float = 0.0
 var _next_spawn_index: int = 0
 var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
@@ -90,6 +91,12 @@ func _ready() -> void:
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
 	var needs_redraw: bool = false
+
+	if _chart != null and dsp_clock != null and dsp_clock.is_playing():
+		_visual_time_sec = dsp_clock.get_visual_time_sec()
+		_ensure_pool()
+		_spawn_visible_notes(_visual_time_sec)
+		_update_and_cull_active_views(_visual_time_sec)
 
 	var any_holding: bool = false
 	var lane_count: int = _get_active_lane_count()
@@ -308,6 +315,7 @@ func load_chart(p_chart: ChartData) -> bool:
 	_reset_lane_visual_states()
 	_chart = p_chart
 	_next_spawn_index = 0
+	_visual_time_sec = dsp_clock.get_visual_time_sec() if dsp_clock != null else 0.0
 	queue_redraw()
 	return true
 
@@ -330,14 +338,16 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 		if note != null:
 			view.lane_width = _lane_width
 			view.scroll_speed_px_per_sec = scroll_speed_px_per_sec
+			view.set_speed_multiplier(_speed_multiplier)
 			var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(note)
-			view.update_position(_current_dsp_time_sec, _hit_line_y, is_holding)
+			view.update_position(_visual_time_sec, _hit_line_y, is_holding)
 
 	queue_redraw()
 
 
 func update_field_at_time(p_dsp_time_sec: float) -> void:
 	_current_dsp_time_sec = p_dsp_time_sec
+	_visual_time_sec = p_dsp_time_sec
 
 	if hit_judge != null:
 		hit_judge.update_dsp_time(p_dsp_time_sec)
@@ -346,8 +356,14 @@ func update_field_at_time(p_dsp_time_sec: float) -> void:
 		return
 
 	_ensure_pool()
-	_spawn_visible_notes(p_dsp_time_sec)
-	_update_and_cull_active_views(p_dsp_time_sec)
+	_spawn_visible_notes(_visual_time_sec)
+	_update_and_cull_active_views(_visual_time_sec)
+
+
+func _on_dsp_time_updated(p_dsp_time_sec: float) -> void:
+	_current_dsp_time_sec = p_dsp_time_sec
+	if hit_judge != null:
+		hit_judge.update_dsp_time(p_dsp_time_sec)
 
 
 func set_speed_multiplier(p_multiplier: int) -> void:
@@ -361,8 +377,9 @@ func set_speed_multiplier(p_multiplier: int) -> void:
 		var note: NoteData = view.note_data
 		if note != null:
 			view.scroll_speed_px_per_sec = scroll_speed_px_per_sec
+			view.set_speed_multiplier(_speed_multiplier)
 			var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(note)
-			view.update_position(_current_dsp_time_sec, _hit_line_y, is_holding)
+			view.update_position(_visual_time_sec, _hit_line_y, is_holding)
 
 
 func get_speed_multiplier() -> int:
@@ -418,8 +435,8 @@ func _connect_dependencies() -> void:
 			screen_safe_adapter.safe_play_rect_changed.connect(apply_safe_layout)
 
 	if dsp_clock != null:
-		if not dsp_clock.dsp_time_updated.is_connected(update_field_at_time):
-			dsp_clock.dsp_time_updated.connect(update_field_at_time)
+		if not dsp_clock.dsp_time_updated.is_connected(_on_dsp_time_updated):
+			dsp_clock.dsp_time_updated.connect(_on_dsp_time_updated)
 
 	if input_adapter != null:
 		if not input_adapter.touch_ripple_triggered.is_connected(_on_touch_ripple_triggered):
@@ -663,7 +680,7 @@ func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
 			continue
 
 		var view: NoteView = _acquire_note_view()
-		view.setup(candidate, _lane_width, safe_speed)
+		view.setup(candidate, _lane_width, safe_speed, _speed_multiplier)
 		var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(candidate)
 		view.update_position(p_dsp_time_sec, _hit_line_y, is_holding)
 		_active_views.append(view)

@@ -2,18 +2,26 @@ class_name DSPClock
 extends Node
 
 signal dsp_time_updated(current_time_sec: float)
+signal visual_time_updated(visual_time_sec: float)
 signal beat_pulsed(beat_index: int, beat_time_sec: float)
 signal intensity_changed(block: IntensityBlock)
 signal playback_finished()
 
 const USEC_TO_SEC: float = 0.000001
 const SECONDS_PER_MINUTE: float = 60.0
+const VISUAL_PHASE_LOCK_TOLERANCE_SEC: float = 0.006
+const VISUAL_SOFT_CORRECTION_RATE: float = 8.0
+const VISUAL_HARD_CORRECTION_RATE: float = 20.0
+const VISUAL_SNAP_THRESHOLD_SEC: float = 0.045
+const MAX_VISUAL_FRAME_DELTA_SEC: float = 0.05
 
 @export var audio_player: AudioStreamPlayer = null
 @export var user_offset_sec: float = 0.0
 @export var default_lead_in_sec: float = 2.0
 
 var current_dsp_time_sec: float = 0.0
+var _visual_time_sec: float = 0.0
+var _visual_time_initialized: bool = false
 
 var _chart: ChartData = null
 var _is_running: bool = false
@@ -64,6 +72,8 @@ func start(p_lead_in_sec: float = -1.0) -> void:
 	_is_paused = false
 	_last_tick_usec = Time.get_ticks_usec()
 	current_dsp_time_sec = -effective_lead_in
+	_visual_time_sec = current_dsp_time_sec
+	_visual_time_initialized = true
 
 	var trigger_time_sec: float = _get_pre_trigger_time_sec()
 	if current_dsp_time_sec >= trigger_time_sec:
@@ -90,6 +100,8 @@ func resume() -> void:
 
 	_is_paused = false
 	_last_tick_usec = Time.get_ticks_usec()
+	_visual_time_sec = current_dsp_time_sec
+	_visual_time_initialized = true
 	if not _in_lead_in and audio_player != null and audio_player.stream != null:
 		audio_player.stream_paused = false
 
@@ -99,6 +111,8 @@ func stop() -> void:
 	_is_paused = false
 	_in_lead_in = false
 	current_dsp_time_sec = 0.0
+	_visual_time_sec = 0.0
+	_visual_time_initialized = false
 	_last_emitted_beat_index = -1
 	_current_block_index = 0
 	_active_intensity_block = null
@@ -117,6 +131,8 @@ func seek(p_time_sec: float) -> void:
 	var max_seek_sec: float = maxf(0.0, _chart.duration_sec)
 	var clamped_time_sec: float = clampf(p_time_sec, -default_lead_in_sec, max_seek_sec)
 	current_dsp_time_sec = clamped_time_sec
+	_visual_time_sec = clamped_time_sec
+	_visual_time_initialized = true
 	_last_tick_usec = Time.get_ticks_usec()
 
 	if _chart.bpm_estimate > 0.0 and clamped_time_sec >= 0.0:
@@ -152,11 +168,20 @@ func get_current_dsp_time() -> float:
 	return current_dsp_time_sec
 
 
+func get_visual_time_sec() -> float:
+	return _visual_time_sec
+
+
+func step_visual_clock_for_test(p_delta: float, p_target_dsp_time_sec: float) -> float:
+	_advance_visual_clock(p_delta, p_target_dsp_time_sec)
+	return _visual_time_sec
+
+
 func is_playing() -> bool:
 	return _is_running and not _is_paused
 
 
-func _process(_delta: float) -> void:
+func _process(p_delta: float) -> void:
 	if not _is_running or _is_paused or _chart == null:
 		return
 
@@ -188,9 +213,34 @@ func _process(_delta: float) -> void:
 			_finalize_playback()
 			return
 
+	var visual_dt: float = p_delta if p_delta > 0.0 else elapsed_sec
+	_advance_visual_clock(visual_dt, current_dsp_time_sec)
+
 	dsp_time_updated.emit(current_dsp_time_sec)
+	visual_time_updated.emit(_visual_time_sec)
 	_evaluate_beats()
 	_evaluate_intensity_blocks()
+
+
+func _advance_visual_clock(p_delta: float, p_target_dsp_time_sec: float) -> void:
+	var dt: float = clampf(p_delta, 0.0, MAX_VISUAL_FRAME_DELTA_SEC)
+	if not _visual_time_initialized:
+		_visual_time_sec = p_target_dsp_time_sec
+		_visual_time_initialized = true
+		return
+
+	var predicted_sec: float = _visual_time_sec + dt
+	var phase_error_sec: float = p_target_dsp_time_sec - predicted_sec
+	var abs_error_sec: float = absf(phase_error_sec)
+
+	if abs_error_sec >= VISUAL_SNAP_THRESHOLD_SEC:
+		_visual_time_sec = p_target_dsp_time_sec
+	elif abs_error_sec <= VISUAL_PHASE_LOCK_TOLERANCE_SEC:
+		var soft_alpha: float = clampf(VISUAL_SOFT_CORRECTION_RATE * dt, 0.0, 1.0)
+		_visual_time_sec = lerpf(predicted_sec, p_target_dsp_time_sec, soft_alpha)
+	else:
+		var pull_alpha: float = clampf(VISUAL_HARD_CORRECTION_RATE * dt, 0.0, 1.0)
+		_visual_time_sec = lerpf(predicted_sec, p_target_dsp_time_sec, pull_alpha)
 
 
 func _ensure_audio_player() -> void:
@@ -264,9 +314,11 @@ func _on_audio_player_finished() -> void:
 func _finalize_playback() -> void:
 	if _chart != null and _chart.duration_sec > 0.0:
 		current_dsp_time_sec = maxf(current_dsp_time_sec, _chart.duration_sec)
+	_visual_time_sec = current_dsp_time_sec
 	_evaluate_beats()
 	_evaluate_intensity_blocks()
 	dsp_time_updated.emit(current_dsp_time_sec)
+	visual_time_updated.emit(_visual_time_sec)
 	_is_running = false
 	_is_paused = false
 	_in_lead_in = false

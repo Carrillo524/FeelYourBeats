@@ -76,18 +76,28 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
       $$H_{\text{cola}}(t_{\text{dsp}}) = \max(0.0, (t_{\text{end}} - t_{\text{dsp}}) \cdot v_{\text{scroll}})$$
       de modo que la barra se consume limpiamente sobre `hit_line_y` sin atravesarla hacia abajo.
 
-### 3.2. Contrato Público de `NoteView`
-- `func setup(p_note: NoteData, p_lane_width: float, p_scroll_speed_px_per_sec: float) -> void`
+### 3.2. Estela Superior de Movimiento (*Motion Feather*) para Velocidades Altas (`3x` y `4x`)
+- Cuando `speed_multiplier >= 3` y la nota no está siendo retenida (`not p_is_holding`), `NoteView` muestra dos franjas translúcidas sutiles degradadas por encima de la cabeza (`MotionFeatherInnerRect` y `MotionFeatherOuterRect`) con altura proporcional a `scroll_speed_px_per_sec` para suavizar el contraste de barrido en pantallas de 60/90 Hz.
+- En velocidades `1x` y `2x`, durante retención activa o al reciclar la vista en `reset_for_pool()`, ambas capas se ocultan explícitamente (`visible = false`, `size = Vector2.ZERO`).
+
+### 3.3. Contrato Público de `NoteView`
+- `func setup(p_note: NoteData, p_lane_width: float, p_scroll_speed_px_per_sec: float, p_speed_multiplier: int = 1) -> void`
+- `func set_speed_multiplier(p_multiplier: int) -> void`
 - `func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: bool = false) -> void`
 - `func reset_for_pool() -> void`
 - `func get_tail_height_px() -> float`
+- `func is_motion_feather_visible() -> bool`
 
 ---
 
 ## 4. `LaneField` (`gameplay/lane_field.gd`)
 
-### 4.1. Geometría Responsiva y Cálculo Dinámico de `hit_line_y`
-- En `_ready()`, `LaneField` inicializa el pool de `NoteView`, conecta automáticamente las señales de `dsp_clock` (`dsp_time_updated`), `screen_safe_adapter` (`safe_play_rect_changed`) e `input_adapter` (`lane_input_pressed`, `lane_input_released`) hacia `hit_judge` y `LaneField` (verificando `not signal.is_connected(...)`), y consulta inmediatamente `screen_safe_adapter.get_play_rect()` y `screen_safe_adapter.get_hud_safe_rect()`.
+### 4.1. Geometría Responsiva, Cálculo Dinámico de `hit_line_y` e Interpolación del Reloj Visual en `_process(delta)`
+- En `_ready()`, `LaneField` inicializa el pool de `NoteView`, conecta automáticamente las señales de `dsp_clock` (`dsp_time_updated` → `_on_dsp_time_updated`), `screen_safe_adapter` (`safe_play_rect_changed`) e `input_adapter` (`lane_input_pressed`, `lane_input_released`) hacia `hit_judge` y `LaneField` (verificando `not signal.is_connected(...)`), y consulta inmediatamente `screen_safe_adapter.get_play_rect()` y `screen_safe_adapter.get_hud_safe_rect()`.
+- **Eliminación de Judder / Doble Imagen a Altas Velocidades (`3x` y `4x`):**
+  - `DSPClock` mantiene un reloj visual interpolado por lazo de enganche de fase (`_visual_time_sec: float`, expuesto vía `get_visual_time_sec()` y `visual_time_updated`) que avanza de manera continua con `delta` en cada frame de renderizado (60 / 90 / 120 / 144 Hz) y se corrige suavemente hacia el reloj maestro de `AudioServer` dentro de una banda de tolerancia de `±6 ms` (`VISUAL_PHASE_LOCK_TOLERANCE_SEC = 0.006`), haciendo *snap* instantáneo solo en discontinuidades mayores (`>= 45 ms`, como `seek`/`start`).
+  - **`HitJudge` permanece 100% anclado al reloj maestro DSP (`current_dsp_time_sec`)** recibido en `_on_dsp_time_updated(p_dsp_time_sec)`, sin alterar jamás las ventanas de precisión ni la detección de impactos.
+  - Toda actualización de `NoteView.position.y` en `LaneField` ocurre exclusivamente dentro de `_process(delta)` (nunca en `_physics_process`) leyendo `dsp_clock.get_visual_time_sec()`, evitando el desfase entre los 60 Hz de física y pantallas de 90/120 Hz.
 - Se posiciona sobre `play_rect` y calcula `hit_line_y` sin coordenadas fijas en píxeles:
   $$\text{hit\_line\_y} = \text{clamp}\left(H_{\text{play\_rect}} \cdot r_{\text{hit\_line}}, \; 0.0, \; Y_{\text{hud\_safe\_end}} - \text{bottom\_padding\_px}\right)$$
 
