@@ -90,6 +90,13 @@ Configurada como `application/run/main_scene="res://ui/main_menu.tscn"` en `proj
   1. Bloquea la interacción de la UI, detiene `MenuBgmPlayer` y muestra `"ANALIZANDO PISTA..."` (cediendo `await get_tree().process_frame` para pintar el texto).
   2. Ejecuta primero la búsqueda en caché o análisis/generación del `ChartData` (dejándolo guardado en caché y listo en `GameSession.pending_session_config`).
   3. **Solo después** de tener el chart listo (sin congelamientos de CPU pendientes), dispara simultáneamente `ui_sfx_player.play_cassette_insert()` y el difuminado visual de `2.5 s` (`_transition_fade_rect` de `0.0 -> 1.0`), cambiando a `res://ui/game_session.tscn` al cumplirse los `2.5 s`.
+- **Máquina de Estados del Gesto / Botón Atrás de Android (`NOTIFICATION_WM_GO_BACK_REQUEST` y `ui_cancel`):**
+  - En `_ready()`, `MainMenu` invoca `get_tree().set_auto_accept_quit(false)` para interceptar la navegación atrás del sistema sin cerrar abruptamente la aplicación.
+  - Al recibir `NOTIFICATION_WM_GO_BACK_REQUEST` (o `ui_cancel` en escritorio), `handle_back_request()` evalúa en orden estricto de prioridad:
+    1. **Transición en curso (`_is_launching == true`):** ignora la petición para no interrumpir la carga ni el audio del casete (`2.5 s`).
+    2. **Modal de salida abierto (`_exit_confirm_backdrop.visible`):** cierra el modal de confirmación de salida (equivalente a `CANCELAR`).
+    3. **`FileDialog` de importación o modal flotante de canción visible:** cierra el diálogo/modal activo y devuelve al selector de canciones.
+    4. **Cualquier otra vista (portada o pestañas `CANCIONES`, `IMPORTAR`, `AJUSTES`):** despliega el modal flotante neón translúcido `"¿SALIR DE FEEL YOUR BEATS?"` (`global_font`) con dos botones táctiles grandes (`CANCELAR` con `button_click` para cerrar el modal, y `SALIR` con `button_click`, detención limpia de `MenuBgmPlayer` y `get_tree().quit()`).
 
 ---
 

@@ -74,3 +74,10 @@ La escena principal `res://ui/game_session.tscn` (configurada como `run/main_sce
 ### 4.3. Vista Previa en Escritorio (`window_width_override` / `window_height_override`)
 - En `project.godot` (sección `[display]`), se definen `window/size/window_width_override=450` y `window/size/window_height_override=800`.
 - Esto permite que al ejecutar la escena en Windows (`F5`) la ventana física quepa íntegramente en monitores horizontales conservando la relación 9:16 y el espacio lógico virtual de `1080x1920` escalado mediante `canvas_items` + `keep_width`, sin alterar el despliegue a pantalla completa nativa en dispositivos Android.
+
+### 4.4. Protección del Gesto / Botón Atrás de Android (`NOTIFICATION_WM_GO_BACK_REQUEST` y `ui_cancel`)
+- En `_ready()`, `GameSession` ejecuta `get_tree().set_auto_accept_quit(false)` para evitar cierres abruptos de la aplicación.
+- Al recibir `NOTIFICATION_WM_GO_BACK_REQUEST` (o `ui_cancel` en escritorio), `handle_back_request()` aplica la máquina de estados:
+  1. **Resultados abiertos (`safe_hud.is_results_overlay_open()`):** retorna directamente al selector de canciones del menú principal (`MainMenu.open_directly_to_selector = true` -> `res://ui/main_menu.tscn`).
+  2. **Pausa abierta (`safe_hud.is_pause_menu_open()`):** reanuda la partida mediante `safe_hud.close_pause_menu_and_resume()` (cuenta regresiva 3-2-1).
+  3. **Partida en curso (o cuenta regresiva activa):** abre el menú de **Pausa** (`safe_hud.open_pause_menu()`), equivalente a pulsar `PAUSA`.

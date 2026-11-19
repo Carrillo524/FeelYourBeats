@@ -41,6 +41,9 @@ static func clear_pending_session() -> void:
 
 
 func _ready() -> void:
+	var tree: SceneTree = get_tree()
+	if tree != null:
+		tree.set_auto_accept_quit(false)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_resolve_and_wire_nodes()
@@ -61,6 +64,31 @@ func _ready() -> void:
 			start_demo_session(default_note_type_mode)
 	elif auto_start_demo:
 		start_demo_session(default_note_type_mode)
+
+
+func _notification(p_what: int) -> void:
+	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		handle_back_request()
+
+
+func _unhandled_input(p_event: InputEvent) -> void:
+	if p_event != null and p_event.is_action_pressed(&"ui_cancel"):
+		var vp: Viewport = get_viewport()
+		if vp != null:
+			vp.set_input_as_handled()
+		handle_back_request()
+
+
+func handle_back_request() -> void:
+	if safe_hud == null:
+		return
+	if safe_hud.is_results_overlay_open():
+		_on_main_menu_requested()
+		return
+	if safe_hud.is_pause_menu_open():
+		safe_hud.close_pause_menu_and_resume()
+		return
+	safe_hud.open_pause_menu()
 
 
 func start_demo_session(

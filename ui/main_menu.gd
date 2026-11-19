@@ -121,6 +121,14 @@ var _speed_4x_button: Button = null
 var _status_label: Label = null
 var _play_button: Button = null
 
+# Floating Exit Confirmation Modal
+var _exit_confirm_backdrop: ColorRect = null
+var _exit_confirm_panel: Panel = null
+var _exit_confirm_vbox: VBoxContainer = null
+var _exit_confirm_title_label: Label = null
+var _exit_confirm_cancel_button: Button = null
+var _exit_confirm_quit_button: Button = null
+
 var _file_dialog: FileDialog = null
 var _transition_fade_rect: ColorRect = null
 var _transition_tween: Tween = null
@@ -134,6 +142,7 @@ var _style_song_row_last_normal: StyleBoxFlat = null
 var _style_song_row_last_hover: StyleBoxFlat = null
 var _style_modal_panel: StyleBoxFlat = null
 var _style_play_cta: StyleBoxFlat = null
+var _style_exit_danger: StyleBoxFlat = null
 var _style_floating_play: StyleBoxEmpty = null
 
 var _song_entries: Array[Dictionary] = []
@@ -158,6 +167,9 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	var tree: SceneTree = get_tree()
+	if tree != null:
+		tree.set_auto_accept_quit(false)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_theme_styles()
@@ -230,6 +242,34 @@ func _exit_tree() -> void:
 		_transition_tween = null
 
 
+func _notification(p_what: int) -> void:
+	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		handle_back_request()
+
+
+func _unhandled_input(p_event: InputEvent) -> void:
+	if p_event != null and p_event.is_action_pressed(&"ui_cancel"):
+		var vp: Viewport = get_viewport()
+		if vp != null:
+			vp.set_input_as_handled()
+		handle_back_request()
+
+
+func handle_back_request() -> void:
+	if _is_launching:
+		return
+	if is_exit_confirm_modal_open():
+		close_exit_confirm_modal()
+		return
+	if _file_dialog != null and _file_dialog.visible:
+		_file_dialog.hide()
+		return
+	if is_song_modal_open():
+		close_song_setup_modal()
+		return
+	open_exit_confirm_modal()
+
+
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_ensure_ui_nodes()
 	_safe_container.position = p_hud_safe_rect.position
@@ -286,12 +326,26 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_modal_vbox.position = Vector2(26.0, 24.0)
 	_modal_vbox.size = Vector2(maxf(240.0, modal_w - 52.0), maxf(400.0, modal_h - 48.0))
 
+	if _exit_confirm_backdrop != null:
+		_exit_confirm_backdrop.position = Vector2.ZERO
+		_exit_confirm_backdrop.size = Vector2(safe_w, safe_h)
+
+	if _exit_confirm_panel != null and _exit_confirm_vbox != null:
+		var exit_w: float = minf(840.0, safe_w - 48.0)
+		var exit_h: float = minf(420.0, safe_h - 96.0)
+		_exit_confirm_panel.size = Vector2(exit_w, exit_h)
+		_exit_confirm_panel.position = Vector2((safe_w - exit_w) * 0.5, (safe_h - exit_h) * 0.5)
+		_exit_confirm_vbox.position = Vector2(32.0, 32.0)
+		_exit_confirm_vbox.size = Vector2(maxf(220.0, exit_w - 64.0), maxf(240.0, exit_h - 64.0))
+
 
 func show_title_screen() -> void:
 	_ensure_ui_nodes()
 	_title_screen_container.visible = true
 	_browser_screen_container.visible = false
 	_song_modal_backdrop.visible = false
+	if _exit_confirm_backdrop != null:
+		_exit_confirm_backdrop.visible = false
 
 
 func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
@@ -299,6 +353,8 @@ func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 	_title_screen_container.visible = false
 	_browser_screen_container.visible = true
 	_song_modal_backdrop.visible = false
+	if _exit_confirm_backdrop != null:
+		_exit_confirm_backdrop.visible = false
 	select_tab(p_tab)
 
 
@@ -325,6 +381,23 @@ func is_browser_screen_visible() -> bool:
 
 func is_song_modal_open() -> bool:
 	return _song_modal_backdrop != null and _song_modal_backdrop.visible
+
+
+func is_exit_confirm_modal_open() -> bool:
+	return _exit_confirm_backdrop != null and _exit_confirm_backdrop.visible
+
+
+func open_exit_confirm_modal() -> void:
+	_ensure_ui_nodes()
+	if _is_launching:
+		return
+	if _exit_confirm_backdrop != null:
+		_exit_confirm_backdrop.visible = true
+
+
+func close_exit_confirm_modal() -> void:
+	if _exit_confirm_backdrop != null:
+		_exit_confirm_backdrop.visible = false
 
 
 func open_song_setup_modal(p_entry: Dictionary) -> void:
@@ -770,6 +843,35 @@ func _on_modal_backdrop_gui_input(p_event: InputEvent) -> void:
 				close_song_setup_modal()
 
 
+func _on_exit_confirm_backdrop_gui_input(p_event: InputEvent) -> void:
+	if p_event is InputEventMouseButton:
+		var mb: InputEventMouseButton = p_event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if _exit_confirm_panel != null and not _exit_confirm_panel.get_rect().has_point(mb.position):
+				close_exit_confirm_modal()
+	elif p_event is InputEventScreenTouch:
+		var st: InputEventScreenTouch = p_event as InputEventScreenTouch
+		if st.pressed:
+			if _exit_confirm_panel != null and not _exit_confirm_panel.get_rect().has_point(st.position):
+				close_exit_confirm_modal()
+
+
+func _on_exit_confirm_cancel_pressed() -> void:
+	close_exit_confirm_modal()
+
+
+func _on_exit_confirm_quit_pressed() -> void:
+	if ui_sfx_player != null:
+		ui_sfx_player.play_button_click()
+	if menu_bgm_player != null:
+		menu_bgm_player.stop_bgm()
+	if audio_analyzer != null:
+		audio_analyzer.set_live_monitoring(false)
+	var tree: SceneTree = get_tree()
+	if tree != null:
+		tree.quit()
+
+
 func _on_safe_play_rect_changed(_p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	apply_hud_safe_rect(p_hud_safe_rect)
 
@@ -836,6 +938,8 @@ func _connect_dependencies() -> void:
 		var excluded: Array[BaseButton] = []
 		if _play_button != null:
 			excluded.append(_play_button)
+		if _exit_confirm_quit_button != null:
+			excluded.append(_exit_confirm_quit_button)
 		ui_sfx_player.bind_buttons_in_tree(_safe_container, excluded)
 
 
@@ -1417,6 +1521,14 @@ func _build_theme_styles() -> void:
 	_style_play_cta.shadow_color = Color(0.22, 1.0, 0.88, 0.40)
 	_style_play_cta.shadow_size = 10
 
+	_style_exit_danger = StyleBoxFlat.new()
+	_style_exit_danger.bg_color = Color(0.56, 0.12, 0.22, 0.94)
+	_style_exit_danger.border_color = Color(1.0, 0.42, 0.56, 0.96)
+	_style_exit_danger.set_border_width_all(3)
+	_style_exit_danger.set_corner_radius_all(14)
+	_style_exit_danger.shadow_color = Color(1.0, 0.25, 0.45, 0.35)
+	_style_exit_danger.shadow_size = 8
+
 	_style_floating_play = StyleBoxEmpty.new()
 
 
@@ -1427,6 +1539,9 @@ func _apply_external_fonts() -> void:
 	_font_registry.apply_title_role(_hero_title_label, 10)
 	_font_registry.apply_title_role(_browser_header_label, 7)
 	_font_registry.apply_global_font_override(_hero_play_button, 6)
+	_font_registry.apply_global_font_override(_exit_confirm_title_label, 3)
+	_font_registry.apply_global_font_override(_exit_confirm_cancel_button, 2)
+	_font_registry.apply_global_font_override(_exit_confirm_quit_button, 2)
 
 
 func _ensure_ui_nodes() -> void:
@@ -1441,6 +1556,7 @@ func _ensure_ui_nodes() -> void:
 	_build_title_screen_ui()
 	_build_browser_screen_ui()
 	_build_song_setup_modal_ui()
+	_build_exit_confirm_modal_ui()
 
 	_file_dialog = FileDialog.new()
 	_file_dialog.name = "AudioFileDialog"
@@ -1855,6 +1971,65 @@ func _build_song_setup_modal_ui() -> void:
 	_apply_stylebox_to_button(_play_button, _style_play_cta)
 	_play_button.pressed.connect(_on_play_button_pressed)
 	_modal_vbox.add_child(_play_button)
+
+
+func _build_exit_confirm_modal_ui() -> void:
+	_exit_confirm_backdrop = ColorRect.new()
+	_exit_confirm_backdrop.name = "ExitConfirmBackdrop"
+	_exit_confirm_backdrop.color = Color(0.01, 0.02, 0.06, 0.84)
+	_exit_confirm_backdrop.visible = false
+	_exit_confirm_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_exit_confirm_backdrop.gui_input.connect(_on_exit_confirm_backdrop_gui_input)
+	_safe_container.add_child(_exit_confirm_backdrop)
+
+	_exit_confirm_panel = Panel.new()
+	_exit_confirm_panel.name = "ExitConfirmPanel"
+	_exit_confirm_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_exit_confirm_panel.add_theme_stylebox_override("panel", _style_modal_panel)
+	_exit_confirm_backdrop.add_child(_exit_confirm_panel)
+
+	_exit_confirm_vbox = VBoxContainer.new()
+	_exit_confirm_vbox.name = "ExitConfirmVBox"
+	_exit_confirm_vbox.add_theme_constant_override("separation", 28)
+	_exit_confirm_panel.add_child(_exit_confirm_vbox)
+
+	_exit_confirm_title_label = Label.new()
+	_exit_confirm_title_label.name = "ExitConfirmTitleLabel"
+	_exit_confirm_title_label.text = "¿SALIR DE FEEL YOUR BEATS?"
+	_exit_confirm_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_exit_confirm_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_exit_confirm_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_exit_confirm_title_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_exit_confirm_title_label.add_theme_font_size_override("font_size", 46)
+	_exit_confirm_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_exit_confirm_vbox.add_child(_exit_confirm_title_label)
+
+	var buttons_row: HBoxContainer = HBoxContainer.new()
+	buttons_row.name = "ExitConfirmButtonsRow"
+	buttons_row.add_theme_constant_override("separation", 20)
+	_exit_confirm_vbox.add_child(buttons_row)
+
+	_exit_confirm_cancel_button = Button.new()
+	_exit_confirm_cancel_button.name = "ExitConfirmCancelButton"
+	_exit_confirm_cancel_button.text = "CANCELAR"
+	_exit_confirm_cancel_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_exit_confirm_cancel_button.custom_minimum_size = Vector2(0.0, 96.0)
+	_exit_confirm_cancel_button.add_theme_font_size_override("font_size", 38)
+	_exit_confirm_cancel_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_exit_confirm_cancel_button, _style_option_active)
+	_exit_confirm_cancel_button.pressed.connect(_on_exit_confirm_cancel_pressed)
+	buttons_row.add_child(_exit_confirm_cancel_button)
+
+	_exit_confirm_quit_button = Button.new()
+	_exit_confirm_quit_button.name = "ExitConfirmQuitButton"
+	_exit_confirm_quit_button.text = "SALIR"
+	_exit_confirm_quit_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_exit_confirm_quit_button.custom_minimum_size = Vector2(0.0, 96.0)
+	_exit_confirm_quit_button.add_theme_font_size_override("font_size", 38)
+	_exit_confirm_quit_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_exit_confirm_quit_button, _style_exit_danger)
+	_exit_confirm_quit_button.pressed.connect(_on_exit_confirm_quit_pressed)
+	buttons_row.add_child(_exit_confirm_quit_button)
 
 
 func _create_tab_button(p_name: String, p_text: String) -> Button:
