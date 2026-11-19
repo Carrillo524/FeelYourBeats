@@ -12,6 +12,12 @@ uniform float mid_energy : hint_range(0.0, 1.0) = 0.0;
 uniform float high_energy : hint_range(0.0, 1.0) = 0.0;
 uniform float zoom_bounce : hint_range(0.0, 0.25) = 0.0;
 uniform vec2 shake_offset = vec2(0.0, 0.0);
+uniform float aspect_ratio : hint_range(0.25, 4.0) = 0.5625;
+uniform float edge_glow_intensity : hint_range(0.0, 1.5) = 0.28;
+uniform float edge_glow_width : hint_range(0.01, 0.45) = 0.11;
+uniform float edge_drop_boost : hint_range(0.0, 1.0) = 0.0;
+uniform vec4 edge_primary_color : source_color = vec4(0.16, 0.88, 1.00, 1.0);
+uniform vec4 edge_drop_color : source_color = vec4(1.00, 0.26, 0.86, 1.0);
 
 void fragment() {
 	float zoom_scale = 1.0 / (1.0 + (zoom_bounce * 0.16));
@@ -71,5 +77,33 @@ void fragment() {
 	float saturation_boost = 1.0 + (0.32 * energy_level) + (0.42 * bass_energy) + (0.22 * drop_active);
 	vec3 saturated_rgb = mix(vec3(luma), raw_rgb, saturation_boost);
 
-	COLOR = vec4(clamp(saturated_rgb, vec3(0.0), vec3(1.0)), 1.0);
+	// Aspect-ratio-corrected perimeter neon blur halo (center remains 100% clean)
+	float dist_x = min(UV.x, 1.0 - UV.x);
+	float dist_y = min(UV.y, 1.0 - UV.y) / max(aspect_ratio, 0.001);
+	float edge_dist = min(dist_x, dist_y);
+	float safe_width = max(edge_glow_width, 0.02);
+
+	float outer_norm = clamp(edge_dist / safe_width, 0.0, 1.0);
+	float outer_blur = pow(1.0 - outer_norm, 2.6) * smoothstep(1.0, 0.0, outer_norm);
+
+	float mid_norm = clamp(edge_dist / (safe_width * 0.48), 0.0, 1.0);
+	float mid_halo = exp(-mid_norm * 3.2) * (1.0 - smoothstep(0.75, 1.0, mid_norm));
+
+	float rim_norm = clamp(edge_dist / (safe_width * 0.14), 0.0, 1.0);
+	float hot_rim = pow(1.0 - rim_norm, 2.2) * (1.0 - smoothstep(0.85, 1.0, rim_norm));
+
+	float perim_wave = sin((UV.x * 10.0 + UV.y * 16.0) - (TIME * (2.6 + edge_drop_boost * 4.2))) * 0.5 + 0.5;
+	float wave_mod = mix(0.92, 1.08, perim_wave * (0.35 + 0.65 * edge_drop_boost));
+
+	vec3 drop_gold = vec3(1.0, 0.80, 0.24);
+	vec3 drop_mix_color = mix(edge_drop_color.rgb, drop_gold, perim_wave * 0.38 * edge_drop_boost);
+	vec3 halo_color = mix(edge_primary_color.rgb, drop_mix_color, clamp(edge_drop_boost * 0.92, 0.0, 1.0));
+	vec3 core_white = mix(halo_color, vec3(1.0, 0.98, 1.0), 0.55 + 0.30 * edge_drop_boost);
+
+	float edge_energy = (outer_blur * 0.58 + mid_halo * 0.52) * edge_glow_intensity * wave_mod;
+	float rim_energy = hot_rim * edge_glow_intensity * (0.45 + 0.55 * edge_drop_boost);
+	vec3 edge_halo_rgb = (halo_color * edge_energy) + (core_white * rim_energy);
+
+	vec3 final_rgb = clamp(saturated_rgb + edge_halo_rgb, vec3(0.0), vec3(1.0));
+	COLOR = vec4(final_rgb, 1.0);
 }

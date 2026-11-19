@@ -1,6 +1,11 @@
 class_name ReactiveBackground
 extends ColorRect
 
+enum BackdropMode {
+	MENU = 0,
+	GAMEPLAY = 1,
+}
+
 signal screen_shake_updated(p_offset: Vector2)
 signal bass_kick_pulsed(p_strength: float)
 
@@ -17,12 +22,25 @@ const AMBIENT_ZOOM_AMPLITUDE: float = 0.018
 const SHAKE_DECAY_SPEED: float = 8.5
 const SHAKE_OSCILLATION_SPEED: float = 42.0
 const MAX_SHAKE_PX: float = 6.5
+const EDGE_GLOW_ATTACK_SPEED: float = 11.0
+const EDGE_GLOW_DECAY_SPEED: float = 4.2
+const EDGE_DROP_ATTACK_SPEED: float = 10.5
+const EDGE_DROP_DECAY_SPEED: float = 2.4
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
 @export var audio_analyzer: AudioAnalyzer = null
+@export var edge_primary_color: Color = Color(0.16, 0.88, 1.0, 1.0)
+@export var edge_drop_color: Color = Color(1.0, 0.26, 0.86, 1.0)
+
+var edge_glow_intensity: float = 0.28
+var edge_glow_width: float = 0.11
+var edge_drop_boost: float = 0.0
 
 var _shader_material: ShaderMaterial = null
+var _backdrop_mode: int = BackdropMode.GAMEPLAY
+var _menu_bgm_active: bool = true
+var _aspect_ratio: float = 1080.0 / 1920.0
 var _beat_pulse: float = 0.0
 var _current_energy: float = 0.2
 var _target_energy: float = 0.2
@@ -127,7 +145,53 @@ func _process(p_delta: float) -> void:
 	_lane_flashes.z = maxf(0.0, _lane_flashes.z - lane_decay)
 	_lane_flashes.w = maxf(0.0, _lane_flashes.w - lane_decay)
 
+	_update_edge_halo(dt)
 	_sync_shader_parameters()
+
+
+func set_backdrop_mode(p_mode: int) -> void:
+	_backdrop_mode = clampi(p_mode, BackdropMode.MENU, BackdropMode.GAMEPLAY)
+	if _backdrop_mode == BackdropMode.MENU:
+		edge_drop_boost = 0.0
+	_sync_shader_parameters()
+
+
+func set_menu_bgm_active(p_active: bool) -> void:
+	_menu_bgm_active = p_active
+	if not _menu_bgm_active and _backdrop_mode == BackdropMode.MENU:
+		_target_bass = 0.0
+		_target_mid = 0.0
+		_target_high = 0.0
+		_beat_pulse = 0.0
+	_sync_shader_parameters()
+
+
+func inject_audio_metrics(
+	p_bass_energy: float,
+	p_mid_energy: float,
+	p_high_energy: float,
+	p_total_energy: float,
+	p_beat_pulsed: bool = false
+) -> void:
+	_on_spectrum_updated(p_bass_energy, p_mid_energy, p_high_energy, p_total_energy)
+	if p_beat_pulsed:
+		_on_beat_pulsed(_beat_pulse_count + 1, 0.0)
+
+
+func get_edge_glow_intensity() -> float:
+	return edge_glow_intensity
+
+
+func get_edge_glow_width() -> float:
+	return edge_glow_width
+
+
+func get_edge_drop_boost() -> float:
+	return edge_drop_boost
+
+
+func get_aspect_ratio() -> float:
+	return _aspect_ratio
 
 
 func reset_shake() -> void:
@@ -268,6 +332,74 @@ func _setup_shader_material() -> void:
 	material = _shader_material
 
 
+func _update_edge_halo(p_delta: float) -> void:
+	var ref_size: Vector2 = size
+	if ref_size.x <= 1.0 or ref_size.y <= 1.0:
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			ref_size = vp_rect.size
+		else:
+			ref_size = Vector2(1080.0, 1920.0)
+	_aspect_ratio = clampf(ref_size.x / maxf(1.0, ref_size.y), 0.25, 4.0)
+
+	var ambient_wave: float = sin(_ambient_phase) * 0.5 + 0.5
+	var target_drop: float = 0.0
+	var target_intensity: float = 0.10
+	var target_width: float = 0.09
+
+	if _backdrop_mode == BackdropMode.MENU:
+		target_drop = 0.0
+		if not _menu_bgm_active:
+			target_intensity = 0.10 + (ambient_wave * 0.018)
+			target_width = 0.085
+		else:
+			target_intensity = clampf(
+				0.28 + (_smoothed_bass * 0.22) + (_beat_pulse * 0.12) + (ambient_wave * 0.03),
+				0.28,
+				0.62
+			)
+			target_width = clampf(
+				0.105 + (_smoothed_bass * 0.035) + (_beat_pulse * 0.018),
+				0.10,
+				0.16
+			)
+	else:
+		var spectral_drop: bool = _smoothed_bass >= 0.68 and _current_energy >= 0.68
+		var tier_drop: bool = _current_tier >= 2
+		if spectral_drop or tier_drop:
+			var tier_bonus: float = 0.28 if tier_drop else 0.0
+			target_drop = clampf(
+				(_smoothed_bass * 0.52) + (_current_energy * 0.34) + (_beat_pulse * 0.30) + tier_bonus - 0.18,
+				0.0,
+				1.0
+			)
+		else:
+			target_drop = 0.0
+
+		var drop_rate: float = EDGE_DROP_ATTACK_SPEED if target_drop > edge_drop_boost else EDGE_DROP_DECAY_SPEED
+		edge_drop_boost = lerpf(edge_drop_boost, target_drop, clampf(drop_rate * p_delta, 0.0, 1.0))
+
+		var base_intensity: float = clampf(
+			0.35 + (_smoothed_bass * 0.16) + (_beat_pulse * 0.09) + (_current_energy * 0.06),
+			0.35,
+			0.60
+		)
+		var drop_intensity: float = clampf(0.88 + (_beat_pulse * 0.08) + (_smoothed_bass * 0.06), 0.85, 1.0)
+		target_intensity = clampf(lerpf(base_intensity, drop_intensity, edge_drop_boost), 0.35, 1.0)
+
+		var base_width: float = clampf(0.11 + (_smoothed_bass * 0.025) + (_beat_pulse * 0.015), 0.10, 0.16)
+		target_width = clampf(lerpf(base_width, 0.23, edge_drop_boost), 0.10, 0.24)
+
+	if _backdrop_mode == BackdropMode.MENU:
+		edge_drop_boost = lerpf(edge_drop_boost, 0.0, clampf(EDGE_DROP_DECAY_SPEED * p_delta, 0.0, 1.0))
+
+	var glow_rate: float = EDGE_GLOW_ATTACK_SPEED if target_intensity > edge_glow_intensity else EDGE_GLOW_DECAY_SPEED
+	edge_glow_intensity = lerpf(edge_glow_intensity, target_intensity, clampf(glow_rate * p_delta, 0.0, 1.0))
+
+	var width_rate: float = EDGE_GLOW_ATTACK_SPEED if target_width > edge_glow_width else EDGE_GLOW_DECAY_SPEED
+	edge_glow_width = lerpf(edge_glow_width, target_width, clampf(width_rate * p_delta, 0.0, 1.0))
+
+
 func _sync_shader_parameters() -> void:
 	if _shader_material == null:
 		return
@@ -281,3 +413,9 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("high_energy", _smoothed_high)
 	_shader_material.set_shader_parameter("zoom_bounce", _zoom_bounce)
 	_shader_material.set_shader_parameter("shake_offset", _shake_offset_uv)
+	_shader_material.set_shader_parameter("aspect_ratio", _aspect_ratio)
+	_shader_material.set_shader_parameter("edge_glow_intensity", edge_glow_intensity)
+	_shader_material.set_shader_parameter("edge_glow_width", edge_glow_width)
+	_shader_material.set_shader_parameter("edge_drop_boost", edge_drop_boost)
+	_shader_material.set_shader_parameter("edge_primary_color", edge_primary_color)
+	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)

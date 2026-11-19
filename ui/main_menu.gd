@@ -941,6 +941,7 @@ func _connect_dependencies() -> void:
 			screen_safe_adapter.safe_play_rect_changed.connect(_on_safe_play_rect_changed)
 
 	if reactive_background != null and audio_analyzer != null:
+		reactive_background.set_backdrop_mode(ReactiveBackground.BackdropMode.MENU)
 		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
@@ -964,15 +965,16 @@ func _connect_dependencies() -> void:
 
 
 func _sync_live_audio_monitoring() -> void:
-	if audio_analyzer == null:
-		return
 	var should_monitor: bool = (
 		not _is_launching
 		and menu_bgm_player != null
 		and menu_bgm_player.is_bgm_enabled
 		and menu_bgm_player.get_track_count() > 0
 	)
-	audio_analyzer.set_live_monitoring(should_monitor)
+	if audio_analyzer != null:
+		audio_analyzer.set_live_monitoring(should_monitor)
+	if reactive_background != null:
+		reactive_background.set_menu_bgm_active(should_monitor)
 
 
 func _reload_all_track_lists() -> void:

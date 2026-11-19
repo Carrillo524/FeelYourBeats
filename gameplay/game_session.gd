@@ -346,6 +346,7 @@ func _resolve_and_wire_nodes() -> void:
 		input_adapter.screen_safe_adapter = screen_safe_adapter
 
 	if reactive_background != null:
+		reactive_background.set_backdrop_mode(ReactiveBackground.BackdropMode.GAMEPLAY)
 		reactive_background.dsp_clock = dsp_clock
 		reactive_background.hit_judge = hit_judge
 		reactive_background.audio_analyzer = audio_analyzer
