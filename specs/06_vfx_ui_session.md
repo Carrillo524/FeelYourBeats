@@ -34,7 +34,7 @@ En cumplimiento con `AGENTS.md`:
 ## 3. HUD Seguro, Tipografía 1.5K, Combo Dinámico Acotado y Flujo de Pausa (`ui/safe_hud.gd`)
 
 - **Herencia:** `class_name SafeHud extends Control`
-- **Señales:** `pause_requested()`, `resume_requested()` y `restart_requested()`.
+- **Señales:** `pause_requested()`, `resume_requested()`, `restart_requested()` y `main_menu_requested()`.
 - **Propiedades Exportadas:** `screen_safe_adapter: ScreenSafeAdapter`, `hit_judge: HitJudge`, `dsp_clock: DSPClock`, `input_adapter: RhythmInputAdapter` y `reactive_background: ReactiveBackground`.
 - **Tipografía y Controles para Pantallas 1.5K (`UiFontRegistry` en `ui/ui_font_registry.gd`):**
   - `SCORE` (`50 px`, `SCORE_FONT_SIZE`), `ACC` (`40 px`, `ACCURACY_FONT_SIZE`) y botón `PAUSA` (`38 px`, `212x82 px`) aplican explícitamente **`global_font.{ttf,otf}`** (`UiFontRegistry.get_global_font()`) además del `Theme` raíz (`get_tree().root.theme`).
@@ -47,7 +47,9 @@ En cumplimiento con `AGENTS.md`:
   - Tras `1.0 s` (`HUD_AUTO_FADE_DELAY_SEC`) sin nuevas notas juzgadas ni retenciones *hold* activas, tanto `COMBO xN` como el texto de juicio se desvanecen suavemente (`modulate.a -> 0.0`).
 - **Inicialización Inmediata en `_ready()`:**
   - Lee `screen_safe_adapter.get_hud_safe_rect()` de inmediato en `_ready()` y se suscribe a `safe_play_rect_changed`.
-- **Flujo de Pausa, Cuenta Regresiva de 3 Segundos y Reinicio:**
+- **Flujo de Pausa, Cuenta Regresiva de 3 Segundos, Reinicio y Resultados:**
+  - `PauseOverlay` contiene **exclusivamente** los 3 botones legítimos: **`REANUDAR`**, **`REINICIAR`** y **`MENÚ PRINCIPAL`** (sin atajo hacia Resultados).
+  - `ResultsOverlay` y el guardado de récords (`save_song_record_if_better`) se disparan únicamente al finalizar naturalmente la reproducción de la pista (`DSPClock.playback_finished` -> `GameSession._on_playback_finished`). Si el total de notas juzgadas en `HitJudge` es `0` (`get_total_judged() <= 0`), la precisión devuelta es estrictamente `0.0%` (rango `D`), nunca `100.0%` (`SSS+`).
   - `open_pause_menu() -> void`: cancela cualquier cuenta regresiva activa, invoca `input_adapter.reset_input_state()` para liberar cualquier dedo o tecla retenida, llama a `dsp_clock.pause()`, muestra `PauseOverlay` y emite `pause_requested`.
   - `close_pause_menu_and_resume() -> void`: oculta `PauseOverlay`, deshabilita `PauseButton` durante el conteo y muestra `CountdownLabel` centrado dentro de `SafeAreaContainer` (`font_size = 110`, `mouse_filter = Control.MOUSE_FILTER_IGNORE`, `pivot_offset` centrado). Anima secuencialmente los pasos `3`, `2`, `1` durante `1.0 s` cada uno mediante un `Tween` de escala (`1.35 -> 1.0`) y opacidad manteniendo `DSPClock` en pausa; al concluir el `1`, oculta `CountdownLabel`, rehabilita `PauseButton`, invoca `dsp_clock.resume()` y emite `resume_requested`.
   - `request_restart() -> void` y `_exit_tree() -> void`: cancelan cualquier `Tween` activo de cuenta regresiva (`_cancel_resume_countdown()`), ocultan `CountdownLabel` y `PauseOverlay`, rehabilitan `PauseButton`, limpian `input_adapter.reset_input_state()` y (en el caso de `request_restart()`) emiten `restart_requested`.

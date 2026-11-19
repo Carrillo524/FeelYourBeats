@@ -35,7 +35,7 @@ const WEIGHT_MISS: float = 0.0
 var score: int = 0
 var combo: int = 0
 var max_combo: int = 0
-var accuracy: float = 1.0
+var accuracy: float = 0.0
 var perfect_count: int = 0
 var great_count: int = 0
 var good_count: int = 0
@@ -85,7 +85,7 @@ func reset_state() -> void:
 	score = 0
 	combo = 0
 	max_combo = 0
-	accuracy = 1.0
+	accuracy = 0.0
 	perfect_count = 0
 	great_count = 0
 	good_count = 0
@@ -211,6 +211,16 @@ func get_judgment_breakdown() -> Dictionary:
 	}
 
 
+func get_total_judged() -> int:
+	return _judged_count
+
+
+func get_accuracy_percent() -> float:
+	if _judged_count <= 0:
+		return 0.0
+	return (_accuracy_weight_sum / float(_judged_count)) * 100.0
+
+
 func _expire_missed_notes_in_lane(p_lane: int, p_dsp_time_sec: float) -> void:
 	var queue: Array = _lane_queues[p_lane]
 	var queue_size: int = queue.size()
@@ -265,7 +275,7 @@ func _apply_judgment(p_lane: int, p_grade: int, p_error_ms: float) -> void:
 	if combo > max_combo:
 		max_combo = combo
 
-	accuracy = _accuracy_weight_sum / float(_judged_count)
+	accuracy = (_accuracy_weight_sum / float(_judged_count)) if _judged_count > 0 else 0.0
 	note_judged.emit(p_lane, p_grade, p_error_ms, combo)
 	score_changed.emit(score, combo, max_combo, accuracy)
 

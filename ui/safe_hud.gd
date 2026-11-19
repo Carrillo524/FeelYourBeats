@@ -5,14 +5,13 @@ signal pause_requested()
 signal resume_requested()
 signal restart_requested()
 signal main_menu_requested()
-signal results_requested()
 
 const TOP_BAR_HEIGHT_PX: float = 132.0
 const PAUSE_BUTTON_WIDTH_PX: float = 212.0
 const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
 const CENTER_BANNER_HEIGHT_PX: float = 156.0
 const MODAL_WIDTH_PX: float = 640.0
-const MODAL_HEIGHT_PX: float = 590.0
+const MODAL_HEIGHT_PX: float = 490.0
 const RESULTS_WIDTH_RATIO: float = 0.90
 const RESULTS_HEIGHT_RATIO: float = 0.84
 const RESULTS_BUTTON_MIN_HEIGHT_PX: float = 96.0
@@ -76,7 +75,6 @@ var _pause_vbox: VBoxContainer = null
 var _pause_title_label: Label = null
 var _resume_button: Button = null
 var _restart_button: Button = null
-var _pause_results_button: Button = null
 var _pause_menu_button: Button = null
 
 var _results_overlay: ColorRect = null
@@ -102,7 +100,7 @@ var _countdown_tween: Tween = null
 var _is_counting_down: bool = false
 var _displayed_score: int = 0
 var _displayed_combo: int = 0
-var _displayed_accuracy: float = 1.0
+var _displayed_accuracy: float = 0.0
 var _last_judgment_text: String = "READY"
 var _last_displayed_rank: String = ""
 var _judgment_color: Color = COLOR_JUDGMENT_READY
@@ -282,7 +280,7 @@ func reset_hud_display() -> void:
 	_cancel_resume_countdown()
 	_displayed_score = 0
 	_displayed_combo = 0
-	_displayed_accuracy = 1.0
+	_displayed_accuracy = 0.0
 	_last_judgment_text = "READY"
 	_last_displayed_rank = ""
 	_judgment_color = COLOR_JUDGMENT_READY
@@ -445,12 +443,6 @@ func request_main_menu() -> void:
 	if input_adapter != null:
 		input_adapter.reset_input_state()
 	main_menu_requested.emit()
-
-
-func request_results_from_pause() -> void:
-	_ensure_ui_nodes()
-	_pause_overlay.visible = false
-	results_requested.emit()
 
 
 func is_pause_menu_open() -> bool:
@@ -783,15 +775,6 @@ func _ensure_ui_nodes() -> void:
 	_restart_button.pressed.connect(request_restart)
 	_pause_vbox.add_child(_restart_button)
 
-	_pause_results_button = Button.new()
-	_pause_results_button.name = "PauseResultsButton"
-	_pause_results_button.text = "RESULTADOS"
-	_pause_results_button.custom_minimum_size = Vector2(0.0, 84.0)
-	_pause_results_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_pause_results_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
-	_pause_results_button.pressed.connect(request_results_from_pause)
-	_pause_vbox.add_child(_pause_results_button)
-
 	_pause_menu_button = Button.new()
 	_pause_menu_button.name = "PauseMenuButton"
 	_pause_menu_button.text = "MENÚ PRINCIPAL"
@@ -965,7 +948,6 @@ func _apply_external_fonts() -> void:
 		_font_registry.apply_global_font_override(_pause_title_label, 4)
 		_font_registry.apply_global_font_override(_resume_button)
 		_font_registry.apply_global_font_override(_restart_button)
-		_font_registry.apply_global_font_override(_pause_results_button)
 		_font_registry.apply_global_font_override(_pause_menu_button)
 		_font_registry.apply_global_font_override(_results_title_label, 5)
 		_font_registry.apply_global_font_override(_results_record_label, 4)

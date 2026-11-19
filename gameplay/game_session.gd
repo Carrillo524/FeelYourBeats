@@ -376,8 +376,6 @@ func _resolve_and_wire_nodes() -> void:
 			safe_hud.pause_requested.connect(_on_pause_requested)
 		if not safe_hud.restart_requested.is_connected(_on_restart_requested):
 			safe_hud.restart_requested.connect(_on_restart_requested)
-		if not safe_hud.results_requested.is_connected(_on_results_requested_from_pause):
-			safe_hud.results_requested.connect(_on_results_requested_from_pause)
 		if not safe_hud.main_menu_requested.is_connected(_on_main_menu_requested):
 			safe_hud.main_menu_requested.connect(_on_main_menu_requested)
 		if screen_safe_adapter != null:
@@ -411,14 +409,10 @@ func _on_pause_requested() -> void:
 
 
 func _on_playback_finished() -> void:
-	_present_results(true)
+	_present_results()
 
 
-func _on_results_requested_from_pause() -> void:
-	_present_results(false)
-
-
-func _present_results(p_persist_record: bool) -> void:
+func _present_results() -> void:
 	if reactive_background != null:
 		reactive_background.reset_shake()
 	if lane_field != null:
@@ -427,13 +421,13 @@ func _present_results(p_persist_record: bool) -> void:
 
 	var final_score: int = hit_judge.score if hit_judge != null else 0
 	var final_max_combo: int = hit_judge.max_combo if hit_judge != null else 0
-	var accuracy_percent: float = (hit_judge.accuracy * 100.0) if hit_judge != null else 0.0
+	var accuracy_percent: float = hit_judge.get_accuracy_percent() if hit_judge != null else 0.0
 	var breakdown: Dictionary = hit_judge.get_judgment_breakdown() if hit_judge != null else {}
 	var title: String = _active_chart.title if _active_chart != null else "RESULTADOS"
 	var rank: String = SafeHud.compute_letter_rank(accuracy_percent)
 
 	var is_new_record: bool = false
-	if p_persist_record and not _active_song_key.is_empty():
+	if not _active_song_key.is_empty():
 		is_new_record = _chart_cache_repo.save_song_record_if_better(
 			_active_song_key,
 			_active_difficulty,
