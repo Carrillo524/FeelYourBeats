@@ -4,13 +4,17 @@ extends Control
 signal pause_requested()
 signal resume_requested()
 signal restart_requested()
+signal main_menu_requested()
+signal results_requested()
 
 const TOP_BAR_HEIGHT_PX: float = 96.0
 const PAUSE_BUTTON_WIDTH_PX: float = 156.0
 const PAUSE_BUTTON_HEIGHT_PX: float = 66.0
 const CENTER_BANNER_HEIGHT_PX: float = 148.0
-const MODAL_WIDTH_PX: float = 460.0
-const MODAL_HEIGHT_PX: float = 310.0
+const MODAL_WIDTH_PX: float = 520.0
+const MODAL_HEIGHT_PX: float = 470.0
+const RESULTS_WIDTH_PX: float = 760.0
+const RESULTS_HEIGHT_PX: float = 920.0
 const COUNTDOWN_BOX_WIDTH_PX: float = 260.0
 const COUNTDOWN_BOX_HEIGHT_PX: float = 160.0
 
@@ -21,6 +25,10 @@ const MODAL_BUTTON_FONT_SIZE: int = 28
 const COMBO_FONT_SIZE: int = 50
 const JUDGMENT_FONT_SIZE: int = 46
 const COUNTDOWN_FONT_SIZE: int = 110
+const RESULTS_TITLE_FONT_SIZE: int = 34
+const RESULTS_RANK_FONT_SIZE: int = 124
+const RESULTS_STATS_FONT_SIZE: int = 30
+const RESULTS_BREAKDOWN_FONT_SIZE: int = 26
 
 const COUNTDOWN_STEP_DURATION_SEC: float = 1.0
 const COUNTDOWN_START_SCALE: float = 1.35
@@ -47,6 +55,7 @@ const COLOR_JUDGMENT_MISS: Color = Color(1.0, 0.34, 0.44, 1.0)
 @export var dsp_clock: DSPClock = null
 @export var input_adapter: RhythmInputAdapter = null
 @export var reactive_background: ReactiveBackground = null
+@export var ui_sfx_player: UiSfxPlayer = null
 
 var _safe_container: Control = null
 var _score_label: Label = null
@@ -55,10 +64,24 @@ var _combo_label: Label = null
 var _judgment_label: Label = null
 var _countdown_label: Label = null
 var _pause_button: Button = null
+
 var _pause_overlay: ColorRect = null
 var _pause_panel: Panel = null
+var _pause_title_label: Label = null
 var _resume_button: Button = null
 var _restart_button: Button = null
+var _pause_results_button: Button = null
+var _pause_menu_button: Button = null
+
+var _results_overlay: ColorRect = null
+var _results_panel: Panel = null
+var _results_title_label: Label = null
+var _results_record_label: Label = null
+var _results_rank_label: Label = null
+var _results_stats_label: Label = null
+var _results_breakdown_label: Label = null
+var _results_retry_button: Button = null
+var _results_menu_button: Button = null
 
 var _countdown_tween: Tween = null
 var _is_counting_down: bool = false
@@ -66,6 +89,7 @@ var _displayed_score: int = 0
 var _displayed_combo: int = 0
 var _displayed_accuracy: float = 1.0
 var _last_judgment_text: String = "READY"
+var _last_displayed_rank: String = ""
 var _judgment_color: Color = COLOR_JUDGMENT_READY
 
 var _lane_hold_flags: Array[bool] = [false, false, false, false]
@@ -75,6 +99,48 @@ var _combo_bass_boost: float = 0.0
 var _judgment_pop_boost: float = 0.0
 var _banner_idle_sec: float = 0.0
 var _banner_alpha: float = 1.0
+
+
+static func compute_letter_rank(p_accuracy_percent: float) -> String:
+	if p_accuracy_percent >= 100.0:
+		return "SSS+"
+	if p_accuracy_percent >= 95.0:
+		return "SSS"
+	if p_accuracy_percent >= 90.0:
+		return "SS"
+	if p_accuracy_percent >= 85.0:
+		return "S"
+	if p_accuracy_percent >= 80.0:
+		return "A+"
+	if p_accuracy_percent >= 75.0:
+		return "A"
+	if p_accuracy_percent >= 65.0:
+		return "B"
+	if p_accuracy_percent >= 50.0:
+		return "C"
+	return "D"
+
+
+static func get_rank_color(p_rank: String) -> Color:
+	match p_rank:
+		"SSS+":
+			return Color(0.45, 1.0, 0.98, 1.0)
+		"SSS":
+			return Color(1.0, 0.92, 0.32, 1.0)
+		"SS":
+			return Color(1.0, 0.78, 0.24, 1.0)
+		"S":
+			return Color(1.0, 0.62, 0.26, 1.0)
+		"A+":
+			return Color(0.35, 1.0, 0.60, 1.0)
+		"A":
+			return Color(0.45, 0.95, 0.50, 1.0)
+		"B":
+			return Color(0.40, 0.78, 1.0, 1.0)
+		"C":
+			return Color(0.95, 0.68, 0.36, 1.0)
+		_:
+			return Color(1.0, 0.36, 0.44, 1.0)
 
 
 func _init() -> void:
@@ -176,16 +242,59 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_pause_overlay.size = p_hud_safe_rect.size
 
 	var panel_w: float = minf(MODAL_WIDTH_PX, safe_w - 32.0)
-	var panel_h: float = MODAL_HEIGHT_PX
+	var panel_h: float = minf(MODAL_HEIGHT_PX, safe_h - 64.0)
 	_pause_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
 	_pause_panel.size = Vector2(panel_w, panel_h)
 
 	var btn_w: float = panel_w - 64.0
-	_resume_button.position = Vector2(32.0, 72.0)
+	_pause_title_label.position = Vector2(16.0, 20.0)
+	_pause_title_label.size = Vector2(panel_w - 32.0, 48.0)
+
+	_resume_button.position = Vector2(32.0, 86.0)
 	_resume_button.size = Vector2(btn_w, 68.0)
 
-	_restart_button.position = Vector2(32.0, 164.0)
+	_restart_button.position = Vector2(32.0, 174.0)
 	_restart_button.size = Vector2(btn_w, 68.0)
+
+	_pause_results_button.position = Vector2(32.0, 262.0)
+	_pause_results_button.size = Vector2(btn_w, 68.0)
+
+	_pause_menu_button.position = Vector2(32.0, 350.0)
+	_pause_menu_button.size = Vector2(btn_w, 68.0)
+
+	_results_overlay.position = Vector2.ZERO
+	_results_overlay.size = p_hud_safe_rect.size
+
+	var res_w: float = minf(RESULTS_WIDTH_PX, safe_w - 32.0)
+	var res_h: float = minf(RESULTS_HEIGHT_PX, safe_h - 64.0)
+	_results_panel.position = Vector2((safe_w - res_w) * 0.5, (safe_h - res_h) * 0.5)
+	_results_panel.size = Vector2(res_w, res_h)
+
+	var pad_x: float = 32.0
+	var inner_w: float = maxf(200.0, res_w - (pad_x * 2.0))
+	_results_title_label.position = Vector2(pad_x, 28.0)
+	_results_title_label.size = Vector2(inner_w, 54.0)
+
+	_results_record_label.position = Vector2(pad_x, 82.0)
+	_results_record_label.size = Vector2(inner_w, 40.0)
+
+	_results_rank_label.position = Vector2(pad_x, 128.0)
+	_results_rank_label.size = Vector2(inner_w, 168.0)
+
+	_results_stats_label.position = Vector2(pad_x, 308.0)
+	_results_stats_label.size = Vector2(inner_w, 150.0)
+
+	_results_breakdown_label.position = Vector2(pad_x, 472.0)
+	_results_breakdown_label.size = Vector2(inner_w, 180.0)
+
+	var res_btn_h: float = 72.0
+	var retry_y: float = maxf(664.0, res_h - 178.0)
+	var menu_y: float = maxf(750.0, res_h - 92.0)
+	_results_retry_button.position = Vector2(pad_x, retry_y)
+	_results_retry_button.size = Vector2(inner_w, res_btn_h)
+
+	_results_menu_button.position = Vector2(pad_x, menu_y)
+	_results_menu_button.size = Vector2(inner_w, res_btn_h)
 
 	_apply_banner_visual_transform()
 
@@ -196,6 +305,7 @@ func reset_hud_display() -> void:
 	_displayed_combo = 0
 	_displayed_accuracy = 1.0
 	_last_judgment_text = "READY"
+	_last_displayed_rank = ""
 	_judgment_color = COLOR_JUDGMENT_READY
 	for i: int in range(_lane_hold_flags.size()):
 		_lane_hold_flags[i] = false
@@ -207,12 +317,18 @@ func reset_hud_display() -> void:
 	_banner_alpha = 1.0
 	if _pause_overlay != null:
 		_pause_overlay.visible = false
+	if _results_overlay != null:
+		_results_overlay.visible = false
+	if _pause_button != null:
+		_pause_button.disabled = false
 	_refresh_labels()
 	_apply_banner_visual_transform()
 
 
 func open_pause_menu() -> void:
 	_ensure_ui_nodes()
+	if is_results_overlay_open():
+		return
 	_cancel_resume_countdown()
 	if input_adapter != null:
 		input_adapter.reset_input_state()
@@ -226,6 +342,7 @@ func close_pause_menu_and_resume() -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
 	_pause_overlay.visible = false
+	_results_overlay.visible = false
 	_pause_button.disabled = true
 	_is_counting_down = true
 	_countdown_label.visible = true
@@ -277,17 +394,92 @@ func close_pause_menu_and_resume() -> void:
 	_countdown_tween.tween_callback(_on_resume_countdown_finished)
 
 
+func show_results_overlay(
+	p_title: String,
+	p_score: int,
+	p_accuracy_percent: float,
+	p_max_combo: int,
+	p_breakdown: Dictionary,
+	p_is_new_record: bool = false
+) -> void:
+	_ensure_ui_nodes()
+	_cancel_resume_countdown()
+	if input_adapter != null:
+		input_adapter.reset_input_state()
+	if dsp_clock != null:
+		dsp_clock.pause()
+
+	_pause_overlay.visible = false
+	_pause_button.disabled = true
+
+	var clamped_acc: float = clampf(p_accuracy_percent, 0.0, 100.0)
+	var rank: String = compute_letter_rank(clamped_acc)
+	_last_displayed_rank = rank
+
+	var safe_title: String = p_title if not p_title.is_empty() else "RESULTADOS"
+	_results_title_label.text = safe_title
+	_results_record_label.text = "¡NUEVO RÉCORD!" if p_is_new_record else "RESULTADOS DE PARTIDA"
+	_results_record_label.modulate = Color(1.0, 0.90, 0.30, 1.0) if p_is_new_record else Color(0.76, 0.88, 1.0, 0.90)
+
+	_results_rank_label.text = rank
+	_results_rank_label.modulate = get_rank_color(rank)
+
+	_results_stats_label.text = (
+		"SCORE: %07d\nACCURACY: %.2f%%\nCOMBO MÁX: x%d"
+		% [p_score, clamped_acc, p_max_combo]
+	)
+
+	var perfect_n: int = int(p_breakdown.get("perfect", 0))
+	var great_n: int = int(p_breakdown.get("great", 0))
+	var good_n: int = int(p_breakdown.get("good", 0))
+	var miss_n: int = int(p_breakdown.get("miss", 0))
+	_results_breakdown_label.text = (
+		"PERFECT: %d\nGREAT: %d\nGOOD: %d\nMISS: %d"
+		% [perfect_n, great_n, good_n, miss_n]
+	)
+
+	_results_overlay.visible = true
+
+
+func hide_results_overlay() -> void:
+	if _results_overlay != null:
+		_results_overlay.visible = false
+	if _pause_button != null:
+		_pause_button.disabled = false
+
+
 func request_restart() -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
 	_pause_overlay.visible = false
+	_results_overlay.visible = false
 	if input_adapter != null:
 		input_adapter.reset_input_state()
 	restart_requested.emit()
 
 
+func request_main_menu() -> void:
+	_ensure_ui_nodes()
+	_cancel_resume_countdown()
+	_pause_overlay.visible = false
+	_results_overlay.visible = false
+	if input_adapter != null:
+		input_adapter.reset_input_state()
+	main_menu_requested.emit()
+
+
+func request_results_from_pause() -> void:
+	_ensure_ui_nodes()
+	_pause_overlay.visible = false
+	results_requested.emit()
+
+
 func is_pause_menu_open() -> bool:
 	return _pause_overlay != null and _pause_overlay.visible
+
+
+func is_results_overlay_open() -> bool:
+	return _results_overlay != null and _results_overlay.visible
 
 
 func is_resume_countdown_active() -> bool:
@@ -314,6 +506,10 @@ func get_displayed_accuracy() -> float:
 
 func get_last_judgment_text() -> String:
 	return _last_judgment_text
+
+
+func get_displayed_rank() -> String:
+	return _last_displayed_rank
 
 
 func get_combo_current_scale() -> float:
@@ -364,7 +560,7 @@ func _cancel_resume_countdown() -> void:
 		_countdown_label.visible = false
 		_countdown_label.scale = Vector2.ONE
 		_countdown_label.modulate = Color.WHITE
-	if _pause_button != null:
+	if _pause_button != null and not is_results_overlay_open():
 		_pause_button.disabled = false
 
 
@@ -478,6 +674,11 @@ func _ensure_ui_nodes() -> void:
 	if _safe_container != null:
 		return
 
+	if ui_sfx_player == null:
+		ui_sfx_player = UiSfxPlayer.new()
+		ui_sfx_player.name = "HudUiSfxPlayer"
+		add_child(ui_sfx_player)
+
 	_safe_container = Control.new()
 	_safe_container.name = "SafeAreaContainer"
 	_safe_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -532,7 +733,7 @@ func _ensure_ui_nodes() -> void:
 
 	_pause_overlay = ColorRect.new()
 	_pause_overlay.name = "PauseOverlay"
-	_pause_overlay.color = Color(0.02, 0.02, 0.06, 0.78)
+	_pause_overlay.color = Color(0.02, 0.02, 0.06, 0.82)
 	_pause_overlay.visible = false
 	_pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_safe_container.add_child(_pause_overlay)
@@ -541,6 +742,14 @@ func _ensure_ui_nodes() -> void:
 	_pause_panel.name = "PausePanel"
 	_pause_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_overlay.add_child(_pause_panel)
+
+	_pause_title_label = Label.new()
+	_pause_title_label.name = "PauseTitleLabel"
+	_pause_title_label.text = "PAUSA"
+	_pause_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pause_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_pause_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
+	_pause_panel.add_child(_pause_title_label)
 
 	_resume_button = Button.new()
 	_resume_button.name = "ResumeButton"
@@ -558,6 +767,87 @@ func _ensure_ui_nodes() -> void:
 	_restart_button.pressed.connect(request_restart)
 	_pause_panel.add_child(_restart_button)
 
+	_pause_results_button = Button.new()
+	_pause_results_button.name = "PauseResultsButton"
+	_pause_results_button.text = "RESULTADOS"
+	_pause_results_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_results_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_pause_results_button.pressed.connect(request_results_from_pause)
+	_pause_panel.add_child(_pause_results_button)
+
+	_pause_menu_button = Button.new()
+	_pause_menu_button.name = "PauseMenuButton"
+	_pause_menu_button.text = "MENÚ PRINCIPAL"
+	_pause_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_pause_menu_button.pressed.connect(request_main_menu)
+	_pause_panel.add_child(_pause_menu_button)
+
+	_results_overlay = ColorRect.new()
+	_results_overlay.name = "ResultsOverlay"
+	_results_overlay.color = Color(0.02, 0.03, 0.08, 0.88)
+	_results_overlay.visible = false
+	_results_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_safe_container.add_child(_results_overlay)
+
+	_results_panel = Panel.new()
+	_results_panel.name = "ResultsPanel"
+	_results_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_overlay.add_child(_results_panel)
+
+	_results_title_label = Label.new()
+	_results_title_label.name = "ResultsTitleLabel"
+	_results_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_title_label.clip_text = true
+	_results_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
+	_results_panel.add_child(_results_title_label)
+
+	_results_record_label = Label.new()
+	_results_record_label.name = "ResultsRecordLabel"
+	_results_record_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_record_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_record_label.add_theme_font_size_override("font_size", ACCURACY_FONT_SIZE)
+	_results_panel.add_child(_results_record_label)
+
+	_results_rank_label = Label.new()
+	_results_rank_label.name = "ResultsRankLabel"
+	_results_rank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_rank_label.add_theme_font_size_override("font_size", RESULTS_RANK_FONT_SIZE)
+	_results_panel.add_child(_results_rank_label)
+
+	_results_stats_label = Label.new()
+	_results_stats_label.name = "ResultsStatsLabel"
+	_results_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_stats_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_stats_label.add_theme_font_size_override("font_size", RESULTS_STATS_FONT_SIZE)
+	_results_panel.add_child(_results_stats_label)
+
+	_results_breakdown_label = Label.new()
+	_results_breakdown_label.name = "ResultsBreakdownLabel"
+	_results_breakdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_breakdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_breakdown_label.add_theme_font_size_override("font_size", RESULTS_BREAKDOWN_FONT_SIZE)
+	_results_panel.add_child(_results_breakdown_label)
+
+	_results_retry_button = Button.new()
+	_results_retry_button.name = "ResultsRetryButton"
+	_results_retry_button.text = "REINTENTAR"
+	_results_retry_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_retry_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_results_retry_button.pressed.connect(request_restart)
+	_results_panel.add_child(_results_retry_button)
+
+	_results_menu_button = Button.new()
+	_results_menu_button.name = "ResultsMenuButton"
+	_results_menu_button.text = "MENÚ PRINCIPAL"
+	_results_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_results_menu_button.pressed.connect(request_main_menu)
+	_results_panel.add_child(_results_menu_button)
+
+	ui_sfx_player.bind_buttons_in_tree(_safe_container)
 	_refresh_labels()
 	_apply_banner_visual_transform()
 

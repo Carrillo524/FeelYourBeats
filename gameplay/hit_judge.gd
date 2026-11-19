@@ -36,6 +36,10 @@ var score: int = 0
 var combo: int = 0
 var max_combo: int = 0
 var accuracy: float = 1.0
+var perfect_count: int = 0
+var great_count: int = 0
+var good_count: int = 0
+var miss_count: int = 0
 
 var _chart: ChartData = null
 var _lane_queues: Array[Array] = [[], [], [], []]
@@ -82,6 +86,10 @@ func reset_state() -> void:
 	combo = 0
 	max_combo = 0
 	accuracy = 1.0
+	perfect_count = 0
+	great_count = 0
+	good_count = 0
+	miss_count = 0
 	_judged_count = 0
 	_accuracy_weight_sum = 0.0
 
@@ -194,6 +202,15 @@ func is_lane_holding(p_lane: int) -> bool:
 	return _active_holds[p_lane] != null
 
 
+func get_judgment_breakdown() -> Dictionary:
+	return {
+		"perfect": perfect_count,
+		"great": great_count,
+		"good": good_count,
+		"miss": miss_count,
+	}
+
+
 func _expire_missed_notes_in_lane(p_lane: int, p_dsp_time_sec: float) -> void:
 	var queue: Array = _lane_queues[p_lane]
 	var queue_size: int = queue.size()
@@ -225,18 +242,22 @@ func _apply_judgment(p_lane: int, p_grade: int, p_error_ms: float) -> void:
 	_judged_count += 1
 	match p_grade:
 		JudgmentGrade.PERFECT:
+			perfect_count += 1
 			combo += 1
 			score += SCORE_PERFECT
 			_accuracy_weight_sum += WEIGHT_PERFECT
 		JudgmentGrade.GREAT:
+			great_count += 1
 			combo += 1
 			score += SCORE_GREAT
 			_accuracy_weight_sum += WEIGHT_GREAT
 		JudgmentGrade.GOOD:
+			good_count += 1
 			combo += 1
 			score += SCORE_GOOD
 			_accuracy_weight_sum += WEIGHT_GOOD
 		_:
+			miss_count += 1
 			combo = 0
 			score += SCORE_MISS
 			_accuracy_weight_sum += WEIGHT_MISS
