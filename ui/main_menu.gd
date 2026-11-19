@@ -209,17 +209,30 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_title_screen_container.position = Vector2.ZERO
 	_title_screen_container.size = Vector2(safe_w, safe_h)
 
-	_hero_title_label.size = Vector2(safe_w - 24.0, 260.0)
-	_hero_title_label.position = Vector2(12.0, safe_h * 0.20)
+	var title_w: float = maxf(240.0, safe_w - 24.0)
+	_hero_title_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_hero_title_label.size = Vector2(title_w, 120.0)
+	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var line_count: int = maxi(1, _hero_title_label.get_line_count())
+	var line_h: float = float(maxi(TITLE_HERO_FONT_SIZE, _hero_title_label.get_line_height()))
+	var computed_title_h: float = (float(line_count) * line_h) + 20.0
+	_hero_title_label.size = Vector2(title_w, computed_title_h)
+	_hero_title_label.position = Vector2(12.0, safe_h * 0.22)
 	_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
 
-	_hero_subtitle_label.size = Vector2(safe_w - 48.0, 56.0)
-	_hero_subtitle_label.position = Vector2(24.0, (safe_h * 0.20) + 258.0)
+	_hero_subtitle_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_hero_subtitle_label.size = Vector2(maxf(220.0, safe_w - 48.0), 56.0)
+	_hero_subtitle_label.position = Vector2(
+		24.0,
+		_hero_title_label.position.y + _hero_title_label.size.y + 16.0
+	)
 
 	var hero_btn_w: float = minf(560.0, safe_w - 48.0)
 	var hero_btn_h: float = 128.0
+	_hero_play_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_hero_play_button.size = Vector2(hero_btn_w, hero_btn_h)
-	_hero_play_button.position = Vector2((safe_w - hero_btn_w) * 0.5, safe_h * 0.60)
+	_hero_play_button.position = Vector2((safe_w - hero_btn_w) * 0.5, safe_h * 0.62)
 	_hero_play_button.pivot_offset = _hero_play_button.size * 0.5
 
 	var pad_x: float = 16.0
@@ -1200,7 +1213,7 @@ func _build_title_screen_ui() -> void:
 	_hero_title_label.text = "FEEL YOUR BEATS"
 	_hero_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hero_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_hero_title_label.add_theme_font_size_override("font_size", TITLE_HERO_FONT_SIZE)
 	_hero_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_title_screen_container.add_child(_hero_title_label)
