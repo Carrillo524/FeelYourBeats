@@ -9,6 +9,9 @@ const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 64.0
 const PLAY_BUTTON_HEIGHT_PX: float = 82.0
+const TRANSITION_FADE_DURATION_SEC: float = 2.5
+const TRANSITION_FADE_Z_INDEX: int = 100
+const USEC_TO_SEC: float = 0.000001
 const TITLE_FONT_SIZE: int = 56
 const SUBTITLE_FONT_SIZE: int = 24
 const SECTION_FONT_SIZE: int = 24
@@ -52,6 +55,8 @@ var _bgm_mode_button: Button = null
 var _status_label: Label = null
 var _play_button: Button = null
 var _file_dialog: FileDialog = null
+var _transition_fade_rect: ColorRect = null
+var _transition_tween: Tween = null
 
 var _track_entries: Array[Dictionary] = []
 var _selected_track_index: int = 0
@@ -78,6 +83,12 @@ func _ready() -> void:
 		apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
 	else:
 		apply_hud_safe_rect(Rect2(64.8, 0.0, 950.4, 1920.0))
+
+
+func _exit_tree() -> void:
+	if _transition_tween != null:
+		_transition_tween.kill()
+		_transition_tween = null
 
 
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
@@ -158,6 +169,10 @@ func get_selected_note_type_mode() -> int:
 
 func is_play_button_disabled() -> bool:
 	return _play_button != null and _play_button.disabled
+
+
+func get_transition_fade_rect() -> ColorRect:
+	return _transition_fade_rect
 
 
 func get_status_text() -> String:
@@ -246,11 +261,16 @@ func _on_play_button_pressed() -> void:
 	_is_launching = true
 	if _play_button != null:
 		_play_button.disabled = true
+	if _transition_fade_rect != null:
+		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_STOP
+		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
 	if menu_bgm_player != null:
 		menu_bgm_player.stop_bgm()
 	if audio_analyzer != null:
 		audio_analyzer.set_live_monitoring(false)
+
+	var transition_start_usec: int = Time.get_ticks_usec()
 	if ui_sfx_player != null:
 		ui_sfx_player.play_cassette_insert()
 
@@ -269,12 +289,31 @@ func _on_play_button_pressed() -> void:
 	if _status_label != null:
 		_status_label.text = "Analizando pista..." if needs_analysis_banner else "Iniciando sesión..."
 
+	if _transition_tween != null:
+		_transition_tween.kill()
+		_transition_tween = null
+
+	if _transition_fade_rect != null:
+		_transition_tween = create_tween()
+		_transition_tween.tween_property(
+			_transition_fade_rect,
+			"modulate:a",
+			1.0,
+			TRANSITION_FADE_DURATION_SEC
+		).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
 	var tree: SceneTree = get_tree()
 	if tree != null:
 		await tree.process_frame
 
 	var payload: Dictionary = prepare_session_launch_payload()
 	if payload.has("error"):
+		if _transition_tween != null:
+			_transition_tween.kill()
+			_transition_tween = null
+		if _transition_fade_rect != null:
+			_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
+			_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		if _status_label != null:
 			_status_label.text = str(payload["error"])
 		_is_launching = false
@@ -282,10 +321,18 @@ func _on_play_button_pressed() -> void:
 			_play_button.disabled = false
 		return
 
-	if ui_sfx_player != null and tree != null:
-		var delay_sec: float = ui_sfx_player.get_cassette_transition_delay_sec()
-		if delay_sec > 0.0:
-			await tree.create_timer(delay_sec).timeout
+	if _transition_tween != null and _transition_tween.is_running():
+		await _transition_tween.finished
+	_transition_tween = null
+
+	if tree != null:
+		var elapsed_sec: float = float(Time.get_ticks_usec() - transition_start_usec) * USEC_TO_SEC
+		var remaining_sec: float = TRANSITION_FADE_DURATION_SEC - elapsed_sec
+		if remaining_sec > 0.005:
+			await tree.create_timer(remaining_sec).timeout
+
+	if _transition_fade_rect != null:
+		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
 	GameSession.set_pending_session(payload)
 	if tree != null and ResourceLoader.exists(GAME_SESSION_SCENE_PATH):
@@ -752,6 +799,15 @@ func _ensure_ui_nodes() -> void:
 	_file_dialog.filters = PackedStringArray(["*.mp3, *.ogg, *.wav ; Pistas de Audio"])
 	_file_dialog.file_selected.connect(_on_file_selected)
 	add_child(_file_dialog)
+
+	_transition_fade_rect = ColorRect.new()
+	_transition_fade_rect.name = "TransitionFadeRect"
+	_transition_fade_rect.color = Color(0.0, 0.0, 0.0, 1.0)
+	_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_transition_fade_rect.z_index = TRANSITION_FADE_Z_INDEX
+	_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_transition_fade_rect)
+	_transition_fade_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 
 func _create_option_button(p_name: String, p_text: String) -> Button:

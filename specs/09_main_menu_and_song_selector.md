@@ -36,9 +36,10 @@ Este documento especifica el flujo completo de entrada, selección de pistas rea
   - Se detiene limpiamente (`stop_bgm()`) antes de iniciar `GameSession`.
 
 ### 2.2. `UiSfxPlayer` (`ui/ui_sfx_player.gd`)
-- Carga únicamente archivos externos en `res://assets/sfx/` si existen (`button_click.{ogg,wav,mp3}` y `cassette_insert.{ogg,wav,mp3}`), tolerando ausencia total sin sintetizar tonos ni emitir errores.
+- Carga únicamente archivos externos en `res://assets/sfx/` de forma insensible a mayúsculas/minúsculas (`button_click.{ogg,wav,mp3}` y `cassette_insert.{ogg,wav,mp3}`, aceptando además cualquier variante cuyo nombre base comience por `cassette` como respaldo seguro), tolerando ausencia total sin sintetizar tonos ni emitir errores.
+- Configura explícitamente `_click_player` y `_cassette_player` en el bus `&"Master"` con `volume_db = 0.0`.
 - Conecta automáticamente `play_button_click()` a todos los botones de `MainMenu` y `SafeHud` (`PAUSA`, `REANUDAR`, `REINICIAR`, `RESULTADOS`, `REINTENTAR`, `MENÚ PRINCIPAL`).
-- Reproduce `play_cassette_insert()` exclusivamente al pulsar **JUGAR** durante la transición hacia `GameSession`.
+- Reproduce `play_cassette_insert()` exclusivamente al pulsar **JUGAR** durante la transición de difuminado de `2.5 s` hacia `GameSession`.
 
 ---
 
@@ -82,4 +83,8 @@ Toda la UI interactiva se ancla dentro de `SafeAreaContainer` adaptado a `Screen
 2. **Lista rápida scrollable:** Muestra la demo integrada (`128 BPM`), canciones en `res://assets/songs/` e historial reciente de `user://recent_tracks.cfg`, exhibiendo junto a cada pista su **mejor letra de rango** (`best_rank`) para la dificultad y modo seleccionados.
 3. **Selectores de Dificultad y Modo de Notas:** `FÁCIL / NORMAL / DIFÍCIL` y `TAP + HOLD / SOLO TAP` (respetado también por `GameSession.start_demo_session(p_note_type_mode)`).
 4. **Mini-control de BGM:** Muestra la pista actual, navegación anterior/siguiente (`<`, `>`) y conmutación `AUTO / FIJA`.
-5. **Botón `JUGAR` con blindaje anti doble toque:** Al pulsarse, deshabilita de inmediato `_play_button.disabled = true` (bloqueando dobles disparos en pantallas táctiles), detiene `MenuBgmPlayer`, dispara `cassette_insert`, muestra `"Analizando pista..."` si la pista no está en caché, transfiere la configuración vía `GameSession.set_pending_session(...)` y carga `res://ui/game_session.tscn`.
+5. **Botón `JUGAR` con cortina de difuminado de `2.5 s` y blindaje anti doble toque:** En `_ready()`, `MainMenu` crea por código `_transition_fade_rect: ColorRect` negro full-rect en primer plano (`z_index = 100`, `modulate.a = 0.0`, `mouse_filter = Control.MOUSE_FILTER_IGNORE`). Al pulsar `JUGAR`:
+   - Bloquea inmediatamente la entrada (`_play_button.disabled = true` y `_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_STOP`).
+   - Detiene `MenuBgmPlayer` (`stop_bgm()`) y dispara `ui_sfx_player.play_cassette_insert()`.
+   - Ejecuta un `Tween` suave de difuminado a negro (`modulate.a: 0.0 -> 1.0` durante `2.5 s`, `TRANSITION_FADE_DURATION_SEC`) mientras prepara el payload de sesión (mostrando `"Analizando pista..."` si no está cacheada sin interrumpir el reproductor del casete).
+   - Solo al cumplirse el difuminado y los `2.5 s` completos (garantizando la reproducción íntegra de `cassette_insert`), transfiere la configuración vía `GameSession.set_pending_session(...)` y ejecuta `get_tree().change_scene_to_file("res://ui/game_session.tscn")`.
