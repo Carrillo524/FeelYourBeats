@@ -16,6 +16,8 @@ const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
 const SONG_ROW_HEIGHT_PX: float = 252.0
 const DIVIDER_HEIGHT_PX: float = 2.0
+const ROW_INNER_MARGIN_X: int = 24
+const ROW_TITLE_RANK_GAP_PX: int = 20
 const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
@@ -40,7 +42,7 @@ const MODAL_OPTION_FONT_SIZE: int = 36
 const PRIMARY_BUTTON_FONT_SIZE: int = 42
 const STATUS_FONT_SIZE: int = 32
 const MARQUEE_SPEED_PX_PER_SEC: float = 60.0
-const MARQUEE_GAP_PX: float = 96.0
+const MARQUEE_EDGE_PAD_PX: float = 16.0
 
 static var open_directly_to_selector: bool = false
 
@@ -487,14 +489,15 @@ func get_first_song_marquee_state() -> Dictionary:
 		return {}
 	var item: Dictionary = _songs_marquee_items[0]
 	var clip: Control = item.get("clip", null) as Control
-	var label_a: Label = item.get("label_a", null) as Label
-	var label_b: Label = item.get("label_b", null) as Label
+	var label: Label = item.get("label", null) as Label
 	return {
 		"clip_contents": clip.clip_contents if clip != null else false,
+		"child_count": clip.get_child_count() if clip != null else 0,
 		"offset": float(item.get("offset", 0.0)),
-		"label_a_x": label_a.position.x if label_a != null else 0.0,
-		"label_b_x": label_b.position.x if label_b != null else 0.0,
+		"label_x": label.position.x if label != null else 0.0,
+		"text_width": float(item.get("text_width", 0.0)),
 		"clip_width": clip.size.x if clip != null else 0.0,
+		"clip_left_inset": clip.global_position.x - (clip.get_parent().get_parent().get_parent() as Control).global_position.x if clip != null and clip.get_parent() != null and clip.get_parent().get_parent() != null and clip.get_parent().get_parent().get_parent() is Control else 0.0,
 	}
 
 
@@ -981,9 +984,11 @@ func _rebuild_entry_list(
 	if p_container == null:
 		return
 
+	p_container.add_theme_constant_override("separation", 0)
 	p_marquee_target.clear()
 	var old_children: Array[Node] = p_container.get_children()
 	for i: int in range(old_children.size()):
+		p_container.remove_child(old_children[i])
 		old_children[i].queue_free()
 
 	if p_entries.is_empty():
@@ -1019,24 +1024,29 @@ func _rebuild_entry_list(
 		row_btn.text = ""
 		row_btn.custom_minimum_size = Vector2(0.0, SONG_ROW_HEIGHT_PX)
 		row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		_apply_song_row_style(row_btn)
 		row_btn.pressed.connect(open_song_setup_modal.bind(entry))
 		if ui_sfx_player != null:
 			ui_sfx_player.bind_button(row_btn)
 
 		var row_margin: MarginContainer = MarginContainer.new()
+		row_margin.name = "RowInnerMargin"
 		row_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		row_margin.add_theme_constant_override("margin_left", 24)
-		row_margin.add_theme_constant_override("margin_right", 24)
+		row_margin.add_theme_constant_override("margin_left", ROW_INNER_MARGIN_X)
+		row_margin.add_theme_constant_override("margin_right", ROW_INNER_MARGIN_X)
+		row_margin.add_theme_constant_override("margin_top", 0)
+		row_margin.add_theme_constant_override("margin_bottom", 0)
 		row_btn.add_child(row_margin)
 
 		var row_hbox: HBoxContainer = HBoxContainer.new()
+		row_hbox.name = "RowContentHBox"
 		row_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row_hbox.add_theme_constant_override("separation", 18)
+		row_hbox.add_theme_constant_override("separation", ROW_TITLE_RANK_GAP_PX)
 		row_margin.add_child(row_hbox)
 
-		# Zone 1: Left clipped marquee container (never invades right rank zone)
+		# Zone 1: Left clipped single-pass marquee container (24 px left margin, 20 px gap before rank)
 		var title_clip: Control = Control.new()
 		title_clip.name = "RowTitleClip"
 		title_clip.clip_contents = true
@@ -1045,22 +1055,16 @@ func _rebuild_entry_list(
 		title_clip.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		row_hbox.add_child(title_clip)
 
-		var title_lbl_a: Label = _create_marquee_title_label("RowTitleA", title)
-		var title_lbl_b: Label = _create_marquee_title_label("RowTitleB", title)
-		title_clip.add_child(title_lbl_a)
-		title_clip.add_child(title_lbl_b)
+		var title_lbl: Label = _create_marquee_title_label("RowTitleLabel", title)
+		title_clip.add_child(title_lbl)
 
-		var measured_width: float = _measure_marquee_title_width(title_lbl_a, title)
-		var initial_cycle_w: float = maxf(320.0, measured_width) + MARQUEE_GAP_PX
-		title_lbl_a.position = Vector2(0.0, 0.0)
-		title_lbl_a.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
-		title_lbl_b.position = Vector2(initial_cycle_w, 0.0)
-		title_lbl_b.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
+		var measured_width: float = _measure_marquee_title_width(title_lbl, title)
+		title_lbl.position = Vector2(0.0, 0.0)
+		title_lbl.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
 
 		p_marquee_target.append({
 			"clip": title_clip,
-			"label_a": title_lbl_a,
-			"label_b": title_lbl_b,
+			"label": title_lbl,
 			"text_width": measured_width,
 			"offset": 0.0,
 		})
@@ -1143,28 +1147,26 @@ func _step_marquee_items(p_items: Array[Dictionary], p_delta: float) -> void:
 	for i: int in range(count):
 		var item: Dictionary = p_items[i]
 		var clip: Control = item.get("clip", null) as Control
-		var label_a: Label = item.get("label_a", null) as Label
-		var label_b: Label = item.get("label_b", null) as Label
-		if not is_instance_valid(clip) or not is_instance_valid(label_a) or not is_instance_valid(label_b):
+		var label: Label = item.get("label", null) as Label
+		if not is_instance_valid(clip) or not is_instance_valid(label):
 			continue
 
 		var clip_w: float = maxf(120.0, clip.size.x)
 		var clip_h: float = clip.size.y if clip.size.y > 1.0 else SONG_ROW_HEIGHT_PX
 		var text_w: float = float(item.get("text_width", 240.0))
-		var cycle_w: float = maxf(clip_w, text_w) + MARQUEE_GAP_PX
+		var exit_distance: float = text_w + MARQUEE_EDGE_PAD_PX
+		var cycle_span: float = exit_distance + clip_w
 
 		var next_offset: float = fmod(
 			float(item.get("offset", 0.0)) + (MARQUEE_SPEED_PX_PER_SEC * p_delta),
-			cycle_w
+			cycle_span
 		)
 		item["offset"] = next_offset
 		p_items[i] = item
 
-		var label_w: float = maxf(clip_w, text_w) + 24.0
-		label_a.position = Vector2(-next_offset, 0.0)
-		label_a.size = Vector2(label_w, clip_h)
-		label_b.position = Vector2(cycle_w - next_offset, 0.0)
-		label_b.size = Vector2(label_w, clip_h)
+		var next_x: float = -next_offset if next_offset <= exit_distance else (cycle_span - next_offset)
+		label.position = Vector2(next_x, 0.0)
+		label.size = Vector2(text_w + 24.0, clip_h)
 
 
 func _refresh_tab_visuals() -> void:
@@ -1289,13 +1291,17 @@ func _apply_song_row_style(p_button: Button) -> void:
 		p_button.add_theme_stylebox_override("pressed", _style_song_row_hover)
 
 
-func _create_white_divider(p_name: String, p_margin_x: int = 24) -> MarginContainer:
+func _create_white_divider(p_name: String, p_margin_x: int = ROW_INNER_MARGIN_X) -> MarginContainer:
 	var holder: MarginContainer = MarginContainer.new()
 	holder.name = p_name
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	holder.custom_minimum_size = Vector2(0.0, DIVIDER_HEIGHT_PX)
 	holder.add_theme_constant_override("margin_left", p_margin_x)
 	holder.add_theme_constant_override("margin_right", p_margin_x)
+	holder.add_theme_constant_override("margin_top", 0)
+	holder.add_theme_constant_override("margin_bottom", 0)
 
 	var line: ColorRect = ColorRect.new()
 	line.name = "DividerLine"
@@ -1333,11 +1339,13 @@ func _build_theme_styles() -> void:
 	_style_song_row_normal.bg_color = COLOR_ROW_REST_BG
 	_style_song_row_normal.set_border_width_all(0)
 	_style_song_row_normal.set_corner_radius_all(0)
+	_style_song_row_normal.set_content_margin_all(0.0)
 
 	_style_song_row_hover = StyleBoxFlat.new()
 	_style_song_row_hover.bg_color = COLOR_ROW_HOVER_BG
 	_style_song_row_hover.set_border_width_all(0)
 	_style_song_row_hover.set_corner_radius_all(0)
+	_style_song_row_hover.set_content_margin_all(0.0)
 
 	_style_modal_panel = StyleBoxFlat.new()
 	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
