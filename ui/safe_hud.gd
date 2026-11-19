@@ -13,8 +13,9 @@ const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
 const CENTER_BANNER_HEIGHT_PX: float = 156.0
 const MODAL_WIDTH_PX: float = 640.0
 const MODAL_HEIGHT_PX: float = 590.0
-const RESULTS_WIDTH_PX: float = 880.0
-const RESULTS_HEIGHT_PX: float = 1280.0
+const RESULTS_WIDTH_RATIO: float = 0.90
+const RESULTS_HEIGHT_RATIO: float = 0.84
+const RESULTS_BUTTON_MIN_HEIGHT_PX: float = 96.0
 const COUNTDOWN_BOX_WIDTH_PX: float = 280.0
 const COUNTDOWN_BOX_HEIGHT_PX: float = 180.0
 
@@ -25,12 +26,14 @@ const MODAL_BUTTON_FONT_SIZE: int = 36
 const COMBO_FONT_SIZE: int = 52
 const JUDGMENT_FONT_SIZE: int = 48
 const COUNTDOWN_FONT_SIZE: int = 120
-const RESULTS_TITLE_FONT_SIZE: int = 42
-const RESULTS_RECORD_FONT_SIZE: int = 32
-const RESULTS_RANK_FONT_SIZE: int = 204
-const RESULTS_STATS_FONT_SIZE: int = 44
-const RESULTS_BREAKDOWN_FONT_SIZE: int = 36
-const RESULTS_BUTTON_FONT_SIZE: int = 42
+const RESULTS_TITLE_FONT_SIZE: int = 54
+const RESULTS_RECORD_FONT_SIZE: int = 40
+const RESULTS_RANK_FONT_SIZE: int = 230
+const RESULTS_STATS_FONT_SIZE: int = 56
+const RESULTS_BREAKDOWN_FONT_SIZE: int = 46
+const RESULTS_BUTTON_FONT_SIZE: int = 50
+
+const COLOR_RESULTS_GOOD_AMBER: Color = Color(1.0, 0.78, 0.28, 1.0)
 
 const COUNTDOWN_STEP_DURATION_SEC: float = 1.0
 const COUNTDOWN_START_SCALE: float = 1.35
@@ -83,9 +86,17 @@ var _results_title_label: Label = null
 var _results_record_label: Label = null
 var _results_rank_label: Label = null
 var _results_stats_label: Label = null
-var _results_breakdown_label: Label = null
+var _results_breakdown_grid: GridContainer = null
+var _results_perfect_label: Label = null
+var _results_great_label: Label = null
+var _results_good_label: Label = null
+var _results_miss_label: Label = null
 var _results_retry_button: Button = null
 var _results_menu_button: Button = null
+
+var _style_results_panel: StyleBoxFlat = null
+var _style_results_retry: StyleBoxFlat = null
+var _style_results_menu: StyleBoxFlat = null
 
 var _countdown_tween: Tween = null
 var _is_counting_down: bool = false
@@ -257,12 +268,12 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_results_overlay.position = Vector2.ZERO
 	_results_overlay.size = p_hud_safe_rect.size
 
-	var res_w: float = minf(RESULTS_WIDTH_PX, safe_w - 28.0)
-	var res_h: float = minf(RESULTS_HEIGHT_PX, safe_h - 48.0)
+	var res_w: float = maxf(300.0, safe_w * RESULTS_WIDTH_RATIO)
+	var res_h: float = maxf(460.0, safe_h * RESULTS_HEIGHT_RATIO)
 	_results_panel.position = Vector2((safe_w - res_w) * 0.5, (safe_h - res_h) * 0.5)
 	_results_panel.size = Vector2(res_w, res_h)
-	_results_vbox.position = Vector2(28.0, 24.0)
-	_results_vbox.size = Vector2(maxf(240.0, res_w - 56.0), maxf(400.0, res_h - 48.0))
+	_results_vbox.position = Vector2(30.0, 28.0)
+	_results_vbox.size = Vector2(maxf(240.0, res_w - 60.0), maxf(400.0, res_h - 56.0))
 
 	_apply_banner_visual_transform()
 
@@ -401,10 +412,10 @@ func show_results_overlay(
 	var great_n: int = int(p_breakdown.get("great", 0))
 	var good_n: int = int(p_breakdown.get("good", 0))
 	var miss_n: int = int(p_breakdown.get("miss", 0))
-	_results_breakdown_label.text = (
-		"PERFECT: %d\nGREAT: %d\nGOOD: %d\nMISS: %d"
-		% [perfect_n, great_n, good_n, miss_n]
-	)
+	_results_perfect_label.text = "PERFECT: %d" % perfect_n
+	_results_great_label.text = "GREAT: %d" % great_n
+	_results_good_label.text = "GOOD: %d" % good_n
+	_results_miss_label.text = "MISS: %d" % miss_n
 
 	_results_overlay.visible = true
 
@@ -508,6 +519,21 @@ func get_role_control_fonts() -> Dictionary:
 		"combo": _combo_label.get_theme_font("font") if _combo_label != null else null,
 		"judgment": _judgment_label.get_theme_font("font") if _judgment_label != null else null,
 		"rank": _results_rank_label.get_theme_font("font") if _results_rank_label != null else null,
+	}
+
+
+func get_results_layout_info() -> Dictionary:
+	return {
+		"grid_columns": _results_breakdown_grid.columns if _results_breakdown_grid != null else 0,
+		"title_font_size": _results_title_label.get_theme_font_size("font_size") if _results_title_label != null else 0,
+		"record_font_size": _results_record_label.get_theme_font_size("font_size") if _results_record_label != null else 0,
+		"rank_font_size": _results_rank_label.get_theme_font_size("font_size") if _results_rank_label != null else 0,
+		"stats_font_size": _results_stats_label.get_theme_font_size("font_size") if _results_stats_label != null else 0,
+		"breakdown_font_size": _results_perfect_label.get_theme_font_size("font_size") if _results_perfect_label != null else 0,
+		"button_font_size": _results_retry_button.get_theme_font_size("font_size") if _results_retry_button != null else 0,
+		"retry_min_height": _results_retry_button.custom_minimum_size.y if _results_retry_button != null else 0.0,
+		"menu_min_height": _results_menu_button.custom_minimum_size.y if _results_menu_button != null else 0.0,
+		"panel_size": _results_panel.size if _results_panel != null else Vector2.ZERO,
 	}
 
 
@@ -775,9 +801,11 @@ func _ensure_ui_nodes() -> void:
 	_pause_menu_button.pressed.connect(request_main_menu)
 	_pause_vbox.add_child(_pause_menu_button)
 
+	_build_results_styles()
+
 	_results_overlay = ColorRect.new()
 	_results_overlay.name = "ResultsOverlay"
-	_results_overlay.color = Color(0.02, 0.03, 0.08, 0.90)
+	_results_overlay.color = Color(0.01, 0.02, 0.06, 0.84)
 	_results_overlay.visible = false
 	_results_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_safe_container.add_child(_results_overlay)
@@ -785,6 +813,7 @@ func _ensure_ui_nodes() -> void:
 	_results_panel = Panel.new()
 	_results_panel.name = "ResultsPanel"
 	_results_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_panel.add_theme_stylebox_override("panel", _style_results_panel)
 	_results_overlay.add_child(_results_panel)
 
 	_results_vbox = VBoxContainer.new()
@@ -799,6 +828,7 @@ func _ensure_ui_nodes() -> void:
 	_results_title_label.clip_text = true
 	_results_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_results_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
+	_results_title_label.add_theme_color_override("font_color", Color(0.98, 1.0, 1.0, 1.0))
 	_results_vbox.add_child(_results_title_label)
 
 	_results_record_label = Label.new()
@@ -812,7 +842,8 @@ func _ensure_ui_nodes() -> void:
 	_results_rank_label.name = "ResultsRankLabel"
 	_results_rank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_results_rank_label.custom_minimum_size = Vector2(0.0, 224.0)
+	_results_rank_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_rank_label.custom_minimum_size = Vector2(0.0, 240.0)
 	_results_rank_label.add_theme_font_size_override("font_size", RESULTS_RANK_FONT_SIZE)
 	_results_vbox.add_child(_results_rank_label)
 
@@ -820,42 +851,105 @@ func _ensure_ui_nodes() -> void:
 	_results_stats_label.name = "ResultsStatsLabel"
 	_results_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_stats_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_stats_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_stats_label.add_theme_constant_override("line_spacing", 14)
 	_results_stats_label.add_theme_font_size_override("font_size", RESULTS_STATS_FONT_SIZE)
+	_results_stats_label.add_theme_color_override("font_color", Color(0.96, 0.99, 1.0, 1.0))
 	_results_vbox.add_child(_results_stats_label)
 
-	_results_breakdown_label = Label.new()
-	_results_breakdown_label.name = "ResultsBreakdownLabel"
-	_results_breakdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_results_breakdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_results_breakdown_label.add_theme_font_size_override("font_size", RESULTS_BREAKDOWN_FONT_SIZE)
-	_results_vbox.add_child(_results_breakdown_label)
+	_results_breakdown_grid = GridContainer.new()
+	_results_breakdown_grid.name = "ResultsBreakdownGrid"
+	_results_breakdown_grid.columns = 2
+	_results_breakdown_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_results_breakdown_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_breakdown_grid.add_theme_constant_override("h_separation", 20)
+	_results_breakdown_grid.add_theme_constant_override("v_separation", 18)
+	_results_vbox.add_child(_results_breakdown_grid)
 
-	var results_spacer: Control = Control.new()
-	results_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	results_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_results_vbox.add_child(results_spacer)
+	_results_perfect_label = _create_results_breakdown_cell("ResultsPerfectLabel", COLOR_JUDGMENT_PERFECT)
+	_results_breakdown_grid.add_child(_results_perfect_label)
+
+	_results_great_label = _create_results_breakdown_cell("ResultsGreatLabel", COLOR_JUDGMENT_GREAT)
+	_results_breakdown_grid.add_child(_results_great_label)
+
+	_results_good_label = _create_results_breakdown_cell("ResultsGoodLabel", COLOR_RESULTS_GOOD_AMBER)
+	_results_breakdown_grid.add_child(_results_good_label)
+
+	_results_miss_label = _create_results_breakdown_cell("ResultsMissLabel", COLOR_JUDGMENT_MISS)
+	_results_breakdown_grid.add_child(_results_miss_label)
 
 	_results_retry_button = Button.new()
 	_results_retry_button.name = "ResultsRetryButton"
 	_results_retry_button.text = "REINTENTAR"
-	_results_retry_button.custom_minimum_size = Vector2(0.0, 88.0)
+	_results_retry_button.custom_minimum_size = Vector2(0.0, RESULTS_BUTTON_MIN_HEIGHT_PX)
 	_results_retry_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_results_retry_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
+	_results_retry_button.add_theme_color_override("font_color", Color(0.98, 1.0, 1.0, 1.0))
+	_apply_results_button_style(_results_retry_button, _style_results_retry)
 	_results_retry_button.pressed.connect(request_restart)
 	_results_vbox.add_child(_results_retry_button)
 
 	_results_menu_button = Button.new()
 	_results_menu_button.name = "ResultsMenuButton"
 	_results_menu_button.text = "MENÚ PRINCIPAL"
-	_results_menu_button.custom_minimum_size = Vector2(0.0, 88.0)
+	_results_menu_button.custom_minimum_size = Vector2(0.0, RESULTS_BUTTON_MIN_HEIGHT_PX)
 	_results_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_results_menu_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
+	_results_menu_button.add_theme_color_override("font_color", Color(0.96, 0.99, 1.0, 1.0))
+	_apply_results_button_style(_results_menu_button, _style_results_menu)
 	_results_menu_button.pressed.connect(request_main_menu)
 	_results_vbox.add_child(_results_menu_button)
 
 	ui_sfx_player.bind_buttons_in_tree(_safe_container)
 	_refresh_labels()
 	_apply_banner_visual_transform()
+
+
+func _build_results_styles() -> void:
+	_style_results_panel = StyleBoxFlat.new()
+	_style_results_panel.bg_color = Color(0.03, 0.08, 0.16, 0.84)
+	_style_results_panel.border_color = Color(0.18, 0.90, 1.0, 0.85)
+	_style_results_panel.set_border_width_all(3)
+	_style_results_panel.set_corner_radius_all(22)
+	_style_results_panel.shadow_color = Color(0.12, 0.85, 1.0, 0.30)
+	_style_results_panel.shadow_size = 18
+
+	_style_results_retry = StyleBoxFlat.new()
+	_style_results_retry.bg_color = Color(0.08, 0.56, 0.58, 0.94)
+	_style_results_retry.border_color = Color(0.45, 1.0, 0.96, 1.0)
+	_style_results_retry.set_border_width_all(3)
+	_style_results_retry.set_corner_radius_all(16)
+	_style_results_retry.shadow_color = Color(0.20, 0.95, 0.90, 0.35)
+	_style_results_retry.shadow_size = 10
+
+	_style_results_menu = StyleBoxFlat.new()
+	_style_results_menu.bg_color = Color(0.05, 0.14, 0.26, 0.88)
+	_style_results_menu.border_color = Color(0.22, 0.86, 1.0, 0.85)
+	_style_results_menu.set_border_width_all(3)
+	_style_results_menu.set_corner_radius_all(16)
+	_style_results_menu.shadow_color = Color(0.15, 0.80, 1.0, 0.24)
+	_style_results_menu.shadow_size = 8
+
+
+func _apply_results_button_style(p_button: Button, p_style: StyleBoxFlat) -> void:
+	if p_button == null or p_style == null:
+		return
+	p_button.add_theme_stylebox_override("normal", p_style)
+	p_button.add_theme_stylebox_override("hover", p_style)
+	p_button.add_theme_stylebox_override("pressed", p_style)
+	p_button.add_theme_stylebox_override("focus", p_style)
+
+
+func _create_results_breakdown_cell(p_name: String, p_color: Color) -> Label:
+	var cell: Label = Label.new()
+	cell.name = p_name
+	cell.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cell.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cell.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cell.add_theme_font_size_override("font_size", RESULTS_BREAKDOWN_FONT_SIZE)
+	cell.add_theme_color_override("font_color", p_color)
+	return cell
 
 
 func _apply_external_fonts() -> void:
@@ -873,16 +967,19 @@ func _apply_external_fonts() -> void:
 		_font_registry.apply_global_font_override(_restart_button)
 		_font_registry.apply_global_font_override(_pause_results_button)
 		_font_registry.apply_global_font_override(_pause_menu_button)
-		_font_registry.apply_global_font_override(_results_title_label, 4)
-		_font_registry.apply_global_font_override(_results_record_label, 3)
-		_font_registry.apply_global_font_override(_results_stats_label, 4)
-		_font_registry.apply_global_font_override(_results_breakdown_label, 3)
-		_font_registry.apply_global_font_override(_results_retry_button)
-		_font_registry.apply_global_font_override(_results_menu_button)
+		_font_registry.apply_global_font_override(_results_title_label, 5)
+		_font_registry.apply_global_font_override(_results_record_label, 4)
+		_font_registry.apply_global_font_override(_results_stats_label, 5)
+		_font_registry.apply_global_font_override(_results_perfect_label, 4)
+		_font_registry.apply_global_font_override(_results_great_label, 4)
+		_font_registry.apply_global_font_override(_results_good_label, 4)
+		_font_registry.apply_global_font_override(_results_miss_label, 4)
+		_font_registry.apply_global_font_override(_results_retry_button, 4)
+		_font_registry.apply_global_font_override(_results_menu_button, 4)
 
 	_font_registry.apply_combo_role(_combo_label, 8)
 	_font_registry.apply_combo_role(_judgment_label, 7)
-	_font_registry.apply_rank_role(_results_rank_label, 14)
+	_font_registry.apply_rank_role(_results_rank_label, 16)
 	_font_registry.apply_global_font_override(_countdown_label, 8)
 
 

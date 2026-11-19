@@ -14,7 +14,7 @@ const MAX_RECENT_TRACKS: int = 16
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
-const SONG_ROW_HEIGHT_PX: float = 134.0
+const SONG_ROW_HEIGHT_PX: float = 145.0
 const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
