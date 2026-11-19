@@ -30,11 +30,16 @@ const SECTION_FONT_SIZE: int = 34
 const SETTINGS_LABEL_FONT_SIZE: int = 36
 const SONG_ROW_FONT_SIZE: int = 38
 const SONG_BADGE_FONT_SIZE: int = 36
+const SONG_RANK_FONT_SIZE: int = 58
+const SONG_DIFF_FONT_SIZE: int = 30
 const MODAL_TITLE_FONT_SIZE: int = 42
 const MODAL_RECORD_FONT_SIZE: int = 30
+const MODAL_RANK_FONT_SIZE: int = 46
 const MODAL_OPTION_FONT_SIZE: int = 36
 const PRIMARY_BUTTON_FONT_SIZE: int = 42
 const STATUS_FONT_SIZE: int = 32
+const MARQUEE_SPEED_PX_PER_SEC: float = 60.0
+const MARQUEE_GAP_PX: float = 96.0
 
 static var open_directly_to_selector: bool = false
 
@@ -88,7 +93,10 @@ var _song_modal_panel: Panel = null
 var _modal_vbox: VBoxContainer = null
 var _modal_song_title_label: Label = null
 var _modal_close_button: Button = null
+var _modal_record_row: HBoxContainer = null
 var _modal_record_label: Label = null
+var _modal_record_rank_label: Label = null
+var _modal_record_detail_label: Label = null
 var _diff_easy_button: Button = null
 var _diff_normal_button: Button = null
 var _diff_hard_button: Button = null
@@ -114,6 +122,8 @@ var _style_floating_play: StyleBoxEmpty = null
 
 var _song_entries: Array[Dictionary] = []
 var _imported_entries: Array[Dictionary] = []
+var _songs_marquee_items: Array[Dictionary] = []
+var _imported_marquee_items: Array[Dictionary] = []
 var _selected_entry: Dictionary = {}
 var _active_tab: int = MenuTab.SONGS
 var _selected_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
@@ -190,6 +200,12 @@ func _process(p_delta: float) -> void:
 				1.0,
 				lerpf(0.84, 1.0, glow_mix)
 			)
+
+	if _browser_screen_container != null and _browser_screen_container.visible:
+		if _active_tab == MenuTab.SONGS:
+			_step_marquee_items(_songs_marquee_items, dt)
+		elif _active_tab == MenuTab.IMPORT:
+			_step_marquee_items(_imported_marquee_items, dt)
 
 
 func _exit_tree() -> void:
@@ -454,6 +470,22 @@ func get_role_control_fonts() -> Dictionary:
 		"hero_play": _hero_play_button.get_theme_font("font") if _hero_play_button != null else null,
 		"tab": _tab_songs_button.get_theme_font("font") if _tab_songs_button != null else null,
 		"rank_badge": first_rank_font,
+	}
+
+
+func get_first_song_marquee_state() -> Dictionary:
+	if _songs_marquee_items.is_empty():
+		return {}
+	var item: Dictionary = _songs_marquee_items[0]
+	var clip: Control = item.get("clip", null) as Control
+	var label_a: Label = item.get("label_a", null) as Label
+	var label_b: Label = item.get("label_b", null) as Label
+	return {
+		"clip_contents": clip.clip_contents if clip != null else false,
+		"offset": float(item.get("offset", 0.0)),
+		"label_a_x": label_a.position.x if label_a != null else 0.0,
+		"label_b_x": label_b.position.x if label_b != null else 0.0,
+		"clip_width": clip.size.x if clip != null else 0.0,
 	}
 
 
@@ -911,13 +943,20 @@ func _save_recent_track(p_audio_path: String) -> void:
 
 
 func _rebuild_songs_list_ui() -> void:
-	_rebuild_entry_list(_songs_list_vbox, _song_entries, "SongRow", "No hay canciones disponibles.")
+	_rebuild_entry_list(
+		_songs_list_vbox,
+		_song_entries,
+		_songs_marquee_items,
+		"SongRow",
+		"No hay canciones disponibles."
+	)
 
 
 func _rebuild_imported_list_ui() -> void:
 	_rebuild_entry_list(
 		_import_list_vbox,
 		_imported_entries,
+		_imported_marquee_items,
 		"ImportedRow",
 		"Aún no has importado canciones desde tu dispositivo."
 	)
@@ -926,12 +965,14 @@ func _rebuild_imported_list_ui() -> void:
 func _rebuild_entry_list(
 	p_container: VBoxContainer,
 	p_entries: Array[Dictionary],
+	p_marquee_target: Array[Dictionary],
 	p_prefix: String,
 	p_empty_message: String
 ) -> void:
 	if p_container == null:
 		return
 
+	p_marquee_target.clear()
 	var old_children: Array[Node] = p_container.get_children()
 	for i: int in range(old_children.size()):
 		old_children[i].queue_free()
@@ -969,41 +1010,63 @@ func _rebuild_entry_list(
 		var row_margin: MarginContainer = MarginContainer.new()
 		row_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		row_margin.add_theme_constant_override("margin_left", 26)
-		row_margin.add_theme_constant_override("margin_right", 26)
+		row_margin.add_theme_constant_override("margin_left", 24)
+		row_margin.add_theme_constant_override("margin_right", 24)
 		row_btn.add_child(row_margin)
 
 		var row_hbox: HBoxContainer = HBoxContainer.new()
 		row_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row_hbox.add_theme_constant_override("separation", 14)
+		row_hbox.add_theme_constant_override("separation", 18)
 		row_margin.add_child(row_hbox)
 
-		var title_lbl: Label = Label.new()
-		title_lbl.name = "RowTitle"
-		title_lbl.text = title
-		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		title_lbl.clip_text = true
-		title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		title_lbl.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
-		title_lbl.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
-		if _font_registry != null:
-			_font_registry.apply_global_font_override(title_lbl, 3)
-		row_hbox.add_child(title_lbl)
+		# Zone 1: Left clipped marquee container (never invades right rank zone)
+		var title_clip: Control = Control.new()
+		title_clip.name = "RowTitleClip"
+		title_clip.clip_contents = true
+		title_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		title_clip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		title_clip.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		row_hbox.add_child(title_clip)
+
+		var title_lbl_a: Label = _create_marquee_title_label("RowTitleA", title)
+		var title_lbl_b: Label = _create_marquee_title_label("RowTitleB", title)
+		title_clip.add_child(title_lbl_a)
+		title_clip.add_child(title_lbl_b)
+
+		var measured_width: float = _measure_marquee_title_width(title_lbl_a, title)
+		var initial_cycle_w: float = maxf(320.0, measured_width) + MARQUEE_GAP_PX
+		title_lbl_a.position = Vector2(0.0, 0.0)
+		title_lbl_a.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
+		title_lbl_b.position = Vector2(initial_cycle_w, 0.0)
+		title_lbl_b.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
+
+		p_marquee_target.append({
+			"clip": title_clip,
+			"label_a": title_lbl_a,
+			"label_b": title_lbl_b,
+			"text_width": measured_width,
+			"offset": 0.0,
+		})
+
+		# Zone 2: Fixed right zone for Rank (58px neon blur) + Difficulty (30px)
+		var rank_zone: HBoxContainer = HBoxContainer.new()
+		rank_zone.name = "RowRankZone"
+		rank_zone.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rank_zone.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		rank_zone.alignment = BoxContainer.ALIGNMENT_END
+		rank_zone.add_theme_constant_override("separation", 12)
+		row_hbox.add_child(rank_zone)
 
 		var rank_lbl: Label = Label.new()
 		rank_lbl.name = "RowRankBadge"
-		rank_lbl.text = best_rank if has_record else "--"
+		var display_rank: String = best_rank if has_record else "--"
+		rank_lbl.text = display_rank
 		rank_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		rank_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		rank_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		rank_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE)
-		var badge_col: Color = SafeHud.get_rank_color(best_rank) if has_record else COLOR_TEXT_INACTIVE
-		rank_lbl.add_theme_color_override("font_color", badge_col)
-		if _font_registry != null:
-			_font_registry.apply_rank_role(rank_lbl, 5)
-		row_hbox.add_child(rank_lbl)
+		rank_lbl.custom_minimum_size = Vector2(96.0, 0.0)
+		UiFontRegistry.apply_neon_rank_style(rank_lbl, display_rank, SONG_RANK_FONT_SIZE)
+		rank_zone.add_child(rank_lbl)
 
 		if has_record:
 			var best_diff: int = int(summary.get("best_difficulty", AutoChartGenerator.Difficulty.NORMAL))
@@ -1013,13 +1076,75 @@ func _rebuild_entry_list(
 			diff_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			diff_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			diff_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			diff_lbl.add_theme_font_size_override("font_size", SONG_BADGE_FONT_SIZE - 4)
-			diff_lbl.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+			diff_lbl.add_theme_font_size_override("font_size", SONG_DIFF_FONT_SIZE)
+			diff_lbl.add_theme_color_override("font_color", Color(0.92, 0.98, 1.0, 0.96))
 			if _font_registry != null:
-				_font_registry.apply_global_font_override(diff_lbl, 2)
-			row_hbox.add_child(diff_lbl)
+				_font_registry.apply_global_font_override(diff_lbl, 3)
+			rank_zone.add_child(diff_lbl)
 
 		p_container.add_child(row_btn)
+
+
+func _create_marquee_title_label(p_name: String, p_text: String) -> Label:
+	var lbl: Label = Label.new()
+	lbl.name = p_name
+	lbl.text = p_text
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	lbl.clip_text = false
+	lbl.add_theme_font_size_override("font_size", SONG_ROW_FONT_SIZE)
+	lbl.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	if _font_registry != null:
+		_font_registry.apply_global_font_override(lbl, 3)
+	return lbl
+
+
+func _measure_marquee_title_width(p_label: Label, p_text: String) -> float:
+	if p_label == null:
+		return 240.0
+	var used_font: Font = _font_registry.get_global_font() if _font_registry != null else null
+	if used_font == null:
+		used_font = p_label.get_theme_font("font")
+	if used_font != null:
+		var measured: Vector2 = used_font.get_string_size(
+			p_text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			SONG_ROW_FONT_SIZE
+		)
+		return maxf(64.0, measured.x)
+	return maxf(64.0, float(p_text.length()) * float(SONG_ROW_FONT_SIZE) * 0.62)
+
+
+func _step_marquee_items(p_items: Array[Dictionary], p_delta: float) -> void:
+	var count: int = p_items.size()
+	for i: int in range(count):
+		var item: Dictionary = p_items[i]
+		var clip: Control = item.get("clip", null) as Control
+		var label_a: Label = item.get("label_a", null) as Label
+		var label_b: Label = item.get("label_b", null) as Label
+		if not is_instance_valid(clip) or not is_instance_valid(label_a) or not is_instance_valid(label_b):
+			continue
+
+		var clip_w: float = maxf(120.0, clip.size.x)
+		var clip_h: float = clip.size.y if clip.size.y > 1.0 else SONG_ROW_HEIGHT_PX
+		var text_w: float = float(item.get("text_width", 240.0))
+		var cycle_w: float = maxf(clip_w, text_w) + MARQUEE_GAP_PX
+
+		var next_offset: float = fmod(
+			float(item.get("offset", 0.0)) + (MARQUEE_SPEED_PX_PER_SEC * p_delta),
+			cycle_w
+		)
+		item["offset"] = next_offset
+		p_items[i] = item
+
+		var label_w: float = maxf(clip_w, text_w) + 24.0
+		label_a.position = Vector2(-next_offset, 0.0)
+		label_a.size = Vector2(label_w, clip_h)
+		label_b.position = Vector2(cycle_w - next_offset, 0.0)
+		label_b.size = Vector2(label_w, clip_h)
 
 
 func _refresh_tab_visuals() -> void:
@@ -1050,13 +1175,16 @@ func _refresh_modal_option_styles() -> void:
 
 
 func _refresh_modal_record_label() -> void:
-	if _modal_record_label == null:
+	if _modal_record_label == null or _modal_record_rank_label == null or _modal_record_detail_label == null:
 		return
 	var selected: Dictionary = get_selected_track()
 	var song_key: String = str(selected.get("song_key", ""))
 	if song_key.is_empty():
-		_modal_record_label.text = "RÉCORD: [--]"
+		_modal_record_label.text = "SIN RÉCORD TODAVÍA"
 		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+		_modal_record_rank_label.text = "--"
+		UiFontRegistry.apply_neon_rank_style(_modal_record_rank_label, "--", MODAL_RANK_FONT_SIZE)
+		_modal_record_detail_label.text = ""
 		return
 
 	var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
@@ -1069,16 +1197,27 @@ func _refresh_modal_record_label() -> void:
 		var rank: String = str(specific.get("best_rank", ""))
 		var score_val: int = int(specific.get("best_score", 0))
 		var acc_val: float = float(specific.get("best_accuracy", 0.0))
-		_modal_record_label.text = "MEJOR EN ESTE MODO: [%s] · %d pts (%.1f%%)" % [rank, score_val, acc_val]
-		_modal_record_label.add_theme_color_override("font_color", SafeHud.get_rank_color(rank))
+		_modal_record_label.text = "MEJOR EN ESTE MODO:"
+		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+		_modal_record_rank_label.text = rank
+		UiFontRegistry.apply_neon_rank_style(_modal_record_rank_label, rank, MODAL_RANK_FONT_SIZE)
+		_modal_record_detail_label.text = "· %d pts (%.1f%%)" % [score_val, acc_val]
+		_modal_record_detail_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	elif summary.get("has_record", false) as bool:
-		var badge: String = str(summary.get("badge_text", "[--]"))
 		var best_rank: String = str(summary.get("best_rank", ""))
-		_modal_record_label.text = "MEJOR GLOBAL: %s" % badge
-		_modal_record_label.add_theme_color_override("font_color", SafeHud.get_rank_color(best_rank))
+		var best_diff: int = int(summary.get("best_difficulty", AutoChartGenerator.Difficulty.NORMAL))
+		_modal_record_label.text = "MEJOR GLOBAL:"
+		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+		_modal_record_rank_label.text = best_rank
+		UiFontRegistry.apply_neon_rank_style(_modal_record_rank_label, best_rank, MODAL_RANK_FONT_SIZE)
+		_modal_record_detail_label.text = "· %s" % ChartCacheRepository.difficulty_to_label(best_diff)
+		_modal_record_detail_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	else:
-		_modal_record_label.text = "SIN RÉCORD TODAVÍA [--]"
+		_modal_record_label.text = "SIN RÉCORD TODAVÍA"
 		_modal_record_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+		_modal_record_rank_label.text = "--"
+		UiFontRegistry.apply_neon_rank_style(_modal_record_rank_label, "--", MODAL_RANK_FONT_SIZE)
+		_modal_record_detail_label.text = ""
 
 
 func _refresh_bgm_controls() -> void:
@@ -1426,11 +1565,34 @@ func _build_song_setup_modal_ui() -> void:
 	_modal_close_button.pressed.connect(close_song_setup_modal)
 	header_row.add_child(_modal_close_button)
 
+	_modal_record_row = HBoxContainer.new()
+	_modal_record_row.name = "ModalRecordRow"
+	_modal_record_row.add_theme_constant_override("separation", 14)
+	_modal_vbox.add_child(_modal_record_row)
+
 	_modal_record_label = Label.new()
 	_modal_record_label.name = "ModalRecordLabel"
-	_modal_record_label.text = "SIN RÉCORD TODAVÍA [--]"
+	_modal_record_label.text = "SIN RÉCORD TODAVÍA"
+	_modal_record_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_modal_record_label.add_theme_font_size_override("font_size", MODAL_RECORD_FONT_SIZE)
-	_modal_vbox.add_child(_modal_record_label)
+	_modal_record_row.add_child(_modal_record_label)
+
+	_modal_record_rank_label = Label.new()
+	_modal_record_rank_label.name = "ModalRecordRankLabel"
+	_modal_record_rank_label.text = "--"
+	_modal_record_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UiFontRegistry.apply_neon_rank_style(_modal_record_rank_label, "--", MODAL_RANK_FONT_SIZE)
+	_modal_record_row.add_child(_modal_record_rank_label)
+
+	_modal_record_detail_label = Label.new()
+	_modal_record_detail_label.name = "ModalRecordDetailLabel"
+	_modal_record_detail_label.text = ""
+	_modal_record_detail_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_modal_record_detail_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_modal_record_detail_label.clip_text = true
+	_modal_record_detail_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_modal_record_detail_label.add_theme_font_size_override("font_size", MODAL_RECORD_FONT_SIZE)
+	_modal_record_row.add_child(_modal_record_detail_label)
 
 	var diff_header: Label = Label.new()
 	diff_header.text = "DIFICULTAD"

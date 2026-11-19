@@ -28,7 +28,7 @@ const JUDGMENT_FONT_SIZE: int = 48
 const COUNTDOWN_FONT_SIZE: int = 120
 const RESULTS_TITLE_FONT_SIZE: int = 54
 const RESULTS_RECORD_FONT_SIZE: int = 40
-const RESULTS_RANK_FONT_SIZE: int = 230
+const RESULTS_RANK_FONT_SIZE: int = 250
 const RESULTS_STATS_FONT_SIZE: int = 56
 const RESULTS_BREAKDOWN_FONT_SIZE: int = 46
 const RESULTS_BUTTON_FONT_SIZE: int = 50
@@ -401,7 +401,7 @@ func show_results_overlay(
 	_results_record_label.modulate = Color(1.0, 0.90, 0.30, 1.0) if p_is_new_record else Color(0.76, 0.88, 1.0, 0.90)
 
 	_results_rank_label.text = rank
-	_results_rank_label.modulate = get_rank_color(rank)
+	UiFontRegistry.apply_neon_rank_style(_results_rank_label, rank, RESULTS_RANK_FONT_SIZE)
 
 	_results_stats_label.text = (
 		"SCORE: %07d\nACCURACY: %.2f%%\nCOMBO MÁX: x%d"
@@ -843,7 +843,7 @@ func _ensure_ui_nodes() -> void:
 	_results_rank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_results_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_results_rank_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_results_rank_label.custom_minimum_size = Vector2(0.0, 240.0)
+	_results_rank_label.custom_minimum_size = Vector2(0.0, 270.0)
 	_results_rank_label.add_theme_font_size_override("font_size", RESULTS_RANK_FONT_SIZE)
 	_results_vbox.add_child(_results_rank_label)
 
@@ -979,7 +979,7 @@ func _apply_external_fonts() -> void:
 
 	_font_registry.apply_combo_role(_combo_label, 8)
 	_font_registry.apply_combo_role(_judgment_label, 7)
-	_font_registry.apply_rank_role(_results_rank_label, 16)
+	UiFontRegistry.apply_neon_rank_style(_results_rank_label, _last_displayed_rank if not _last_displayed_rank.is_empty() else "SSS+", RESULTS_RANK_FONT_SIZE)
 	_font_registry.apply_global_font_override(_countdown_label, 8)
 
 

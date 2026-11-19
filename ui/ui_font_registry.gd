@@ -14,6 +14,9 @@ const COLOR_TITLE_SHADOW: Color = Color(0.14, 0.90, 1.0, 0.45)
 const COLOR_COMBO_SHADOW: Color = Color(0.02, 0.04, 0.10, 0.72)
 const COLOR_RANK_SHADOW: Color = Color(0.02, 0.04, 0.10, 0.78)
 
+static var _shared_rank_font_searched: bool = false
+static var _shared_rank_font_path: String = ""
+
 var fonts_dir_path: String = DEFAULT_FONTS_DIR
 var global_font: Font = null
 var title_font: Font = null
@@ -30,7 +33,77 @@ func reload_fonts() -> void:
 	global_font = _find_and_load_font(GLOBAL_FONT_STEM)
 	title_font = _find_and_load_font(TITLE_FONT_STEM)
 	combo_font = _find_and_load_font(COMBO_FONT_STEM)
-	rank_font = _find_and_load_font(RANK_FONT_STEM)
+	var rank_path: String = _find_font_path(RANK_FONT_STEM)
+	rank_font = _load_font_resource(rank_path)
+	if fonts_dir_path == DEFAULT_FONTS_DIR:
+		_shared_rank_font_path = rank_path
+		_shared_rank_font_searched = true
+
+
+static func apply_neon_rank_style(p_label: Label, p_rank: String, p_font_size: int) -> void:
+	if p_label == null:
+		return
+
+	var resolved_rank_font: Font = _load_shared_rank_font()
+	if resolved_rank_font != null:
+		p_label.add_theme_font_override("font", resolved_rank_font)
+
+	var safe_size: int = maxi(16, p_font_size)
+	p_label.add_theme_font_size_override("font_size", safe_size)
+	p_label.modulate = Color.WHITE
+
+	var normalized_rank: String = p_rank.strip_edges().to_upper()
+	var core_color: Color = Color(0.62, 0.84, 0.96, 0.78)
+	var outline_color: Color = Color(0.08, 0.26, 0.40, 0.72)
+	var halo_color: Color = Color(0.15, 0.72, 0.92, 0.34)
+	var is_unplayed: bool = false
+
+	match normalized_rank:
+		"SSS+":
+			core_color = Color(1.0, 0.98, 1.0, 1.0)
+			outline_color = Color(1.0, 0.26, 0.92, 0.98)
+			halo_color = Color(0.22, 0.96, 1.0, 0.80)
+		"SSS":
+			core_color = Color(1.0, 0.97, 0.96, 1.0)
+			outline_color = Color(1.0, 0.32, 0.84, 0.98)
+			halo_color = Color(1.0, 0.28, 0.88, 0.78)
+		"SS", "S":
+			core_color = Color(1.0, 0.98, 0.86, 1.0)
+			outline_color = Color(1.0, 0.78, 0.14, 0.96)
+			halo_color = Color(1.0, 0.84, 0.18, 0.72)
+		"A+", "A":
+			core_color = Color(0.88, 1.0, 0.94, 1.0)
+			outline_color = Color(0.14, 0.96, 0.56, 0.96)
+			halo_color = Color(0.18, 1.0, 0.62, 0.70)
+		"B":
+			core_color = Color(0.86, 0.97, 1.0, 1.0)
+			outline_color = Color(0.12, 0.84, 1.0, 0.96)
+			halo_color = Color(0.15, 0.88, 1.0, 0.70)
+		"C":
+			core_color = Color(0.95, 0.90, 1.0, 1.0)
+			outline_color = Color(0.68, 0.40, 1.0, 0.96)
+			halo_color = Color(0.62, 0.32, 1.0, 0.70)
+		"D":
+			core_color = Color(1.0, 0.90, 0.92, 1.0)
+			outline_color = Color(1.0, 0.36, 0.52, 0.96)
+			halo_color = Color(1.0, 0.28, 0.46, 0.70)
+		_:
+			is_unplayed = true
+
+	var size_t: float = clampf((float(safe_size) - 48.0) / 202.0, 0.0, 1.0)
+	var outline_px: int = clampi(int(round(lerpf(4.0, 12.0, size_t))), 3, 14)
+	var blur_halo_px: int = clampi(int(round(lerpf(18.0, 46.0, size_t))), 16, 48)
+	if is_unplayed:
+		outline_px = maxi(2, outline_px / 2)
+		blur_halo_px = maxi(8, blur_halo_px / 2)
+
+	p_label.add_theme_color_override("font_color", core_color)
+	p_label.add_theme_constant_override("outline_size", outline_px)
+	p_label.add_theme_color_override("font_outline_color", outline_color)
+	p_label.add_theme_color_override("font_shadow_color", halo_color)
+	p_label.add_theme_constant_override("shadow_offset_x", 0)
+	p_label.add_theme_constant_override("shadow_offset_y", 0)
+	p_label.add_theme_constant_override("shadow_outline_size", blur_halo_px)
 
 
 func get_global_font() -> Font:
@@ -123,7 +196,25 @@ func get_loaded_roles_status() -> Dictionary:
 	}
 
 
-func _find_and_load_font(p_stem: String) -> Font:
+static func _load_shared_rank_font() -> Font:
+	if not _shared_rank_font_searched:
+		var temp_reg: UiFontRegistry = UiFontRegistry.new(DEFAULT_FONTS_DIR)
+		_shared_rank_font_path = temp_reg._find_font_path(RANK_FONT_STEM)
+		_shared_rank_font_searched = true
+	if _shared_rank_font_path.is_empty():
+		return null
+	if _shared_rank_font_path.begins_with("res://") and ResourceLoader.exists(_shared_rank_font_path):
+		var res: Resource = ResourceLoader.load(_shared_rank_font_path)
+		if res is Font:
+			return res as Font
+	if FileAccess.file_exists(_shared_rank_font_path):
+		var dynamic_font: FontFile = FontFile.new()
+		if dynamic_font.load_dynamic_font(_shared_rank_font_path) == OK:
+			return dynamic_font
+	return null
+
+
+func _find_font_path(p_stem: String) -> String:
 	var base_dir: String = fonts_dir_path.trim_suffix("/")
 	var stem_lower: String = p_stem.to_lower()
 	var matches: Array[String] = []
@@ -153,19 +244,22 @@ func _find_and_load_font(p_stem: String) -> Font:
 
 	matches.sort_custom(_compare_by_extension_priority)
 	for i: int in range(matches.size()):
-		var loaded: Font = _load_font_resource(matches[i])
-		if loaded != null:
-			return loaded
+		if _load_font_resource(matches[i]) != null:
+			return matches[i]
 
 	var ext_count: int = SUPPORTED_EXTENSIONS.size()
 	for j: int in range(ext_count):
 		var ext: String = SUPPORTED_EXTENSIONS[j]
 		var direct_path: String = "%s/%s.%s" % [base_dir, p_stem, ext]
-		var direct_loaded: Font = _load_font_resource(direct_path)
-		if direct_loaded != null:
-			return direct_loaded
+		if _load_font_resource(direct_path) != null:
+			return direct_path
 
-	return null
+	return ""
+
+
+func _find_and_load_font(p_stem: String) -> Font:
+	var font_path: String = _find_font_path(p_stem)
+	return _load_font_resource(font_path)
 
 
 func _compare_by_extension_priority(p_a: String, p_b: String) -> bool:
