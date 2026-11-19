@@ -16,8 +16,9 @@ const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
 const SONG_ROW_HEIGHT_PX: float = 252.0
 const DIVIDER_HEIGHT_PX: float = 2.0
-const ROW_INNER_MARGIN_X: int = 24
-const ROW_TITLE_RANK_GAP_PX: int = 20
+const ROW_BOTTOM_BORDER_PX: int = 3
+const ROW_INNER_MARGIN_X: int = 28
+const ROW_TITLE_RANK_GAP_PX: int = 24
 const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
@@ -43,6 +44,7 @@ const PRIMARY_BUTTON_FONT_SIZE: int = 42
 const STATUS_FONT_SIZE: int = 32
 const MARQUEE_SPEED_PX_PER_SEC: float = 60.0
 const MARQUEE_EDGE_PAD_PX: float = 16.0
+const MARQUEE_INITIAL_PAUSE_SEC: float = 1.2
 
 static var open_directly_to_selector: bool = false
 
@@ -54,6 +56,7 @@ const COLOR_SHEET_BG: Color = Color(0.84, 0.92, 1.0, 0.12)
 const COLOR_SHEET_BORDER: Color = Color(1.0, 1.0, 1.0, 0.26)
 const COLOR_ROW_REST_BG: Color = Color(1.0, 1.0, 1.0, 0.0)
 const COLOR_ROW_HOVER_BG: Color = Color(1.0, 1.0, 1.0, 0.14)
+const COLOR_ROW_BOTTOM_BORDER: Color = Color(1.0, 1.0, 1.0, 0.28)
 const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 
 @export var screen_safe_adapter: ScreenSafeAdapter = null
@@ -125,8 +128,10 @@ var _transition_tween: Tween = null
 var _style_option_active: StyleBoxFlat = null
 var _style_option_inactive: StyleBoxFlat = null
 var _style_content_sheet: StyleBoxFlat = null
-var _style_song_row_normal: StyleBoxFlat = null
-var _style_song_row_hover: StyleBoxFlat = null
+var _style_song_row_divider_normal: StyleBoxFlat = null
+var _style_song_row_divider_hover: StyleBoxFlat = null
+var _style_song_row_last_normal: StyleBoxFlat = null
+var _style_song_row_last_hover: StyleBoxFlat = null
 var _style_modal_panel: StyleBoxFlat = null
 var _style_play_cta: StyleBoxFlat = null
 var _style_floating_play: StyleBoxEmpty = null
@@ -299,6 +304,10 @@ func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 
 func select_tab(p_tab: int) -> void:
 	_active_tab = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
+	if _active_tab == MenuTab.SONGS:
+		_reset_marquee_items(_songs_marquee_items)
+	elif _active_tab == MenuTab.IMPORT:
+		_reset_marquee_items(_imported_marquee_items)
 	_refresh_tab_visuals()
 
 
@@ -485,15 +494,20 @@ func get_role_control_fonts() -> Dictionary:
 
 
 func get_first_song_marquee_state() -> Dictionary:
-	if _songs_marquee_items.is_empty():
+	return get_song_marquee_state(0)
+
+
+func get_song_marquee_state(p_index: int) -> Dictionary:
+	if p_index < 0 or p_index >= _songs_marquee_items.size():
 		return {}
-	var item: Dictionary = _songs_marquee_items[0]
+	var item: Dictionary = _songs_marquee_items[p_index]
 	var clip: Control = item.get("clip", null) as Control
 	var label: Label = item.get("label", null) as Label
 	return {
 		"clip_contents": clip.clip_contents if clip != null else false,
 		"child_count": clip.get_child_count() if clip != null else 0,
 		"offset": float(item.get("offset", 0.0)),
+		"pause_remaining": float(item.get("pause_remaining", 0.0)),
 		"label_x": label.position.x if label != null else 0.0,
 		"text_width": float(item.get("text_width", 0.0)),
 		"clip_width": clip.size.x if clip != null else 0.0,
@@ -1025,7 +1039,7 @@ func _rebuild_entry_list(
 		row_btn.custom_minimum_size = Vector2(0.0, SONG_ROW_HEIGHT_PX)
 		row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		_apply_song_row_style(row_btn)
+		_apply_song_row_style(row_btn, idx < count - 1)
 		row_btn.pressed.connect(open_song_setup_modal.bind(entry))
 		if ui_sfx_player != null:
 			ui_sfx_player.bind_button(row_btn)
@@ -1046,7 +1060,7 @@ func _rebuild_entry_list(
 		row_hbox.add_theme_constant_override("separation", ROW_TITLE_RANK_GAP_PX)
 		row_margin.add_child(row_hbox)
 
-		# Zone 1: Left clipped single-pass marquee container (24 px left margin, 20 px gap before rank)
+		# Zone 1: Left clipped conditional marquee container (28 px left margin, 24 px gap before rank)
 		var title_clip: Control = Control.new()
 		title_clip.name = "RowTitleClip"
 		title_clip.clip_contents = true
@@ -1060,13 +1074,14 @@ func _rebuild_entry_list(
 
 		var measured_width: float = _measure_marquee_title_width(title_lbl, title)
 		title_lbl.position = Vector2(0.0, 0.0)
-		title_lbl.size = Vector2(measured_width + 24.0, SONG_ROW_HEIGHT_PX)
+		title_lbl.size = Vector2(measured_width + 16.0, SONG_ROW_HEIGHT_PX)
 
 		p_marquee_target.append({
 			"clip": title_clip,
 			"label": title_lbl,
 			"text_width": measured_width,
 			"offset": 0.0,
+			"pause_remaining": MARQUEE_INITIAL_PAUSE_SEC,
 		})
 
 		# Zone 2: Fixed right zone for Rank (58px neon blur) + Difficulty (30px)
@@ -1105,9 +1120,6 @@ func _rebuild_entry_list(
 
 		p_container.add_child(row_btn)
 
-		if idx < count - 1:
-			p_container.add_child(_create_white_divider("%sDivider_%d" % [p_prefix, idx], 24))
-
 
 func _create_marquee_title_label(p_name: String, p_text: String) -> Label:
 	var lbl: Label = Label.new()
@@ -1142,6 +1154,18 @@ func _measure_marquee_title_width(p_label: Label, p_text: String) -> float:
 	return maxf(64.0, float(p_text.length()) * float(SONG_ROW_FONT_SIZE) * 0.62)
 
 
+func _reset_marquee_items(p_items: Array[Dictionary]) -> void:
+	var count: int = p_items.size()
+	for i: int in range(count):
+		var item: Dictionary = p_items[i]
+		item["offset"] = 0.0
+		item["pause_remaining"] = MARQUEE_INITIAL_PAUSE_SEC
+		p_items[i] = item
+		var label: Label = item.get("label", null) as Label
+		if is_instance_valid(label):
+			label.position = Vector2(0.0, 0.0)
+
+
 func _step_marquee_items(p_items: Array[Dictionary], p_delta: float) -> void:
 	var count: int = p_items.size()
 	for i: int in range(count):
@@ -1151,22 +1175,46 @@ func _step_marquee_items(p_items: Array[Dictionary], p_delta: float) -> void:
 		if not is_instance_valid(clip) or not is_instance_valid(label):
 			continue
 
-		var clip_w: float = maxf(120.0, clip.size.x)
+		var clip_w: float = clip.size.x
 		var clip_h: float = clip.size.y if clip.size.y > 1.0 else SONG_ROW_HEIGHT_PX
-		var text_w: float = float(item.get("text_width", 240.0))
-		var exit_distance: float = text_w + MARQUEE_EDGE_PAD_PX
-		var cycle_span: float = exit_distance + clip_w
+		var text_w: float = float(item.get("text_width", 0.0))
+		label.size = Vector2(maxf(clip_w, text_w + 16.0), clip_h)
 
-		var next_offset: float = fmod(
-			float(item.get("offset", 0.0)) + (MARQUEE_SPEED_PX_PER_SEC * p_delta),
-			cycle_span
-		)
-		item["offset"] = next_offset
+		# Keep fixed left alignment until layout resolves or whenever the title fits completely
+		if clip_w <= 1.0 or text_w <= clip_w:
+			item["offset"] = 0.0
+			item["pause_remaining"] = MARQUEE_INITIAL_PAUSE_SEC
+			p_items[i] = item
+			label.position = Vector2(0.0, 0.0)
+			continue
+
+		var pause_remaining: float = float(item.get("pause_remaining", MARQUEE_INITIAL_PAUSE_SEC))
+		var move_dt: float = p_delta
+		if pause_remaining > 0.0:
+			if move_dt <= pause_remaining:
+				pause_remaining -= move_dt
+				move_dt = 0.0
+			else:
+				move_dt -= pause_remaining
+				pause_remaining = 0.0
+
+		var offset: float = float(item.get("offset", 0.0))
+		var next_x: float = 0.0
+		if move_dt > 0.0:
+			var exit_distance: float = text_w + MARQUEE_EDGE_PAD_PX
+			var cycle_span: float = exit_distance + clip_w
+			offset += MARQUEE_SPEED_PX_PER_SEC * move_dt
+			if offset >= cycle_span:
+				offset = 0.0
+				pause_remaining = MARQUEE_INITIAL_PAUSE_SEC
+				next_x = 0.0
+			else:
+				next_x = -offset if offset <= exit_distance else (cycle_span - offset)
+
+		item["offset"] = offset
+		item["pause_remaining"] = pause_remaining
 		p_items[i] = item
-
-		var next_x: float = -next_offset if next_offset <= exit_distance else (cycle_span - next_offset)
 		label.position = Vector2(next_x, 0.0)
-		label.size = Vector2(text_w + 24.0, clip_h)
 
 
 func _refresh_tab_visuals() -> void:
@@ -1280,15 +1328,17 @@ func _apply_stylebox_to_button(p_button: Button, p_style: StyleBox) -> void:
 	p_button.add_theme_stylebox_override("focus", p_style)
 
 
-func _apply_song_row_style(p_button: Button) -> void:
+func _apply_song_row_style(p_button: Button, p_has_bottom_divider: bool) -> void:
 	if p_button == null:
 		return
-	if _style_song_row_normal != null:
-		p_button.add_theme_stylebox_override("normal", _style_song_row_normal)
-		p_button.add_theme_stylebox_override("focus", _style_song_row_normal)
-	if _style_song_row_hover != null:
-		p_button.add_theme_stylebox_override("hover", _style_song_row_hover)
-		p_button.add_theme_stylebox_override("pressed", _style_song_row_hover)
+	var normal_style: StyleBoxFlat = _style_song_row_divider_normal if p_has_bottom_divider else _style_song_row_last_normal
+	var hover_style: StyleBoxFlat = _style_song_row_divider_hover if p_has_bottom_divider else _style_song_row_last_hover
+	if normal_style != null:
+		p_button.add_theme_stylebox_override("normal", normal_style)
+		p_button.add_theme_stylebox_override("focus", normal_style)
+	if hover_style != null:
+		p_button.add_theme_stylebox_override("hover", hover_style)
+		p_button.add_theme_stylebox_override("pressed", hover_style)
 
 
 func _create_white_divider(p_name: String, p_margin_x: int = ROW_INNER_MARGIN_X) -> MarginContainer:
@@ -1313,6 +1363,17 @@ func _create_white_divider(p_name: String, p_margin_x: int = ROW_INNER_MARGIN_X)
 	return holder
 
 
+func _create_song_row_stylebox(p_bg_color: Color, p_bottom_border_px: int) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = p_bg_color
+	sb.set_border_width_all(0)
+	sb.border_width_bottom = p_bottom_border_px
+	sb.border_color = COLOR_ROW_BOTTOM_BORDER
+	sb.set_corner_radius_all(0)
+	sb.set_content_margin_all(0.0)
+	return sb
+
+
 func _build_theme_styles() -> void:
 	_style_option_active = StyleBoxFlat.new()
 	_style_option_active.bg_color = Color(0.10, 0.44, 0.58, 0.94)
@@ -1335,17 +1396,10 @@ func _build_theme_styles() -> void:
 	_style_content_sheet.set_corner_radius_all(22)
 	_style_content_sheet.anti_aliasing = true
 
-	_style_song_row_normal = StyleBoxFlat.new()
-	_style_song_row_normal.bg_color = COLOR_ROW_REST_BG
-	_style_song_row_normal.set_border_width_all(0)
-	_style_song_row_normal.set_corner_radius_all(0)
-	_style_song_row_normal.set_content_margin_all(0.0)
-
-	_style_song_row_hover = StyleBoxFlat.new()
-	_style_song_row_hover.bg_color = COLOR_ROW_HOVER_BG
-	_style_song_row_hover.set_border_width_all(0)
-	_style_song_row_hover.set_corner_radius_all(0)
-	_style_song_row_hover.set_content_margin_all(0.0)
+	_style_song_row_divider_normal = _create_song_row_stylebox(COLOR_ROW_REST_BG, ROW_BOTTOM_BORDER_PX)
+	_style_song_row_divider_hover = _create_song_row_stylebox(COLOR_ROW_HOVER_BG, ROW_BOTTOM_BORDER_PX)
+	_style_song_row_last_normal = _create_song_row_stylebox(COLOR_ROW_REST_BG, 0)
+	_style_song_row_last_hover = _create_song_row_stylebox(COLOR_ROW_HOVER_BG, 0)
 
 	_style_modal_panel = StyleBoxFlat.new()
 	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
