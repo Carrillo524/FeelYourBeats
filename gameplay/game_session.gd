@@ -101,6 +101,8 @@ func start_demo_session(
 
 	if lane_field != null:
 		lane_field.set_speed_multiplier(_active_speed_multiplier)
+	if hit_judge != null:
+		hit_judge.set_difficulty(_active_difficulty)
 
 	var demo_chart: ChartData = build_demo_chart(p_note_type_mode)
 	_active_audio_stream = _generate_metronome_stream(
@@ -132,6 +134,8 @@ func start_audio_file_session(
 
 	if lane_field != null:
 		lane_field.set_speed_multiplier(_active_speed_multiplier)
+	if hit_judge != null:
+		hit_judge.set_difficulty(_active_difficulty)
 
 	var cache_key: String = _chart_cache_repo.build_cache_key(
 		p_audio_path,
@@ -203,6 +207,8 @@ func start_chart_session(p_chart: ChartData) -> bool:
 
 	if lane_field != null:
 		lane_field.set_speed_multiplier(_active_speed_multiplier)
+	if hit_judge != null:
+		hit_judge.set_difficulty(_active_difficulty)
 		if not lane_field.load_chart(p_chart):
 			return false
 	elif hit_judge != null:
@@ -298,6 +304,8 @@ func _start_from_pending_config(p_cfg: Dictionary) -> void:
 	_active_speed_multiplier = speed_multiplier
 	if lane_field != null:
 		lane_field.set_speed_multiplier(_active_speed_multiplier)
+	if hit_judge != null:
+		hit_judge.set_difficulty(_active_difficulty)
 
 	if is_demo or audio_path.is_empty():
 		start_demo_session(note_type_mode)
@@ -360,12 +368,18 @@ func _resolve_and_wire_nodes() -> void:
 		lane_field.screen_safe_adapter = screen_safe_adapter
 		lane_field.input_adapter = input_adapter
 		lane_field.hit_judge = hit_judge
+		lane_field.audio_analyzer = audio_analyzer
 		lane_field.connect_dependencies()
 		if screen_safe_adapter != null:
 			lane_field.apply_safe_layout(
 				screen_safe_adapter.get_play_rect(),
 				screen_safe_adapter.get_hud_safe_rect()
 			)
+
+	if hit_judge != null:
+		hit_judge.set_difficulty(_active_difficulty)
+		if not hit_judge.danger_overflowed.is_connected(_on_danger_overflowed):
+			hit_judge.danger_overflowed.connect(_on_danger_overflowed)
 
 	if safe_hud != null:
 		safe_hud.screen_safe_adapter = screen_safe_adapter
@@ -411,10 +425,22 @@ func _on_pause_requested() -> void:
 
 
 func _on_playback_finished() -> void:
-	_present_results()
+	if safe_hud != null and safe_hud.is_results_overlay_open():
+		return
+	_present_results(false)
 
 
-func _present_results() -> void:
+func _on_danger_overflowed() -> void:
+	if safe_hud != null and safe_hud.is_results_overlay_open():
+		return
+	if dsp_clock != null:
+		dsp_clock.stop()
+	if input_adapter != null:
+		input_adapter.reset_input_state()
+	_present_results(true)
+
+
+func _present_results(p_is_failed: bool = false) -> void:
 	if reactive_background != null:
 		reactive_background.reset_shake()
 	if lane_field != null:
@@ -429,7 +455,7 @@ func _present_results() -> void:
 	var rank: String = SafeHud.compute_letter_rank(accuracy_percent)
 
 	var is_new_record: bool = false
-	if not _active_song_key.is_empty():
+	if not p_is_failed and not _active_song_key.is_empty():
 		is_new_record = _chart_cache_repo.save_song_record_if_better(
 			_active_song_key,
 			_active_difficulty,
@@ -446,7 +472,8 @@ func _present_results() -> void:
 			accuracy_percent,
 			final_max_combo,
 			breakdown,
-			is_new_record
+			is_new_record,
+			p_is_failed
 		)
 
 

@@ -9,6 +9,14 @@ signal main_menu_requested()
 const TOP_BAR_HEIGHT_PX: float = 132.0
 const PAUSE_BUTTON_WIDTH_PX: float = 212.0
 const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
+const DANGER_BAR_HEIGHT_PX: float = 28.0
+const DANGER_BAR_LERP_SPEED: float = 9.0
+const DANGER_PULSE_SPEED_RAD: float = 9.5
+const DANGER_THRESHOLD_AMBER: float = 0.45
+const DANGER_THRESHOLD_CRITICAL: float = 0.75
+const COLOR_DANGER_CYAN: Color = Color(0.22, 0.92, 1.0, 1.0)
+const COLOR_DANGER_AMBER: Color = Color(1.0, 0.76, 0.18, 1.0)
+const COLOR_DANGER_CRITICAL: Color = Color(1.0, 0.18, 0.48, 1.0)
 const CENTER_BANNER_HEIGHT_PX: float = 156.0
 const MODAL_WIDTH_PX: float = 640.0
 const MODAL_HEIGHT_PX: float = 490.0
@@ -68,6 +76,10 @@ var _combo_label: Label = null
 var _judgment_label: Label = null
 var _countdown_label: Label = null
 var _pause_button: Button = null
+var _danger_bar_track: Panel = null
+var _danger_bar_fill: Panel = null
+var _style_danger_track: StyleBoxFlat = null
+var _style_danger_fill: StyleBoxFlat = null
 
 var _pause_overlay: ColorRect = null
 var _pause_panel: Panel = null
@@ -112,6 +124,9 @@ var _combo_bass_boost: float = 0.0
 var _judgment_pop_boost: float = 0.0
 var _banner_idle_sec: float = 0.0
 var _banner_alpha: float = 1.0
+var _target_danger_ratio: float = 0.0
+var _displayed_danger_ratio: float = 0.0
+var _danger_pulse_phase: float = 0.0
 var _font_registry: UiFontRegistry = null
 
 
@@ -190,6 +205,7 @@ func _process(p_delta: float) -> void:
 			_banner_alpha = maxf(0.0, _banner_alpha - (HUD_AUTO_FADE_SPEED * dt))
 
 	_apply_banner_visual_transform()
+	_update_danger_bar_visual(dt)
 
 
 func _exit_tree() -> void:
@@ -210,6 +226,8 @@ func connect_dependencies() -> void:
 			hit_judge.hold_combo_ticked.connect(_on_hold_combo_ticked)
 		if not hit_judge.hold_state_changed.is_connected(_on_hold_state_changed):
 			hit_judge.hold_state_changed.connect(_on_hold_state_changed)
+		if not hit_judge.danger_changed.is_connected(_on_danger_changed):
+			hit_judge.danger_changed.connect(_on_danger_changed)
 
 	if reactive_background != null:
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
@@ -224,14 +242,28 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	var safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
 	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
 
+	var pause_x: float = safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0
+	_pause_button.position = Vector2(pause_x, 14.0)
+	_pause_button.size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
+
+	# TOP_CENTER MELOBEAT neon danger bar guaranteed clear of SCORE (left) and PAUSA (right)
+	var danger_w: float = clampf(safe_w * 0.25, 140.0, 260.0)
+	var danger_x: float = (safe_w - danger_w) * 0.5
+	if danger_x + danger_w > pause_x - 16.0:
+		danger_x = maxf(160.0, pause_x - danger_w - 16.0)
+	var danger_y: float = 14.0 + ((PAUSE_BUTTON_HEIGHT_PX - DANGER_BAR_HEIGHT_PX) * 0.5)
+	_danger_bar_track.position = Vector2(danger_x, danger_y)
+	_danger_bar_track.size = Vector2(danger_w, DANGER_BAR_HEIGHT_PX)
+	_danger_bar_track.pivot_offset = _danger_bar_track.size * 0.5
+
+	var score_w: float = maxf(120.0, danger_x - 32.0)
 	_score_label.position = Vector2(16.0, 12.0)
-	_score_label.size = Vector2(maxf(200.0, safe_w - PAUSE_BUTTON_WIDTH_PX - 40.0), 64.0)
+	_score_label.size = Vector2(score_w, 64.0)
 
 	_accuracy_label.position = Vector2(16.0, 74.0)
-	_accuracy_label.size = Vector2(maxf(200.0, safe_w - PAUSE_BUTTON_WIDTH_PX - 40.0), 54.0)
+	_accuracy_label.size = Vector2(score_w, 54.0)
 
-	_pause_button.position = Vector2(safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0, 14.0)
-	_pause_button.size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
+	_sync_danger_bar_fill_rect()
 
 	var banner_w: float = safe_w * COMBO_MAX_WIDTH_RATIO
 	var banner_x: float = (safe_w - banner_w) * 0.5
@@ -292,6 +324,9 @@ func reset_hud_display() -> void:
 	_judgment_pop_boost = 0.0
 	_banner_idle_sec = 0.0
 	_banner_alpha = 1.0
+	_target_danger_ratio = 0.0
+	_displayed_danger_ratio = 0.0
+	_danger_pulse_phase = 0.0
 	if _pause_overlay != null:
 		_pause_overlay.visible = false
 	if _results_overlay != null:
@@ -300,6 +335,7 @@ func reset_hud_display() -> void:
 		_pause_button.disabled = false
 	_refresh_labels()
 	_apply_banner_visual_transform()
+	_sync_danger_bar_fill_rect()
 
 
 func open_pause_menu() -> void:
@@ -377,7 +413,8 @@ func show_results_overlay(
 	p_accuracy_percent: float,
 	p_max_combo: int,
 	p_breakdown: Dictionary,
-	p_is_new_record: bool = false
+	p_is_new_record: bool = false,
+	p_is_failed: bool = false
 ) -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
@@ -390,13 +427,17 @@ func show_results_overlay(
 	_pause_button.disabled = true
 
 	var clamped_acc: float = clampf(p_accuracy_percent, 0.0, 100.0)
-	var rank: String = compute_letter_rank(clamped_acc)
+	var rank: String = "F" if p_is_failed else compute_letter_rank(clamped_acc)
 	_last_displayed_rank = rank
 
 	var safe_title: String = p_title if not p_title.is_empty() else "RESULTADOS"
 	_results_title_label.text = safe_title
-	_results_record_label.text = "¡NUEVO RÉCORD!" if p_is_new_record else "RESULTADOS DE PARTIDA"
-	_results_record_label.modulate = Color(1.0, 0.90, 0.30, 1.0) if p_is_new_record else Color(0.76, 0.88, 1.0, 0.90)
+	if p_is_failed:
+		_results_record_label.text = "PISTA FALLIDA"
+		_results_record_label.modulate = Color(1.0, 0.34, 0.46, 1.0)
+	else:
+		_results_record_label.text = "¡NUEVO RÉCORD!" if p_is_new_record else "RESULTADOS DE PARTIDA"
+		_results_record_label.modulate = Color(1.0, 0.90, 0.30, 1.0) if p_is_new_record else Color(0.76, 0.88, 1.0, 0.90)
 
 	_results_rank_label.text = rank
 	UiFontRegistry.apply_neon_rank_style(_results_rank_label, rank, RESULTS_RANK_FONT_SIZE)
@@ -497,6 +538,23 @@ func get_combo_width_ratio() -> float:
 
 func get_banner_alpha() -> float:
 	return _banner_alpha
+
+
+func set_danger_ratio(p_ratio: float) -> void:
+	_target_danger_ratio = clampf(p_ratio, 0.0, 1.0)
+
+
+func get_displayed_danger_ratio() -> float:
+	return _displayed_danger_ratio
+
+
+func get_top_bar_rects() -> Dictionary:
+	return {
+		"score": _score_label.get_global_rect() if _score_label != null else Rect2(),
+		"accuracy": _accuracy_label.get_global_rect() if _accuracy_label != null else Rect2(),
+		"danger_bar": _danger_bar_track.get_global_rect() if _danger_bar_track != null else Rect2(),
+		"pause": _pause_button.get_global_rect() if _pause_button != null else Rect2(),
+	}
 
 
 func get_font_registry() -> UiFontRegistry:
@@ -622,6 +680,64 @@ func _on_hold_state_changed(p_lane: int, p_is_holding: bool) -> void:
 		_apply_banner_visual_transform()
 
 
+func _on_danger_changed(p_ratio: float) -> void:
+	set_danger_ratio(p_ratio)
+
+
+func _update_danger_bar_visual(p_delta: float) -> void:
+	_displayed_danger_ratio = lerpf(
+		_displayed_danger_ratio,
+		_target_danger_ratio,
+		clampf(DANGER_BAR_LERP_SPEED * p_delta, 0.0, 1.0)
+	)
+	if absf(_displayed_danger_ratio - _target_danger_ratio) < 0.001:
+		_displayed_danger_ratio = _target_danger_ratio
+
+	if _displayed_danger_ratio >= DANGER_THRESHOLD_CRITICAL:
+		_danger_pulse_phase += p_delta * DANGER_PULSE_SPEED_RAD
+	else:
+		_danger_pulse_phase = 0.0
+
+	_sync_danger_bar_fill_rect()
+
+
+func _sync_danger_bar_fill_rect() -> void:
+	if _danger_bar_track == null or _danger_bar_fill == null or _style_danger_fill == null or _style_danger_track == null:
+		return
+
+	var ratio: float = clampf(_displayed_danger_ratio, 0.0, 1.0)
+	var inner_pad: float = 4.0
+	var inner_w: float = maxf(0.0, _danger_bar_track.size.x - (inner_pad * 2.0))
+	var inner_h: float = maxf(4.0, _danger_bar_track.size.y - (inner_pad * 2.0))
+	var fill_w: float = inner_w * ratio
+
+	_danger_bar_fill.position = Vector2(inner_pad, inner_pad)
+	_danger_bar_fill.size = Vector2(fill_w, inner_h)
+	_danger_bar_fill.visible = fill_w > 1.0
+
+	var active_color: Color = COLOR_DANGER_CYAN
+	var pulse_boost: float = 0.0
+	if ratio >= DANGER_THRESHOLD_CRITICAL:
+		var pulse_wave: float = sin(_danger_pulse_phase) * 0.5 + 0.5
+		pulse_boost = pulse_wave
+		active_color = COLOR_DANGER_CRITICAL.lerp(Color(1.0, 0.45, 0.78, 1.0), pulse_wave * 0.55)
+		var pulse_scale: float = 1.0 + (pulse_wave * 0.06)
+		_danger_bar_track.scale = Vector2(pulse_scale, pulse_scale)
+	elif ratio >= DANGER_THRESHOLD_AMBER:
+		active_color = COLOR_DANGER_AMBER
+		_danger_bar_track.scale = Vector2.ONE
+	else:
+		active_color = COLOR_DANGER_CYAN
+		_danger_bar_track.scale = Vector2.ONE
+
+	_style_danger_fill.bg_color = active_color
+	_style_danger_fill.shadow_color = Color(active_color.r, active_color.g, active_color.b, 0.55 + (pulse_boost * 0.35))
+	_style_danger_fill.shadow_size = 10 + int(round(pulse_boost * 8.0))
+	_style_danger_track.border_color = Color(active_color.r, active_color.g, active_color.b, 0.58 + (pulse_boost * 0.36))
+	_style_danger_track.shadow_color = Color(active_color.r, active_color.g, active_color.b, 0.25 + (pulse_boost * 0.32))
+	_style_danger_track.shadow_size = 10 + int(round(pulse_boost * 6.0))
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	if _displayed_combo <= 0:
 		return
@@ -687,15 +803,45 @@ func _ensure_ui_nodes() -> void:
 
 	_score_label = Label.new()
 	_score_label.name = "ScoreLabel"
+	_score_label.clip_text = true
 	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_score_label.add_theme_font_size_override("font_size", SCORE_FONT_SIZE)
 	_safe_container.add_child(_score_label)
 
 	_accuracy_label = Label.new()
 	_accuracy_label.name = "AccuracyLabel"
+	_accuracy_label.clip_text = true
 	_accuracy_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_accuracy_label.add_theme_font_size_override("font_size", ACCURACY_FONT_SIZE)
 	_safe_container.add_child(_accuracy_label)
+
+	_style_danger_track = StyleBoxFlat.new()
+	_style_danger_track.bg_color = Color(0.03, 0.06, 0.14, 0.78)
+	_style_danger_track.border_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.58)
+	_style_danger_track.set_border_width_all(2)
+	_style_danger_track.set_corner_radius_all(14)
+	_style_danger_track.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.25)
+	_style_danger_track.shadow_size = 10
+
+	_style_danger_fill = StyleBoxFlat.new()
+	_style_danger_fill.bg_color = COLOR_DANGER_CYAN
+	_style_danger_fill.set_border_width_all(0)
+	_style_danger_fill.set_corner_radius_all(10)
+	_style_danger_fill.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.55)
+	_style_danger_fill.shadow_size = 10
+
+	_danger_bar_track = Panel.new()
+	_danger_bar_track.name = "DangerBarTrack"
+	_danger_bar_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_danger_bar_track.add_theme_stylebox_override("panel", _style_danger_track)
+	_safe_container.add_child(_danger_bar_track)
+
+	_danger_bar_fill = Panel.new()
+	_danger_bar_fill.name = "DangerBarFill"
+	_danger_bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_danger_bar_fill.visible = false
+	_danger_bar_fill.add_theme_stylebox_override("panel", _style_danger_fill)
+	_danger_bar_track.add_child(_danger_bar_fill)
 
 	_combo_label = Label.new()
 	_combo_label.name = "ComboLabel"

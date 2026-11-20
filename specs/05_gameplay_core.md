@@ -44,15 +44,27 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
    - Si un *hold* activo alcanza o supera `end_time_sec`, se completa automáticamente con `JudgmentGrade.PERFECT`, reinicia `_hold_last_tick_times[lane] = 0.0` y emite `hold_state_changed(lane, false)`.
    - Expira con `JudgmentGrade.MISS` toda nota no golpeada cuya ventana `note.time_sec + miss_window_sec` haya vencido.
 
-### 2.3. Contrato Público de `HitJudge`
+### 2.3. Medidor de Pérdida / Riesgo Escalado por Dificultad (Estilo MELOBEAT)
+- `HitJudge` mantiene `danger_ratio: float = 0.0` (`0.0..1.0`) y `active_difficulty: int` (`set_difficulty(p_difficulty: int) -> void`), actualizado en cada juicio:
+  - **`EASY` (`FÁCIL`):** `+0.08` por `MISS`, `-0.045` por acierto (`PERFECT`, `GREAT`, `GOOD`).
+  - **`NORMAL`:** `+0.11` por `MISS`, `-0.035` por acierto (`PERFECT`, `GREAT`, `GOOD`).
+  - **`HARD` (`DIFÍCIL`):** `+0.15` por `MISS`, `-0.025` por acierto (`PERFECT`, `GREAT`, `GOOD`).
+- Emite `danger_changed(p_ratio: float)` en cada cambio y `danger_overflowed()` **una única vez** al alcanzar `danger_ratio >= 1.0` (reiniciado a `0.0` en `reset_state()`).
+
+### 2.4. Contrato Público de `HitJudge`
 - **Señales:**
   - `signal note_judged(lane: int, grade: int, error_ms: float, combo: int)`
   - `signal score_changed(score: int, combo: int, max_combo: int, accuracy: float)`
   - `signal hold_state_changed(lane: int, is_holding: bool)`
   - `signal hold_combo_ticked(p_lane: int, p_new_combo: int)`
+  - `signal danger_changed(p_ratio: float)`
+  - `signal danger_overflowed()`
 - **Métodos Públicos:**
   - `func load_chart(p_chart: ChartData) -> bool`
   - `func reset_state() -> void`
+  - `func set_difficulty(p_difficulty: int) -> void`
+  - `func get_danger_ratio() -> float`
+  - `func has_danger_overflowed() -> bool`
   - `func on_lane_pressed(p_lane: int, p_dsp_time_sec: float) -> void`
   - `func on_lane_released(p_lane: int, p_dsp_time_sec: float) -> void`
   - `func update_dsp_time(p_dsp_time_sec: float) -> void`
@@ -105,9 +117,9 @@ Al invocar `load_chart(p_chart: ChartData) -> bool`, las notas se particionan en
 - `load_chart(p_chart: ChartData) -> bool` valida el chart, delega en `hit_judge.load_chart(p_chart)` si `hit_judge != null`, recicla todas las vistas activas al pool (`_free_pool`) y reinicia el cursor `_next_spawn_index = 0`.
 - En `update_field_at_time(p_dsp_time_sec: float)`, activa desde `_free_pool` únicamente las notas dentro de la ventana de visibilidad superior y recicla inmediatamente aquellas que `hit_judge` reporta como resueltas o que superaron el límite inferior de pantalla.
 
-### 4.3. Renderizado de Divisores, Líneas Paralelas con Halo, Ondas de Toque y Partículas por Precisión en `_draw()`
+### 4.3. Renderizado de Divisores Reactivos con Halo Blur y Micro-Shake, Líneas Paralelas, Ondas de Toque y Partículas en `_draw()`
 - Sin agregar nodos hijos adicionales ni modificar `.tscn`, `LaneField` implementa `_draw() -> void` para dibujar:
-  1. **Divisores Verticales de Carril:** Líneas sutiles que delimitan los 4 carriles dentro de `play_rect`.
+  1. **Divisores Verticales Reactivos con Halo Blur y Micro-Shake:** Las 5 líneas verticales de los 4 carriles permanecen siempre visibles con trazo fino cian neón translúcido (`alpha ~0.24` en reposo) respaldado por un halo blur multicapa suave. Al recibir señales de `DSPClock` (`beat_pulsed`, `intensity_changed`) y `AudioAnalyzer` (`spectrum_updated`), aumentan su brillo en beats/drops y aplican un **micro-shake horizontal amortiguado** (`~2.0–3.5 px` con decaimiento rápido) exclusivamente sobre el dibujo visual de las líneas sin desplazar jamás las zonas táctiles de entrada.
   2. **Dos Líneas Horizontales Paralelas Continuas en `_hit_line_y`:** Dos líneas continuas que cruzan de extremo a extremo todo el ancho de `LaneField` (`x = 0.0` hasta `x = size.x`), ubicadas en `_hit_line_y \pm \text{DEFAULT\_HEAD\_HEIGHT\_PX} / 2` para enmarcar la altura visual de las notas.
   3. **Halo Luminoso Permanente (*Fake Blur*):** Debajo de cada línea continua se dibujan permanentemente 3 capas más anchas con alfa decreciente (`6.0x`, `3.5x` y `1.9x` del grosor central) y un núcleo nítido de alto contraste, añadiendo un refuerzo luminoso adicional sobre el tramo del carril cuando se presiona o retiene (`lane_input_pressed` / `lane_input_released` y `hold_state_changed`).
   4. **Ondas de Toque (*Touch Ripples*):** Pool circular en `_touch_ripples` (`MAX_ACTIVE_RIPPLES = 16`) alimentado por `RhythmInputAdapter.touch_ripple_triggered(p_local_pos, p_lane)` al tocar la pantalla (o centrado en `_hit_line_y` del carril correspondiente al presionar las teclas `D`, `F`, `J`, `K`).

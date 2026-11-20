@@ -12,6 +12,8 @@ signal note_judged(lane: int, grade: int, error_ms: float, combo: int)
 signal score_changed(score: int, combo: int, max_combo: int, accuracy: float)
 signal hold_state_changed(lane: int, is_holding: bool)
 signal hold_combo_ticked(p_lane: int, p_new_combo: int)
+signal danger_changed(p_ratio: float)
+signal danger_overflowed()
 
 const LANE_COUNT: int = 4
 const SEC_TO_MS: float = 1000.0
@@ -25,6 +27,13 @@ const WEIGHT_PERFECT: float = 1.0
 const WEIGHT_GREAT: float = 0.75
 const WEIGHT_GOOD: float = 0.40
 const WEIGHT_MISS: float = 0.0
+
+const DANGER_MISS_EASY: float = 0.08
+const DANGER_RECOVERY_EASY: float = 0.045
+const DANGER_MISS_NORMAL: float = 0.11
+const DANGER_RECOVERY_NORMAL: float = 0.035
+const DANGER_MISS_HARD: float = 0.15
+const DANGER_RECOVERY_HARD: float = 0.025
 
 @export var perfect_window_sec: float = 0.045
 @export var great_window_sec: float = 0.090
@@ -40,6 +49,8 @@ var perfect_count: int = 0
 var great_count: int = 0
 var good_count: int = 0
 var miss_count: int = 0
+var danger_ratio: float = 0.0
+var active_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 
 var _chart: ChartData = null
 var _lane_queues: Array[Array] = [[], [], [], []]
@@ -49,6 +60,7 @@ var _hold_last_tick_times: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.
 var _resolved_notes: Dictionary = {}
 var _judged_count: int = 0
 var _accuracy_weight_sum: float = 0.0
+var _danger_overflow_emitted: bool = false
 
 
 func load_chart(p_chart: ChartData) -> bool:
@@ -90,8 +102,31 @@ func reset_state() -> void:
 	great_count = 0
 	good_count = 0
 	miss_count = 0
+	danger_ratio = 0.0
+	_danger_overflow_emitted = false
 	_judged_count = 0
 	_accuracy_weight_sum = 0.0
+	danger_changed.emit(danger_ratio)
+
+
+func set_difficulty(p_difficulty: int) -> void:
+	active_difficulty = clampi(
+		p_difficulty,
+		AutoChartGenerator.Difficulty.EASY,
+		AutoChartGenerator.Difficulty.HARD
+	)
+
+
+func get_difficulty() -> int:
+	return active_difficulty
+
+
+func get_danger_ratio() -> float:
+	return danger_ratio
+
+
+func has_danger_overflowed() -> bool:
+	return _danger_overflow_emitted
 
 
 func on_lane_pressed(p_lane: int, p_dsp_time_sec: float) -> void:
@@ -276,8 +311,45 @@ func _apply_judgment(p_lane: int, p_grade: int, p_error_ms: float) -> void:
 		max_combo = combo
 
 	accuracy = (_accuracy_weight_sum / float(_judged_count)) if _judged_count > 0 else 0.0
+	_update_danger_for_grade(p_grade)
 	note_judged.emit(p_lane, p_grade, p_error_ms, combo)
 	score_changed.emit(score, combo, max_combo, accuracy)
+
+
+func _update_danger_for_grade(p_grade: int) -> void:
+	if _danger_overflow_emitted:
+		return
+
+	if p_grade == JudgmentGrade.MISS:
+		danger_ratio = clampf(danger_ratio + _get_danger_miss_step(), 0.0, 1.0)
+	else:
+		danger_ratio = clampf(danger_ratio - _get_danger_recovery_step(), 0.0, 1.0)
+
+	danger_changed.emit(danger_ratio)
+
+	if danger_ratio >= 1.0 and not _danger_overflow_emitted:
+		_danger_overflow_emitted = true
+		danger_overflowed.emit()
+
+
+func _get_danger_miss_step() -> float:
+	match active_difficulty:
+		AutoChartGenerator.Difficulty.EASY:
+			return DANGER_MISS_EASY
+		AutoChartGenerator.Difficulty.HARD:
+			return DANGER_MISS_HARD
+		_:
+			return DANGER_MISS_NORMAL
+
+
+func _get_danger_recovery_step() -> float:
+	match active_difficulty:
+		AutoChartGenerator.Difficulty.EASY:
+			return DANGER_RECOVERY_EASY
+		AutoChartGenerator.Difficulty.HARD:
+			return DANGER_RECOVERY_HARD
+		_:
+			return DANGER_RECOVERY_NORMAL
 
 
 func _apply_hold_combo_tick(p_lane: int) -> void:

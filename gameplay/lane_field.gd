@@ -8,8 +8,16 @@ const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 550.0
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
-const LANE_DIVIDER_COLOR: Color = Color(0.45, 0.75, 1.0, 0.16)
-const OUTER_BORDER_COLOR: Color = Color(0.35, 0.85, 1.0, 0.32)
+const LANE_DIVIDER_COLOR: Color = Color(0.28, 0.88, 1.0, 0.24)
+const OUTER_BORDER_COLOR: Color = Color(0.32, 0.92, 1.0, 0.34)
+const LANE_DIVIDER_GLOW_COLOR: Color = Color(0.22, 0.86, 1.0, 0.34)
+const LANE_DIVIDER_DROP_COLOR: Color = Color(0.54, 0.96, 1.0, 0.65)
+const DIVIDER_SHAKE_BEAT_PX: float = 2.2
+const DIVIDER_SHAKE_MAX_PX: float = 3.5
+const DIVIDER_SHAKE_DECAY_RATE: float = 15.0
+const DIVIDER_SHAKE_FREQ_RAD: float = 54.0
+const DIVIDER_GLOW_DECAY_RATE: float = 10.5
+const DIVIDER_DROP_DECAY_RATE: float = 4.5
 const RAIL_CONTINUOUS_CORE_COLOR: Color = Color(0.82, 0.98, 1.0, 0.96)
 const RAIL_CONTINUOUS_GLOW_COLOR: Color = Color(0.22, 0.88, 1.0, 0.75)
 const RAIL_PRESSED_CORE_COLOR: Color = Color(0.96, 1.0, 1.0, 1.0)
@@ -45,6 +53,7 @@ const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var input_adapter: RhythmInputAdapter = null
 @export var hit_judge: HitJudge = null
+@export var audio_analyzer: AudioAnalyzer = null
 @export var hit_line_height_ratio: float = 0.84
 @export var scroll_speed_px_per_sec: float = DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC
 @export var pool_size: int = 64
@@ -69,6 +78,14 @@ var _touch_ripples: Array[Dictionary] = []
 var _hit_particles: Array[Dictionary] = []
 var _hold_spark_accumulator_sec: float = 0.0
 var _fx_seed_counter: int = 1
+var _divider_beat_pulse: float = 0.0
+var _divider_bass_energy: float = 0.0
+var _divider_drop_intensity: float = 0.0
+var _divider_prev_bass: float = 0.0
+var _divider_shake_amp_px: float = 0.0
+var _divider_shake_phase: float = 0.0
+var _divider_shake_offset_x: float = 0.0
+var _divider_tier: int = 0
 
 
 func _ready() -> void:
@@ -148,6 +165,23 @@ func _process(p_delta: float) -> void:
 		needs_redraw = true
 		particle_idx -= 1
 
+	if _divider_beat_pulse > 0.002 or _divider_bass_energy > 0.002 or _divider_drop_intensity > 0.002 or _divider_shake_amp_px > 0.02:
+		_divider_beat_pulse *= exp(-DIVIDER_GLOW_DECAY_RATE * dt)
+		if _divider_beat_pulse < 0.002:
+			_divider_beat_pulse = 0.0
+		_divider_bass_energy = maxf(0.0, _divider_bass_energy - (5.5 * dt))
+		_divider_drop_intensity *= exp(-DIVIDER_DROP_DECAY_RATE * dt)
+		if _divider_drop_intensity < 0.002:
+			_divider_drop_intensity = 0.0
+		_divider_shake_amp_px *= exp(-DIVIDER_SHAKE_DECAY_RATE * dt)
+		if _divider_shake_amp_px < 0.04:
+			_divider_shake_amp_px = 0.0
+			_divider_shake_offset_x = 0.0
+		else:
+			_divider_shake_phase += dt * DIVIDER_SHAKE_FREQ_RAD
+			_divider_shake_offset_x = sin(_divider_shake_phase) * _divider_shake_amp_px
+		needs_redraw = true
+
 	if needs_redraw:
 		queue_redraw()
 
@@ -156,13 +190,12 @@ func _draw() -> void:
 	var lane_count: int = _get_active_lane_count()
 	var field_width: float = maxf(1.0, size.x)
 	var field_height: float = maxf(1.0, size.y)
+	var glow_boost: float = get_divider_glow_boost()
 
 	for divider_idx: int in range(lane_count + 1):
-		var x_pos: float = float(divider_idx) * _lane_width
+		var x_pos: float = (float(divider_idx) * _lane_width) + _divider_shake_offset_x
 		var is_outer: bool = divider_idx == 0 or divider_idx == lane_count
-		var divider_color: Color = OUTER_BORDER_COLOR if is_outer else LANE_DIVIDER_COLOR
-		var divider_width: float = 2.0 if is_outer else 1.5
-		draw_line(Vector2(x_pos, 0.0), Vector2(x_pos, field_height), divider_color, divider_width)
+		_draw_reactive_lane_divider(x_pos, field_height, is_outer, glow_boost)
 
 	var receptor_half_h: float = NoteView.DEFAULT_HEAD_HEIGHT_PX * 0.5
 	var top_rail_y: float = _hit_line_y - receptor_half_h
@@ -273,6 +306,40 @@ func _draw_hit_particles() -> void:
 		draw_circle(pos, curr_radius * 2.1, glow_col)
 		draw_line(pos, pos + tail_offset, core_col, curr_radius * 1.15)
 		draw_circle(pos, curr_radius, core_col)
+
+
+func _draw_reactive_lane_divider(
+	p_x: float,
+	p_height: float,
+	p_is_outer: bool,
+	p_glow_boost: float
+) -> void:
+	var p_from: Vector2 = Vector2(p_x, 0.0)
+	var p_to: Vector2 = Vector2(p_x, p_height)
+	var base_core: Color = OUTER_BORDER_COLOR if p_is_outer else LANE_DIVIDER_COLOR
+	var glow_tint: Color = LANE_DIVIDER_GLOW_COLOR.lerp(LANE_DIVIDER_DROP_COLOR, clampf(_divider_drop_intensity, 0.0, 1.0))
+
+	# Soft multi-layer blur halo behind each lane divider line
+	var halo_strength: float = clampf(0.42 + (p_glow_boost * 0.95), 0.35, 1.45)
+	var outer_alpha: float = clampf(0.08 * halo_strength, 0.0, 0.28)
+	var mid_alpha: float = clampf(0.14 * halo_strength, 0.0, 0.42)
+	var inner_alpha: float = clampf(0.22 * halo_strength, 0.0, 0.56)
+
+	var width_scale: float = 1.0 + (p_glow_boost * 0.45)
+	draw_line(p_from, p_to, Color(glow_tint.r, glow_tint.g, glow_tint.b, outer_alpha), 15.0 * width_scale)
+	draw_line(p_from, p_to, Color(glow_tint.r, glow_tint.g, glow_tint.b, mid_alpha), 8.0 * width_scale)
+	draw_line(p_from, p_to, Color(glow_tint.r, glow_tint.g, glow_tint.b, inner_alpha), 4.0 * width_scale)
+
+	# Crisp thin neon cyan divider stroke (~0.24 alpha at rest, brighter on beats & drops)
+	var core_alpha: float = clampf(base_core.a + (p_glow_boost * 0.40), base_core.a, 0.78)
+	var core_color: Color = Color(
+		lerpf(base_core.r, 0.80, p_glow_boost * 0.45),
+		lerpf(base_core.g, 0.98, p_glow_boost * 0.45),
+		1.0,
+		core_alpha
+	)
+	var core_width: float = (2.1 if p_is_outer else 1.6) + (p_glow_boost * 0.5)
+	draw_line(p_from, p_to, core_color, core_width)
 
 
 func _draw_glowing_horizontal_line(
@@ -414,6 +481,30 @@ func get_active_particle_count() -> int:
 	return _hit_particles.size()
 
 
+func get_divider_shake_offset_x() -> float:
+	return _divider_shake_offset_x
+
+
+func get_divider_shake_amplitude_px() -> float:
+	return _divider_shake_amp_px
+
+
+func get_divider_glow_boost() -> float:
+	return clampf(
+		(_divider_beat_pulse * 0.52) + (_divider_bass_energy * 0.28) + (_divider_drop_intensity * 0.55),
+		0.0,
+		1.0
+	)
+
+
+func inject_audio_pulse(p_bass_energy: float, p_drop_intensity: float, p_beat_pulsed: bool) -> void:
+	_divider_bass_energy = clampf(maxf(_divider_bass_energy, p_bass_energy), 0.0, 1.0)
+	_divider_drop_intensity = clampf(maxf(_divider_drop_intensity, p_drop_intensity), 0.0, 1.0)
+	if p_beat_pulsed:
+		_trigger_divider_beat_shake(clampf(maxf(p_bass_energy, p_drop_intensity), 0.35, 1.0))
+	queue_redraw()
+
+
 func _ensure_pool() -> void:
 	var target_count: int = maxi(1, pool_size)
 	var current_total: int = _free_pool.size() + _active_views.size()
@@ -437,6 +528,14 @@ func _connect_dependencies() -> void:
 	if dsp_clock != null:
 		if not dsp_clock.dsp_time_updated.is_connected(_on_dsp_time_updated):
 			dsp_clock.dsp_time_updated.connect(_on_dsp_time_updated)
+		if not dsp_clock.beat_pulsed.is_connected(_on_beat_pulsed):
+			dsp_clock.beat_pulsed.connect(_on_beat_pulsed)
+		if not dsp_clock.intensity_changed.is_connected(_on_intensity_changed):
+			dsp_clock.intensity_changed.connect(_on_intensity_changed)
+
+	if audio_analyzer != null:
+		if not audio_analyzer.spectrum_updated.is_connected(_on_spectrum_updated):
+			audio_analyzer.spectrum_updated.connect(_on_spectrum_updated)
 
 	if input_adapter != null:
 		if not input_adapter.touch_ripple_triggered.is_connected(_on_touch_ripple_triggered):
@@ -459,6 +558,51 @@ func _connect_dependencies() -> void:
 			input_adapter.lane_input_pressed.connect(hit_judge.on_lane_pressed)
 		if not input_adapter.lane_input_released.is_connected(hit_judge.on_lane_released):
 			input_adapter.lane_input_released.connect(hit_judge.on_lane_released)
+
+
+func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
+	var strength: float = clampf(0.45 + (_divider_bass_energy * 0.35) + (0.25 if _divider_tier >= 2 else 0.0), 0.40, 1.0)
+	_trigger_divider_beat_shake(strength)
+
+
+func _on_intensity_changed(p_block: IntensityBlock) -> void:
+	if p_block == null:
+		return
+	_divider_tier = clampi(p_block.tier, IntensityBlock.MIN_TIER, IntensityBlock.MAX_TIER)
+	if _divider_tier >= 2:
+		_divider_drop_intensity = maxf(_divider_drop_intensity, clampf(p_block.energy, 0.65, 1.0))
+		_trigger_divider_beat_shake(0.95)
+
+
+func _on_spectrum_updated(
+	p_bass_energy: float,
+	_p_mid_energy: float,
+	_p_high_energy: float,
+	p_total_energy: float
+) -> void:
+	var bass: float = clampf(p_bass_energy, 0.0, 1.0)
+	var total: float = clampf(p_total_energy, 0.0, 1.0)
+	var bass_jump: float = bass - _divider_prev_bass
+	_divider_prev_bass = bass
+	_divider_bass_energy = maxf(_divider_bass_energy, bass)
+
+	var is_drop: bool = (bass >= 0.72 and total >= 0.72) or (_divider_tier >= 2 and bass >= 0.55)
+	if is_drop:
+		_divider_drop_intensity = maxf(_divider_drop_intensity, clampf((bass * 0.55) + (total * 0.45), 0.70, 1.0))
+
+	if bass_jump >= 0.14 or (bass >= 0.60 and bass_jump >= 0.06):
+		var kick_strength: float = clampf((bass * 0.70) + (bass_jump * 0.60), 0.35, 1.0)
+		_trigger_divider_beat_shake(kick_strength)
+
+
+func _trigger_divider_beat_shake(p_strength: float) -> void:
+	var s: float = clampf(p_strength, 0.0, 1.0)
+	_divider_beat_pulse = maxf(_divider_beat_pulse, clampf(0.55 + (0.45 * s), 0.0, 1.0))
+	var target_shake: float = lerpf(DIVIDER_SHAKE_BEAT_PX, DIVIDER_SHAKE_MAX_PX, maxf(s, _divider_drop_intensity))
+	_divider_shake_amp_px = clampf(maxf(_divider_shake_amp_px, target_shake), 0.0, DIVIDER_SHAKE_MAX_PX)
+	_divider_shake_phase += 1.45
+	_divider_shake_offset_x = sin(_divider_shake_phase) * _divider_shake_amp_px
+	queue_redraw()
 
 
 func _on_touch_ripple_triggered(p_local_pos: Vector2, p_lane: int) -> void:
@@ -651,6 +795,13 @@ func _reset_lane_visual_states() -> void:
 	_touch_ripples.clear()
 	_hit_particles.clear()
 	_hold_spark_accumulator_sec = 0.0
+	_divider_beat_pulse = 0.0
+	_divider_bass_energy = 0.0
+	_divider_drop_intensity = 0.0
+	_divider_prev_bass = 0.0
+	_divider_shake_amp_px = 0.0
+	_divider_shake_offset_x = 0.0
+	_divider_tier = 0
 
 
 func _spawn_visible_notes(p_dsp_time_sec: float) -> void:

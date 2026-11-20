@@ -83,7 +83,7 @@ static func apply_neon_rank_style(p_label: Label, p_rank: String, p_font_size: i
 			core_color = Color(0.95, 0.90, 1.0, 1.0)
 			outline_color = Color(0.68, 0.40, 1.0, 0.96)
 			halo_color = Color(0.62, 0.32, 1.0, 0.70)
-		"D":
+		"D", "F":
 			core_color = Color(1.0, 0.90, 0.92, 1.0)
 			outline_color = Color(1.0, 0.36, 0.52, 0.96)
 			halo_color = Color(1.0, 0.28, 0.46, 0.70)
