@@ -8,6 +8,7 @@ const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 550.0
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
+const HIT_LINE_VERTICAL_LIFT_PX: float = 60.0
 const LANE_DIVIDER_COLOR: Color = Color(0.28, 0.88, 1.0, 0.24)
 const OUTER_BORDER_COLOR: Color = Color(0.32, 0.92, 1.0, 0.34)
 const LANE_DIVIDER_GLOW_COLOR: Color = Color(0.22, 0.86, 1.0, 0.34)
@@ -64,7 +65,7 @@ var _chart: ChartData = null
 var _base_scroll_speed_px_per_sec: float = DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC
 var _speed_multiplier: int = MIN_SPEED_MULTIPLIER
 var _speed_multiplier_configured: bool = false
-var _hit_line_y: float = DEFAULT_PLAY_HEIGHT * 0.84
+var _hit_line_y: float = (DEFAULT_PLAY_HEIGHT * 0.84) - HIT_LINE_VERTICAL_LIFT_PX
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
 var _current_dsp_time_sec: float = 0.0
 var _visual_time_sec: float = 0.0
@@ -394,8 +395,8 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	var lane_count: int = _get_active_lane_count()
 	_lane_width = maxf(1.0, p_play_rect.size.x / float(lane_count))
 
-	var max_hit_line_y: float = maxf(0.0, p_hud_safe_rect.end.y - bottom_padding_px)
-	var target_hit_line_y: float = p_play_rect.size.y * hit_line_height_ratio
+	var max_hit_line_y: float = maxf(0.0, p_hud_safe_rect.end.y - bottom_padding_px - HIT_LINE_VERTICAL_LIFT_PX)
+	var target_hit_line_y: float = (p_play_rect.size.y * hit_line_height_ratio) - HIT_LINE_VERTICAL_LIFT_PX
 	_hit_line_y = clampf(target_hit_line_y, 0.0, max_hit_line_y)
 
 	var active_count: int = _active_views.size()

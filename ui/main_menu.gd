@@ -247,7 +247,7 @@ func _exit_tree() -> void:
 
 
 func _notification(p_what: int) -> void:
-	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST:
+	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST or p_what == NOTIFICATION_WM_CLOSE_REQUEST:
 		handle_back_request()
 
 
@@ -430,7 +430,12 @@ func open_song_setup_modal(p_entry: Dictionary) -> void:
 	if p_entry.is_empty():
 		return
 	_selected_entry = p_entry.duplicate()
-	_modal_song_title_label.text = str(_selected_entry.get("title", "Pista"))
+	var is_demo: bool = _selected_entry.get("is_demo", false) as bool
+	var audio_path: String = str(_selected_entry.get("audio_path", ""))
+	var raw_title: String = str(_selected_entry.get("title", "Pista"))
+	var display_title: String = raw_title if (is_demo or audio_path.is_empty()) else _format_song_display_title(audio_path)
+	_selected_entry["title"] = display_title
+	_modal_song_title_label.text = display_title
 	_refresh_modal_record_label()
 	_refresh_modal_option_styles()
 	if _status_label != null:
@@ -660,6 +665,8 @@ func prepare_session_launch_payload() -> Dictionary:
 	)
 	var cached_chart: ChartData = _chart_cache_repo.load_cached_chart(cache_key)
 	if cached_chart != null:
+		if not title.is_empty():
+			cached_chart.title = title
 		payload["preloaded_chart"] = cached_chart
 		payload["preloaded_stream"] = stream
 		payload["from_cache"] = true
@@ -1071,6 +1078,13 @@ func _sync_live_audio_monitoring() -> void:
 		reactive_background.set_menu_bgm_active(should_monitor)
 
 
+func _format_song_display_title(p_raw_path: String) -> String:
+	var base_name: String = p_raw_path.get_file().get_basename()
+	var decoded: String = base_name.uri_decode().uri_decode()
+	var cleaned: String = " ".join(decoded.replace("\t", " ").split(" ", false)).strip_edges()
+	return cleaned if not cleaned.is_empty() else "Pista"
+
+
 func _reload_all_track_lists() -> void:
 	_song_entries.clear()
 	_imported_entries.clear()
@@ -1095,7 +1109,7 @@ func _reload_all_track_lists() -> void:
 				"is_demo": false,
 				"song_key": song_key,
 				"audio_path": song_path,
-				"title": song_path.get_file().get_basename(),
+				"title": _format_song_display_title(song_path),
 				"source_tag": "LOCAL",
 			})
 
@@ -1110,7 +1124,7 @@ func _reload_all_track_lists() -> void:
 				"is_demo": false,
 				"song_key": recent_key,
 				"audio_path": recent_path,
-				"title": recent_path.get_file().get_basename(),
+				"title": _format_song_display_title(recent_path),
 				"source_tag": "IMPORTADA",
 			})
 
@@ -1248,7 +1262,9 @@ func _rebuild_entry_list(
 	for idx: int in range(count):
 		var entry: Dictionary = p_entries[idx]
 		var song_key: String = str(entry.get("song_key", ""))
-		var title: String = str(entry.get("title", "Pista"))
+		var entry_is_demo: bool = entry.get("is_demo", false) as bool
+		var entry_audio_path: String = str(entry.get("audio_path", ""))
+		var title: String = str(entry.get("title", "Pista")) if (entry_is_demo or entry_audio_path.is_empty()) else _format_song_display_title(entry_audio_path)
 		var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
 		var has_record: bool = summary.get("has_record", false) as bool
 		var best_rank: String = str(summary.get("best_rank", ""))

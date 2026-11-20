@@ -67,7 +67,7 @@ func _ready() -> void:
 
 
 func _notification(p_what: int) -> void:
-	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST:
+	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST or p_what == NOTIFICATION_WM_CLOSE_REQUEST:
 		handle_back_request()
 
 
@@ -156,7 +156,9 @@ func start_audio_file_session(
 
 		var file_basename: String = p_audio_path.get_file().get_basename()
 		var song_id: String = file_basename if not file_basename.is_empty() else "custom_track"
-		var resolved_title: String = p_title if not p_title.is_empty() else song_id
+		var decoded_title: String = file_basename.uri_decode().uri_decode().strip_edges()
+		var fallback_title: String = decoded_title if not decoded_title.is_empty() else song_id
+		var resolved_title: String = p_title if not p_title.is_empty() else fallback_title
 
 		var generator: AutoChartGenerator = AutoChartGenerator.new()
 		chart = generator.generate_from_analysis(

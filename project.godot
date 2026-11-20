@@ -11,8 +11,10 @@ config_version=5
 [application]
 
 config/name="FeelYourBeats (FyB)"
+config/version="1.0.1"
 run/main_scene="res://ui/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
+config/icon="uid://b06gsyb3dk40g"
 
 [display]
 
@@ -28,3 +30,4 @@ window/size/edge_to_edge=true
 [rendering]
 
 renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
