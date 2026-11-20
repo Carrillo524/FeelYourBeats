@@ -22,10 +22,12 @@ const AMBIENT_ZOOM_AMPLITUDE: float = 0.018
 const SHAKE_DECAY_SPEED: float = 8.5
 const SHAKE_OSCILLATION_SPEED: float = 42.0
 const MAX_SHAKE_PX: float = 6.5
-const EDGE_GLOW_ATTACK_SPEED: float = 11.0
-const EDGE_GLOW_DECAY_SPEED: float = 4.2
-const EDGE_DROP_ATTACK_SPEED: float = 10.5
-const EDGE_DROP_DECAY_SPEED: float = 2.4
+const EDGE_BEAT_DECAY_RATE: float = 14.5
+const EDGE_DROP_INTENSITY_DECAY_RATE: float = 6.5
+const EDGE_DROP_DECAY_SPEED: float = 5.0
+const EDGE_WIDTH_RELAX_SPEED: float = 6.0
+const EDGE_BASE_WIDTH: float = 0.10
+const EDGE_EPSILON: float = 0.004
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
@@ -33,8 +35,8 @@ const EDGE_DROP_DECAY_SPEED: float = 2.4
 @export var edge_primary_color: Color = Color(0.16, 0.88, 1.0, 1.0)
 @export var edge_drop_color: Color = Color(1.0, 0.26, 0.86, 1.0)
 
-var edge_glow_intensity: float = 0.28
-var edge_glow_width: float = 0.11
+var edge_glow_intensity: float = 0.0
+var edge_glow_width: float = EDGE_BASE_WIDTH
 var edge_drop_boost: float = 0.0
 
 var _shader_material: ShaderMaterial = null
@@ -248,8 +250,9 @@ func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
 	_beat_pulse_count += 1
 
 	var tier_norm: float = float(_current_tier) / 3.0
-	var kick_strength: float = clampf(0.42 + (0.38 * _smoothed_bass) + (0.20 * tier_norm), 0.25, 1.0)
+	var kick_strength: float = clampf(0.42 + (0.38 * maxf(_smoothed_bass, _target_bass)) + (0.20 * tier_norm), 0.25, 1.0)
 	_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+	_trigger_edge_beat_impulse(kick_strength)
 	bass_kick_pulsed.emit(kick_strength)
 	_sync_shader_parameters()
 
@@ -263,6 +266,7 @@ func _on_intensity_changed(p_block: IntensityBlock) -> void:
 	_intensity_change_count += 1
 	if _current_tier >= 2 and _current_tier > prev_tier:
 		_shake_intensity = clampf(maxf(_shake_intensity, 0.85), 0.0, 1.0)
+		_trigger_edge_beat_impulse(0.95)
 		bass_kick_pulsed.emit(0.95)
 	_sync_shader_parameters()
 
@@ -274,20 +278,34 @@ func _on_spectrum_updated(
 	p_total_energy: float
 ) -> void:
 	var clamped_bass: float = clampf(p_bass_energy, 0.0, 1.0)
+	var clamped_total: float = clampf(p_total_energy, 0.0, 1.0)
 	var bass_jump: float = clamped_bass - _prev_bass_sample
 	_prev_bass_sample = clamped_bass
 
 	_target_bass = clamped_bass
 	_target_mid = clampf(p_mid_energy, 0.0, 1.0)
 	_target_high = clampf(p_high_energy, 0.0, 1.0)
-	_target_energy = clampf(maxf(_target_energy * 0.75, p_total_energy), 0.15, 1.0)
+	_target_energy = clampf(maxf(_target_energy * 0.75, clamped_total), 0.0, 1.0)
 	_spectrum_update_count += 1
 
-	if bass_jump >= 0.14 or (clamped_bass >= 0.58 and bass_jump >= 0.06):
+	var is_bass_transient: bool = bass_jump >= 0.14 or (clamped_bass >= 0.58 and bass_jump >= 0.06)
+	var is_gameplay_drop: bool = (
+		_backdrop_mode == BackdropMode.GAMEPLAY
+		and clamped_bass >= 0.78
+		and clamped_total >= 0.78
+	)
+
+	if is_bass_transient:
 		var tier_norm: float = float(_current_tier) / 3.0
 		var kick_strength: float = clampf(clamped_bass * 0.72 + bass_jump * 0.65, 0.25, 1.0)
 		_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+		_trigger_edge_beat_impulse(kick_strength)
 		bass_kick_pulsed.emit(kick_strength)
+	elif is_gameplay_drop:
+		var drop_strength: float = clampf((clamped_bass * 0.55) + (clamped_total * 0.45), 0.75, 1.0)
+		_trigger_edge_drop_impulse(drop_strength)
+
+	_sync_shader_parameters()
 
 
 func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
@@ -332,6 +350,50 @@ func _setup_shader_material() -> void:
 	material = _shader_material
 
 
+func _is_gameplay_drop_active() -> bool:
+	if _backdrop_mode != BackdropMode.GAMEPLAY:
+		return false
+	var peak_bass: float = maxf(_smoothed_bass, _target_bass)
+	var peak_energy: float = maxf(_current_energy, _target_energy)
+	if peak_bass >= 0.72 and peak_energy >= 0.72:
+		return true
+	if _current_tier >= 2 and peak_bass >= 0.55:
+		return true
+	return false
+
+
+func _trigger_edge_beat_impulse(p_strength: float) -> void:
+	var s: float = clampf(p_strength, 0.0, 1.0)
+	if _backdrop_mode == BackdropMode.MENU:
+		if not _menu_bgm_active:
+			return
+		var menu_peak: float = lerpf(0.42, 0.58, s)
+		var menu_width: float = lerpf(0.11, 0.145, s)
+		edge_glow_intensity = maxf(edge_glow_intensity, menu_peak)
+		edge_glow_width = maxf(edge_glow_width, menu_width)
+		edge_drop_boost = 0.0
+		return
+
+	if _is_gameplay_drop_active():
+		_trigger_edge_drop_impulse(s)
+		return
+
+	var beat_peak: float = lerpf(0.50, 0.68, s)
+	var beat_width: float = lerpf(0.12, 0.155, s)
+	edge_glow_intensity = maxf(edge_glow_intensity, beat_peak)
+	edge_glow_width = maxf(edge_glow_width, beat_width)
+
+
+func _trigger_edge_drop_impulse(p_strength: float) -> void:
+	var s: float = clampf(p_strength, 0.0, 1.0)
+	var drop_peak: float = lerpf(0.85, 1.0, s)
+	var drop_width: float = lerpf(0.21, 0.25, s)
+	var drop_mix: float = lerpf(0.85, 1.0, s)
+	edge_glow_intensity = maxf(edge_glow_intensity, drop_peak)
+	edge_glow_width = maxf(edge_glow_width, drop_width)
+	edge_drop_boost = maxf(edge_drop_boost, drop_mix)
+
+
 func _update_edge_halo(p_delta: float) -> void:
 	var ref_size: Vector2 = size
 	if ref_size.x <= 1.0 or ref_size.y <= 1.0:
@@ -342,62 +404,21 @@ func _update_edge_halo(p_delta: float) -> void:
 			ref_size = Vector2(1080.0, 1920.0)
 	_aspect_ratio = clampf(ref_size.x / maxf(1.0, ref_size.y), 0.25, 4.0)
 
-	var ambient_wave: float = sin(_ambient_phase) * 0.5 + 0.5
-	var target_drop: float = 0.0
-	var target_intensity: float = 0.10
-	var target_width: float = 0.09
+	# Zero idle glow: impulses decay exponentially back to 0.0 between beats and after drops
+	var decay_rate: float = EDGE_DROP_INTENSITY_DECAY_RATE if edge_drop_boost > 0.25 else EDGE_BEAT_DECAY_RATE
+	edge_glow_intensity *= exp(-decay_rate * p_delta)
+	if edge_glow_intensity < EDGE_EPSILON:
+		edge_glow_intensity = 0.0
 
-	if _backdrop_mode == BackdropMode.MENU:
-		target_drop = 0.0
-		if not _menu_bgm_active:
-			target_intensity = 0.10 + (ambient_wave * 0.018)
-			target_width = 0.085
-		else:
-			target_intensity = clampf(
-				0.28 + (_smoothed_bass * 0.22) + (_beat_pulse * 0.12) + (ambient_wave * 0.03),
-				0.28,
-				0.62
-			)
-			target_width = clampf(
-				0.105 + (_smoothed_bass * 0.035) + (_beat_pulse * 0.018),
-				0.10,
-				0.16
-			)
-	else:
-		var spectral_drop: bool = _smoothed_bass >= 0.68 and _current_energy >= 0.68
-		var tier_drop: bool = _current_tier >= 2
-		if spectral_drop or tier_drop:
-			var tier_bonus: float = 0.28 if tier_drop else 0.0
-			target_drop = clampf(
-				(_smoothed_bass * 0.52) + (_current_energy * 0.34) + (_beat_pulse * 0.30) + tier_bonus - 0.18,
-				0.0,
-				1.0
-			)
-		else:
-			target_drop = 0.0
+	edge_drop_boost *= exp(-EDGE_DROP_DECAY_SPEED * p_delta)
+	if edge_drop_boost < EDGE_EPSILON:
+		edge_drop_boost = 0.0
 
-		var drop_rate: float = EDGE_DROP_ATTACK_SPEED if target_drop > edge_drop_boost else EDGE_DROP_DECAY_SPEED
-		edge_drop_boost = lerpf(edge_drop_boost, target_drop, clampf(drop_rate * p_delta, 0.0, 1.0))
-
-		var base_intensity: float = clampf(
-			0.35 + (_smoothed_bass * 0.16) + (_beat_pulse * 0.09) + (_current_energy * 0.06),
-			0.35,
-			0.60
-		)
-		var drop_intensity: float = clampf(0.88 + (_beat_pulse * 0.08) + (_smoothed_bass * 0.06), 0.85, 1.0)
-		target_intensity = clampf(lerpf(base_intensity, drop_intensity, edge_drop_boost), 0.35, 1.0)
-
-		var base_width: float = clampf(0.11 + (_smoothed_bass * 0.025) + (_beat_pulse * 0.015), 0.10, 0.16)
-		target_width = clampf(lerpf(base_width, 0.23, edge_drop_boost), 0.10, 0.24)
-
-	if _backdrop_mode == BackdropMode.MENU:
-		edge_drop_boost = lerpf(edge_drop_boost, 0.0, clampf(EDGE_DROP_DECAY_SPEED * p_delta, 0.0, 1.0))
-
-	var glow_rate: float = EDGE_GLOW_ATTACK_SPEED if target_intensity > edge_glow_intensity else EDGE_GLOW_DECAY_SPEED
-	edge_glow_intensity = lerpf(edge_glow_intensity, target_intensity, clampf(glow_rate * p_delta, 0.0, 1.0))
-
-	var width_rate: float = EDGE_GLOW_ATTACK_SPEED if target_width > edge_glow_width else EDGE_GLOW_DECAY_SPEED
-	edge_glow_width = lerpf(edge_glow_width, target_width, clampf(width_rate * p_delta, 0.0, 1.0))
+	edge_glow_width = lerpf(
+		edge_glow_width,
+		EDGE_BASE_WIDTH,
+		clampf(EDGE_WIDTH_RELAX_SPEED * p_delta, 0.0, 1.0)
+	)
 
 
 func _sync_shader_parameters() -> void:

@@ -27,8 +27,9 @@ En cumplimiento con `AGENTS.md`:
 - `lane_hit_energies: vec4`: Energía de destello por carril (`x = lane 0`, `y = lane 1`, `z = lane 2`, `w = lane 3`) modulada exclusivamente por `HitJudge.note_judged(lane, grade, error_ms, combo)`.
 - **Halo Neón Difuminado Perimetral (`aspect_ratio`, `edge_glow_intensity`, `edge_glow_width`, `edge_drop_boost`, `edge_primary_color`, `edge_drop_color`):**
   - Calcula la distancia al borde corregida por `aspect_ratio` (`dist_y = min(UV.y, 1.0 - UV.y) / aspect_ratio`) para que los 4 bordes tengan exactamente el mismo grosor visual en pantallas 20:9 / 9:16, proyectando un halo neón difuminado multicapa hacia el interior y manteniendo el centro 100 % limpio y oscuro para máxima legibilidad.
-  - En modo **Menú (`BackdropMode.MENU`)**: pulsa orgánicamente con el BGM (`edge_glow_intensity` ~`0.28–0.62`) y desciende a brillo reposado (~`0.10`) cuando el BGM está apagado.
-  - En modo **Gameplay (`BackdropMode.GAMEPLAY`)**: mantiene un marco neón vivo (~`0.35–0.60`) y al detectar un **drop** (alta energía espectral + graves intensos o `intensity_tier >= 2`) dispara `edge_drop_boost`, ampliando `edge_glow_width` hasta ~`0.23`, elevando `edge_glow_intensity` (`0.85–1.0`) y virando el tono hacia magenta/dorado eléctrico con decaimiento suave (`lerp`).
+  - **Base `0.0` en reposo:** sin brillo constante en los bordes; en silencio, con BGM apagado o entre golpes, `edge_glow_intensity` decae exponencialmente hasta `0.0` (borde completamente limpio e invisible).
+  - **Impulsos por Beat:** cada golpe (`beat_pulsed` o pico transitorio de `bass_energy`) dispara un destello difuminado (`~0.42–0.58` en el BGM de `MainMenu` y `~0.50–0.68` en `GameSession`) con decaimiento exponencial rápido (`~160–220 ms` hacia `0.0`), latiendo únicamente al ritmo de los beats.
+  - **Drops en `GameSession`:** cuando `AudioAnalyzer` detecta un *drop* (alta energía espectral + graves sostenidos o `intensity_tier >= 2`), eleva el pulso del borde (`0.85–1.0`), amplía `edge_glow_width` (`~0.21–0.25`) y vira el tono hacia magenta/dorado neón eléctrico, decayendo limpiamente de vuelta a `0.0` al finalizar el drop.
 
 ### 2.2. Aislamiento de Audio
 - `ReactiveBackground` **no accede** a `AudioServer`, buses de audio ni buffers FFT; únicamente consume señales de `DSPClock` y `HitJudge`.
