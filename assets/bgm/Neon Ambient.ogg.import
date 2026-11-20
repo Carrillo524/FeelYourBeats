@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://d1lddnpes4ed5"
+path="res://.godot/imported/Neon Ambient.ogg-6859c5b96bb3dfa0719fabeca528ac90.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/bgm/Neon Ambient.ogg"
+dest_files=["res://.godot/imported/Neon Ambient.ogg-6859c5b96bb3dfa0719fabeca528ac90.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

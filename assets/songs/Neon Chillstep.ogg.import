@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://bcf0kwbp7trw3"
+path="res://.godot/imported/Neon Chillstep.ogg-cfe4650356f79033ba023639665bd48f.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/songs/Neon Chillstep.ogg"
+dest_files=["res://.godot/imported/Neon Chillstep.ogg-cfe4650356f79033ba023639665bd48f.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
