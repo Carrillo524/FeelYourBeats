@@ -32,14 +32,14 @@ const EDGE_EPSILON: float = 0.004
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
 @export var audio_analyzer: AudioAnalyzer = null
-@export var edge_primary_color: Color = Color(0.16, 0.88, 1.0, 1.0)
-@export var edge_drop_color: Color = Color(1.0, 0.26, 0.86, 1.0)
+@export var edge_primary_color: Color = Color(0.28, 0.86, 1.0, 1.0)
+@export var edge_drop_color: Color = Color(0.56, 0.94, 1.0, 1.0)
 
 var edge_glow_intensity: float = 0.0
 var edge_glow_width: float = EDGE_BASE_WIDTH
 var edge_drop_boost: float = 0.0
 var wave_amplitude: float = 0.65
-var wave_filament_intensity: float = 0.42
+var wave_blur_intensity: float = 0.34
 
 var _shader_material: ShaderMaterial = null
 var _backdrop_mode: int = BackdropMode.GAMEPLAY
@@ -202,8 +202,8 @@ func get_wave_amplitude() -> float:
 	return wave_amplitude
 
 
-func get_wave_filament_intensity() -> float:
-	return wave_filament_intensity
+func get_wave_blur_intensity() -> float:
+	return wave_blur_intensity
 
 
 func get_smoothed_mid_energy() -> float:
@@ -444,26 +444,26 @@ func _update_edge_halo(p_delta: float) -> void:
 		1.0
 	)
 	var target_wave_amp: float = 0.42
-	var target_filament: float = 0.34
+	var target_blur_intensity: float = 0.30
 	if _backdrop_mode == BackdropMode.MENU:
 		if _menu_bgm_active:
 			target_wave_amp = clampf(0.55 + (spectral_activity * 0.45) + (edge_glow_intensity * 0.25), 0.50, 1.10)
-			target_filament = clampf(0.42 + (spectral_activity * 0.36) + (edge_glow_intensity * 0.24), 0.38, 0.90)
+			target_blur_intensity = clampf(0.36 + (spectral_activity * 0.32) + (edge_glow_intensity * 0.24), 0.32, 0.86)
 	else:
 		target_wave_amp = clampf(
 			0.62 + (spectral_activity * 0.55) + (edge_glow_intensity * 0.28) + (edge_drop_boost * 0.42),
 			0.55,
 			1.50
 		)
-		target_filament = clampf(
-			0.48 + (spectral_activity * 0.42) + (edge_glow_intensity * 0.28) + (edge_drop_boost * 0.30),
-			0.44,
-			1.20
+		target_blur_intensity = clampf(
+			0.40 + (spectral_activity * 0.38) + (edge_glow_intensity * 0.26) + (edge_drop_boost * 0.30),
+			0.36,
+			1.12
 		)
 
 	var wave_lerp: float = clampf(8.5 * p_delta, 0.0, 1.0)
 	wave_amplitude = lerpf(wave_amplitude, target_wave_amp, wave_lerp)
-	wave_filament_intensity = lerpf(wave_filament_intensity, target_filament, wave_lerp)
+	wave_blur_intensity = lerpf(wave_blur_intensity, target_blur_intensity, wave_lerp)
 
 
 func _sync_shader_parameters() -> void:
@@ -484,6 +484,6 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_glow_width", edge_glow_width)
 	_shader_material.set_shader_parameter("edge_drop_boost", edge_drop_boost)
 	_shader_material.set_shader_parameter("wave_amplitude", wave_amplitude)
-	_shader_material.set_shader_parameter("wave_filament_intensity", wave_filament_intensity)
+	_shader_material.set_shader_parameter("wave_blur_intensity", wave_blur_intensity)
 	_shader_material.set_shader_parameter("edge_primary_color", edge_primary_color)
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
