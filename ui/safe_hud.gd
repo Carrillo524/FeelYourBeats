@@ -70,6 +70,10 @@ const COLOR_JUDGMENT_MISS: Color = Color(1.0, 0.34, 0.44, 1.0)
 @export var ui_sfx_player: UiSfxPlayer = null
 
 var _safe_container: Control = null
+var _top_bar_margin: MarginContainer = null
+var _top_bar_hbox: HBoxContainer = null
+var _left_stats_vbox: VBoxContainer = null
+var _right_controls_vbox: VBoxContainer = null
 var _score_label: Label = null
 var _accuracy_label: Label = null
 var _combo_label: Label = null
@@ -242,26 +246,9 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	var safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
 	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
 
-	var pause_x: float = safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0
-	_pause_button.position = Vector2(pause_x, 14.0)
-	_pause_button.size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
-
-	# TOP_CENTER MELOBEAT neon danger bar guaranteed clear of SCORE (left) and PAUSA (right)
-	var danger_w: float = clampf(safe_w * 0.25, 140.0, 260.0)
-	var danger_x: float = (safe_w - danger_w) * 0.5
-	if danger_x + danger_w > pause_x - 16.0:
-		danger_x = maxf(160.0, pause_x - danger_w - 16.0)
-	var danger_y: float = 14.0 + ((PAUSE_BUTTON_HEIGHT_PX - DANGER_BAR_HEIGHT_PX) * 0.5)
-	_danger_bar_track.position = Vector2(danger_x, danger_y)
-	_danger_bar_track.size = Vector2(danger_w, DANGER_BAR_HEIGHT_PX)
-	_danger_bar_track.pivot_offset = _danger_bar_track.size * 0.5
-
-	var score_w: float = maxf(120.0, danger_x - 32.0)
-	_score_label.position = Vector2(16.0, 12.0)
-	_score_label.size = Vector2(score_w, 64.0)
-
-	_accuracy_label.position = Vector2(16.0, 74.0)
-	_accuracy_label.size = Vector2(score_w, 54.0)
+	if _top_bar_margin != null:
+		_top_bar_margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+		_top_bar_margin.offset_bottom = _top_bar_margin.get_combined_minimum_size().y
 
 	_sync_danger_bar_fill_rect()
 
@@ -706,9 +693,13 @@ func _sync_danger_bar_fill_rect() -> void:
 		return
 
 	var ratio: float = clampf(_displayed_danger_ratio, 0.0, 1.0)
+	var track_size: Vector2 = _danger_bar_track.size
+	if track_size.x <= 1.0 or track_size.y <= 1.0:
+		track_size = _danger_bar_track.custom_minimum_size
+	_danger_bar_track.pivot_offset = track_size * 0.5
 	var inner_pad: float = 4.0
-	var inner_w: float = maxf(0.0, _danger_bar_track.size.x - (inner_pad * 2.0))
-	var inner_h: float = maxf(4.0, _danger_bar_track.size.y - (inner_pad * 2.0))
+	var inner_w: float = maxf(0.0, track_size.x - (inner_pad * 2.0))
+	var inner_h: float = maxf(4.0, track_size.y - (inner_pad * 2.0))
 	var fill_w: float = inner_w * ratio
 
 	_danger_bar_fill.position = Vector2(inner_pad, inner_pad)
@@ -801,19 +792,68 @@ func _ensure_ui_nodes() -> void:
 	_safe_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_safe_container)
 
+	_top_bar_margin = MarginContainer.new()
+	_top_bar_margin.name = "TopBarMargin"
+	_top_bar_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_bar_margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_top_bar_margin.add_theme_constant_override("margin_left", 16)
+	_top_bar_margin.add_theme_constant_override("margin_right", 16)
+	_top_bar_margin.add_theme_constant_override("margin_top", 12)
+	_top_bar_margin.add_theme_constant_override("margin_bottom", 0)
+	_safe_container.add_child(_top_bar_margin)
+
+	_top_bar_hbox = HBoxContainer.new()
+	_top_bar_hbox.name = "TopBarHBox"
+	_top_bar_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_bar_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_top_bar_hbox.add_theme_constant_override("separation", 20)
+	_top_bar_margin.add_child(_top_bar_hbox)
+
+	_left_stats_vbox = VBoxContainer.new()
+	_left_stats_vbox.name = "LeftStatsVBox"
+	_left_stats_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_left_stats_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_left_stats_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_left_stats_vbox.add_theme_constant_override("separation", 4)
+	_top_bar_hbox.add_child(_left_stats_vbox)
+
 	_score_label = Label.new()
 	_score_label.name = "ScoreLabel"
-	_score_label.clip_text = true
+	_score_label.clip_text = false
+	_score_label.clip_contents = false
+	_score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_score_label.add_theme_font_size_override("font_size", SCORE_FONT_SIZE)
-	_safe_container.add_child(_score_label)
+	_left_stats_vbox.add_child(_score_label)
 
 	_accuracy_label = Label.new()
 	_accuracy_label.name = "AccuracyLabel"
-	_accuracy_label.clip_text = true
+	_accuracy_label.clip_text = false
+	_accuracy_label.clip_contents = false
+	_accuracy_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_accuracy_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_accuracy_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_accuracy_label.add_theme_font_size_override("font_size", ACCURACY_FONT_SIZE)
-	_safe_container.add_child(_accuracy_label)
+	_left_stats_vbox.add_child(_accuracy_label)
+
+	_right_controls_vbox = VBoxContainer.new()
+	_right_controls_vbox.name = "RightControlsVBox"
+	_right_controls_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_right_controls_vbox.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_right_controls_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_right_controls_vbox.add_theme_constant_override("separation", 12)
+	_top_bar_hbox.add_child(_right_controls_vbox)
+
+	_pause_button = Button.new()
+	_pause_button.name = "PauseButton"
+	_pause_button.text = "PAUSA"
+	_pause_button.custom_minimum_size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
+	_pause_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_button.add_theme_font_size_override("font_size", PAUSE_BUTTON_FONT_SIZE)
+	_pause_button.pressed.connect(open_pause_menu)
+	_right_controls_vbox.add_child(_pause_button)
 
 	_style_danger_track = StyleBoxFlat.new()
 	_style_danger_track.bg_color = Color(0.03, 0.06, 0.14, 0.78)
@@ -832,9 +872,11 @@ func _ensure_ui_nodes() -> void:
 
 	_danger_bar_track = Panel.new()
 	_danger_bar_track.name = "DangerBarTrack"
+	_danger_bar_track.custom_minimum_size = Vector2(PAUSE_BUTTON_WIDTH_PX, DANGER_BAR_HEIGHT_PX)
+	_danger_bar_track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_danger_bar_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_danger_bar_track.add_theme_stylebox_override("panel", _style_danger_track)
-	_safe_container.add_child(_danger_bar_track)
+	_right_controls_vbox.add_child(_danger_bar_track)
 
 	_danger_bar_fill = Panel.new()
 	_danger_bar_fill.name = "DangerBarFill"
@@ -869,14 +911,6 @@ func _ensure_ui_nodes() -> void:
 	_countdown_label.add_theme_font_size_override("font_size", COUNTDOWN_FONT_SIZE)
 	_countdown_label.visible = false
 	_safe_container.add_child(_countdown_label)
-
-	_pause_button = Button.new()
-	_pause_button.name = "PauseButton"
-	_pause_button.text = "PAUSA"
-	_pause_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_pause_button.add_theme_font_size_override("font_size", PAUSE_BUTTON_FONT_SIZE)
-	_pause_button.pressed.connect(open_pause_menu)
-	_safe_container.add_child(_pause_button)
 
 	_pause_overlay = ColorRect.new()
 	_pause_overlay.name = "PauseOverlay"
