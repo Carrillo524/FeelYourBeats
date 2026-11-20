@@ -27,7 +27,9 @@ const EDGE_DROP_INTENSITY_DECAY_RATE: float = 6.5
 const EDGE_DROP_DECAY_SPEED: float = 5.0
 const EDGE_WIDTH_RELAX_SPEED: float = 6.0
 const EDGE_BASE_WIDTH: float = 0.008
-const EDGE_MAX_REACH: float = 0.030
+const EDGE_MAX_REACH_VERTICAL: float = 0.028
+const EDGE_MAX_REACH_LATERAL: float = 0.044
+const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
@@ -224,11 +226,23 @@ func get_wave_blur_intensity() -> float:
 
 
 func get_effective_wave_reach() -> float:
+	return get_effective_lateral_wave_reach()
+
+
+func get_effective_lateral_wave_reach() -> float:
 	if not perimeter_wave_enabled:
 		return 0.0
-	var spectral_max: float = ((_smoothed_bass * 0.007) + (_smoothed_mid * 0.005) + (_smoothed_high * 0.003)) * wave_amplitude
-	var beat_max: float = (edge_glow_intensity * 0.012) + (edge_drop_boost * 0.012)
-	return clampf(0.010 + spectral_max + beat_max, 0.006, EDGE_MAX_REACH)
+	var spectral_max: float = ((_smoothed_bass * 0.0075) + (_smoothed_mid * 0.0055) + (_smoothed_high * 0.0035)) * wave_amplitude
+	var beat_max: float = (edge_glow_intensity * 0.013) + (edge_drop_boost * 0.015)
+	return clampf(0.015 + ((spectral_max + beat_max) * EDGE_LATERAL_WAVE_BOOST), 0.005, EDGE_MAX_REACH_LATERAL)
+
+
+func get_effective_vertical_wave_reach() -> float:
+	if not perimeter_wave_enabled:
+		return 0.0
+	var spectral_max: float = ((_smoothed_bass * 0.0075) + (_smoothed_mid * 0.0055) + (_smoothed_high * 0.0035)) * wave_amplitude
+	var beat_max: float = (edge_glow_intensity * 0.013) + (edge_drop_boost * 0.015)
+	return clampf(0.010 + spectral_max + beat_max, 0.006, EDGE_MAX_REACH_VERTICAL)
 
 
 func get_effective_wave_opacity() -> float:
@@ -437,7 +451,7 @@ func _trigger_edge_drop_impulse(p_strength: float) -> void:
 		return
 	var s: float = clampf(p_strength, 0.0, 1.0)
 	var drop_peak: float = lerpf(0.85, 1.0, s)
-	var drop_width: float = lerpf(0.024, EDGE_MAX_REACH, s)
+	var drop_width: float = lerpf(0.032, EDGE_MAX_REACH_LATERAL, s)
 	var drop_mix: float = lerpf(0.85, 1.0, s)
 	edge_glow_intensity = maxf(edge_glow_intensity, drop_peak)
 	edge_glow_width = maxf(edge_glow_width, drop_width)
@@ -518,6 +532,7 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_glow_width", edge_glow_width)
 	_shader_material.set_shader_parameter("edge_drop_boost", edge_drop_boost)
 	_shader_material.set_shader_parameter("wave_amplitude", wave_amplitude)
+	_shader_material.set_shader_parameter("lateral_wave_boost", EDGE_LATERAL_WAVE_BOOST)
 	_shader_material.set_shader_parameter("wave_blur_intensity", wave_blur_intensity)
 	_shader_material.set_shader_parameter("edge_primary_color", edge_primary_color)
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
