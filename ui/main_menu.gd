@@ -12,6 +12,9 @@ const SONGS_DIR_PATH: String = "res://assets/songs"
 const RECENT_TRACKS_CONFIG_PATH: String = "user://recent_tracks.cfg"
 const MAX_RECENT_TRACKS: int = 16
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
+const ANDROID_PERM_READ_MEDIA_AUDIO: String = "android.permission.READ_MEDIA_AUDIO"
+const ANDROID_PERM_READ_EXTERNAL_STORAGE: String = "android.permission.READ_EXTERNAL_STORAGE"
+const ANDROID_PERMISSION_DENIED_MESSAGE: String = "Permiso de audio denegado. Habilita el acceso a música y audio en los Ajustes de Android para importar canciones."
 
 const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
 const SONG_ROW_HEIGHT_PX: float = 252.0
@@ -90,6 +93,7 @@ var _songs_list_vbox: VBoxContainer = null
 
 var _import_tab_container: Control = null
 var _browse_button: Button = null
+var _import_status_label: Label = null
 var _import_list_vbox: VBoxContainer = null
 
 var _settings_tab_container: Control = null
@@ -154,6 +158,7 @@ var _selected_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 var _selected_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
+var _pending_import_after_permission: bool = false
 
 var _pulse_phase: float = 0.0
 var _title_bass_boost: float = 0.0
@@ -792,12 +797,95 @@ func _on_play_button_pressed() -> void:
 
 
 func _on_browse_button_pressed() -> void:
+	request_audio_import()
+
+
+func has_android_audio_permission(p_granted: PackedStringArray) -> bool:
+	for i: int in range(p_granted.size()):
+		var perm: String = p_granted[i]
+		if perm == ANDROID_PERM_READ_MEDIA_AUDIO or perm == ANDROID_PERM_READ_EXTERNAL_STORAGE:
+			return true
+	return false
+
+
+func request_audio_import(
+	p_platform_name: String = OS.get_name(),
+	p_granted_override: PackedStringArray = PackedStringArray(),
+	p_use_override: bool = false
+) -> bool:
+	if _file_dialog == null:
+		return false
+
+	if p_platform_name != "Android":
+		_pending_import_after_permission = false
+		_set_import_status("")
+		_open_import_file_dialog(p_platform_name)
+		return true
+
+	var granted_perms: PackedStringArray = p_granted_override if p_use_override else OS.get_granted_permissions()
+	if has_android_audio_permission(granted_perms):
+		_pending_import_after_permission = false
+		_set_import_status("")
+		_open_import_file_dialog(p_platform_name)
+		return true
+
+	_pending_import_after_permission = true
+	_set_import_status("Solicitando permiso de acceso a audio...", false)
+	if not p_use_override:
+		var granted_immediately: bool = OS.request_permissions()
+		if granted_immediately or has_android_audio_permission(OS.get_granted_permissions()):
+			_pending_import_after_permission = false
+			_set_import_status("")
+			_open_import_file_dialog(p_platform_name)
+			return true
+	return false
+
+
+func get_import_status_text() -> String:
+	return _import_status_label.text if _import_status_label != null else ""
+
+
+func _open_import_file_dialog(p_platform_name: String) -> void:
 	if _file_dialog == null:
 		return
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.use_native_dialog = true
+	if p_platform_name == "Android":
+		var music_dir: String = OS.get_system_dir(OS.SYSTEM_DIR_MUSIC)
+		if not music_dir.is_empty() and DirAccess.dir_exists_absolute(music_dir):
+			_file_dialog.current_dir = music_dir
 	_file_dialog.popup_centered_ratio(0.85)
 
 
+func _on_android_permissions_result(p_permission: String, p_granted: bool) -> void:
+	if not _pending_import_after_permission:
+		return
+	var is_audio_perm: bool = (
+		p_permission == ANDROID_PERM_READ_MEDIA_AUDIO
+		or p_permission == ANDROID_PERM_READ_EXTERNAL_STORAGE
+	)
+	if p_granted or has_android_audio_permission(OS.get_granted_permissions()):
+		_pending_import_after_permission = false
+		_set_import_status("")
+		_open_import_file_dialog("Android")
+	elif is_audio_perm or p_permission.is_empty():
+		_pending_import_after_permission = false
+		_set_import_status(ANDROID_PERMISSION_DENIED_MESSAGE, true)
+
+
+func _set_import_status(p_text: String, p_is_error: bool = false) -> void:
+	if _import_status_label == null:
+		return
+	_import_status_label.text = p_text
+	_import_status_label.visible = not p_text.is_empty()
+	_import_status_label.add_theme_color_override(
+		"font_color",
+		Color(1.0, 0.42, 0.52, 1.0) if p_is_error else COLOR_TEXT_GOLD
+	)
+
+
 func _on_file_selected(p_path: String) -> void:
+	_set_import_status("")
 	register_external_track(p_path, true)
 
 
@@ -955,6 +1043,11 @@ func _connect_dependencies() -> void:
 			menu_bgm_player.track_changed.connect(_on_bgm_track_changed)
 		if not menu_bgm_player.bgm_enabled_changed.is_connected(_on_bgm_enabled_changed):
 			menu_bgm_player.bgm_enabled_changed.connect(_on_bgm_enabled_changed)
+
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.has_signal("on_request_permissions_result"):
+		if not tree.is_connected("on_request_permissions_result", _on_android_permissions_result):
+			tree.connect("on_request_permissions_result", _on_android_permissions_result)
 
 	if ui_sfx_player != null and _safe_container != null:
 		var excluded: Array[BaseButton] = []
@@ -1565,6 +1658,7 @@ func _apply_external_fonts() -> void:
 	_font_registry.apply_global_font_override(_exit_confirm_title, 3)
 	_font_registry.apply_global_font_override(_exit_cancel_button, 2)
 	_font_registry.apply_global_font_override(_exit_confirm_button, 2)
+	_font_registry.apply_global_font_override(_import_status_label, 2)
 
 
 func _ensure_ui_nodes() -> void:
@@ -1735,6 +1829,16 @@ func _build_browser_screen_ui() -> void:
 	_apply_stylebox_to_button(_browse_button, _style_option_active)
 	_browse_button.pressed.connect(_on_browse_button_pressed)
 	import_top_vbox.add_child(_browse_button)
+
+	_import_status_label = Label.new()
+	_import_status_label.name = "ImportStatusLabel"
+	_import_status_label.text = ""
+	_import_status_label.visible = false
+	_import_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_import_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_import_status_label.add_theme_font_size_override("font_size", 28)
+	_import_status_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+	import_top_vbox.add_child(_import_status_label)
 
 	var imported_header: Label = Label.new()
 	imported_header.name = "ImportedHeaderLabel"

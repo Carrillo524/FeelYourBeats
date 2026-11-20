@@ -4,6 +4,8 @@
 
 # Android build & export artifacts
 android/
+builds/
+export/
 *.apk
 *.aab
 *.ap_
