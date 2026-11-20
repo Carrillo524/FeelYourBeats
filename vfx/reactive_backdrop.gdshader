@@ -12,6 +12,16 @@ uniform float mid_energy : hint_range(0.0, 1.0) = 0.0;
 uniform float high_energy : hint_range(0.0, 1.0) = 0.0;
 uniform float zoom_bounce : hint_range(0.0, 0.25) = 0.0;
 uniform vec2 shake_offset = vec2(0.0, 0.0);
+uniform float aspect_ratio : hint_range(0.25, 4.0) = 0.5625;
+uniform float perimeter_wave_enabled : hint_range(0.0, 1.0) = 0.0;
+uniform float edge_glow_intensity : hint_range(0.0, 1.5) = 0.0;
+uniform float edge_glow_width : hint_range(0.005, 0.05) = 0.012;
+uniform float edge_drop_boost : hint_range(0.0, 1.0) = 0.0;
+uniform float wave_amplitude : hint_range(0.0, 2.0) = 0.65;
+uniform float lateral_wave_boost : hint_range(1.0, 2.5) = 1.60;
+uniform float wave_blur_intensity : hint_range(0.0, 0.52) = 0.10;
+uniform vec4 edge_primary_color : source_color = vec4(0.28, 0.86, 1.00, 1.0);
+uniform vec4 edge_drop_color : source_color = vec4(0.46, 0.92, 1.00, 1.0);
 
 void fragment() {
 	float zoom_scale = 1.0 / (1.0 + (zoom_bounce * 0.16));
@@ -71,5 +81,58 @@ void fragment() {
 	float saturation_boost = 1.0 + (0.32 * energy_level) + (0.42 * bass_energy) + (0.22 * drop_active);
 	vec3 saturated_rgb = mix(vec3(luma), raw_rgb, saturation_boost);
 
-	COLOR = vec4(clamp(saturated_rgb, vec3(0.0), vec3(1.0)), 1.0);
+	// Subtle border-emanating light-blue neon wave blur (gameplay-only, lateral <= 0.044, top/bottom <= 0.028, opacity <= 0.52)
+	float inv_aspect = 1.0 / max(aspect_ratio, 0.001);
+	vec2 centered_p = vec2(UV.x - 0.5, (UV.y - 0.5) * inv_aspect);
+	float angle = atan(centered_p.y, centered_p.x);
+
+	float dist_x = min(UV.x, 1.0 - UV.x);
+	float dist_y = min(UV.y, 1.0 - UV.y) * inv_aspect;
+	float edge_dist = min(dist_x, dist_y);
+	float lateral_weight = smoothstep(-0.025, 0.025, dist_y - dist_x);
+
+	// Integer angular harmonics around center (zero diagonal corner seams)
+	float h3 = sin((3.0 * angle) - (TIME * 1.35)) * 0.5 + 0.5;
+	float h5 = sin((5.0 * angle) + (TIME * 2.10)) * 0.5 + 0.5;
+	float h8 = sin((8.0 * angle) - (TIME * 3.25)) * 0.5 + 0.5;
+	float h11 = sin((11.0 * angle) + (TIME * 4.40)) * 0.5 + 0.5;
+
+	float idle_crest = (h3 * 0.48) + (h5 * 0.34) + (h8 * 0.18);
+	float spectral_crest = (pow(h3, 1.55) * bass_energy * 0.0075)
+		+ (pow(h5, 1.65) * mid_energy * 0.0055)
+		+ ((pow(h8, 1.85) * 0.65 + pow(h11, 2.1) * 0.35) * high_energy * 0.0035);
+	float raw_crest = clamp((idle_crest * 0.45) + (h3 * 0.30) + (h5 * 0.25), 0.0, 1.0);
+	float lateral_crest = pow(raw_crest, 1.85);
+	float crest_shape = mix(raw_crest, lateral_crest, lateral_weight);
+
+	// Accented crest-valley undulation on lateral edges (<= 0.044) while top/bottom stay contained (<= 0.028)
+	float edge_amp_scale = mix(1.0, lateral_wave_boost, lateral_weight);
+	float edge_reach_cap = mix(0.028, 0.044, lateral_weight);
+	float base_reach = mix(0.006, 0.005, lateral_weight) + (crest_shape * mix(0.004, 0.010, lateral_weight));
+	float beat_expand = (edge_glow_intensity * (0.003 + (0.010 * crest_shape)))
+		+ (edge_drop_boost * (0.004 + (0.011 * crest_shape)));
+	float wave_reach = clamp(
+		base_reach + (((spectral_crest * wave_amplitude) + beat_expand) * edge_amp_scale),
+		0.005,
+		edge_reach_cap
+	);
+
+	// Soft filled blur gradient from physical edge (edge_dist = 0.0) without saturating to solid white
+	float fill_blur = pow(smoothstep(wave_reach, 0.0, edge_dist), 1.45);
+	float bezel_core = pow(smoothstep(wave_reach * 0.40, 0.0, edge_dist), 2.1);
+
+	vec3 neon_blue = mix(edge_primary_color.rgb, edge_drop_color.rgb, clamp(edge_drop_boost * 0.35, 0.0, 1.0));
+	vec3 core_ice_blue = mix(neon_blue, vec3(0.72, 0.94, 1.00), 0.45);
+
+	float raw_opacity = wave_blur_intensity + (edge_glow_intensity * 0.16) + (edge_drop_boost * 0.22);
+	float max_opacity = clamp(raw_opacity, 0.0, 0.52) * perimeter_wave_enabled;
+	float edge_alpha = clamp((fill_blur * 0.82 + bezel_core * 0.18) * max_opacity, 0.0, 0.52);
+
+	vec3 wave_tint = mix(neon_blue, core_ice_blue, bezel_core * 0.55);
+	vec3 final_rgb = clamp(
+		mix(saturated_rgb, max(saturated_rgb, wave_tint), edge_alpha) + (wave_tint * edge_alpha * 0.22),
+		vec3(0.0),
+		vec3(1.0)
+	);
+	COLOR = vec4(final_rgb, 1.0);
 }

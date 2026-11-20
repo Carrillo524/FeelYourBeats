@@ -4,23 +4,43 @@ extends Control
 signal pause_requested()
 signal resume_requested()
 signal restart_requested()
+signal main_menu_requested()
 
-const TOP_BAR_HEIGHT_PX: float = 96.0
-const PAUSE_BUTTON_WIDTH_PX: float = 156.0
-const PAUSE_BUTTON_HEIGHT_PX: float = 66.0
-const CENTER_BANNER_HEIGHT_PX: float = 148.0
-const MODAL_WIDTH_PX: float = 460.0
-const MODAL_HEIGHT_PX: float = 310.0
-const COUNTDOWN_BOX_WIDTH_PX: float = 260.0
-const COUNTDOWN_BOX_HEIGHT_PX: float = 160.0
+const TOP_BAR_HEIGHT_PX: float = 132.0
+const PAUSE_BUTTON_WIDTH_PX: float = 212.0
+const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
+const DANGER_BAR_HEIGHT_PX: float = 28.0
+const DANGER_BAR_LERP_SPEED: float = 9.0
+const DANGER_PULSE_SPEED_RAD: float = 9.5
+const DANGER_THRESHOLD_AMBER: float = 0.45
+const DANGER_THRESHOLD_CRITICAL: float = 0.75
+const COLOR_DANGER_CYAN: Color = Color(0.22, 0.92, 1.0, 1.0)
+const COLOR_DANGER_AMBER: Color = Color(1.0, 0.76, 0.18, 1.0)
+const COLOR_DANGER_CRITICAL: Color = Color(1.0, 0.18, 0.48, 1.0)
+const CENTER_BANNER_HEIGHT_PX: float = 156.0
+const MODAL_WIDTH_PX: float = 640.0
+const MODAL_HEIGHT_PX: float = 490.0
+const RESULTS_WIDTH_RATIO: float = 0.90
+const RESULTS_HEIGHT_RATIO: float = 0.84
+const RESULTS_BUTTON_MIN_HEIGHT_PX: float = 96.0
+const COUNTDOWN_BOX_WIDTH_PX: float = 280.0
+const COUNTDOWN_BOX_HEIGHT_PX: float = 180.0
 
-const SCORE_FONT_SIZE: int = 34
-const ACCURACY_FONT_SIZE: int = 26
-const PAUSE_BUTTON_FONT_SIZE: int = 28
-const MODAL_BUTTON_FONT_SIZE: int = 28
-const COMBO_FONT_SIZE: int = 50
-const JUDGMENT_FONT_SIZE: int = 46
-const COUNTDOWN_FONT_SIZE: int = 110
+const SCORE_FONT_SIZE: int = 50
+const ACCURACY_FONT_SIZE: int = 40
+const PAUSE_BUTTON_FONT_SIZE: int = 38
+const MODAL_BUTTON_FONT_SIZE: int = 36
+const COMBO_FONT_SIZE: int = 52
+const JUDGMENT_FONT_SIZE: int = 48
+const COUNTDOWN_FONT_SIZE: int = 120
+const RESULTS_TITLE_FONT_SIZE: int = 54
+const RESULTS_RECORD_FONT_SIZE: int = 40
+const RESULTS_RANK_FONT_SIZE: int = 250
+const RESULTS_STATS_FONT_SIZE: int = 56
+const RESULTS_BREAKDOWN_FONT_SIZE: int = 46
+const RESULTS_BUTTON_FONT_SIZE: int = 50
+
+const COLOR_RESULTS_GOOD_AMBER: Color = Color(1.0, 0.78, 0.28, 1.0)
 
 const COUNTDOWN_STEP_DURATION_SEC: float = 1.0
 const COUNTDOWN_START_SCALE: float = 1.35
@@ -47,25 +67,58 @@ const COLOR_JUDGMENT_MISS: Color = Color(1.0, 0.34, 0.44, 1.0)
 @export var dsp_clock: DSPClock = null
 @export var input_adapter: RhythmInputAdapter = null
 @export var reactive_background: ReactiveBackground = null
+@export var ui_sfx_player: UiSfxPlayer = null
 
 var _safe_container: Control = null
+var _top_bar_margin: MarginContainer = null
+var _top_bar_hbox: HBoxContainer = null
+var _left_stats_vbox: VBoxContainer = null
+var _right_controls_vbox: VBoxContainer = null
 var _score_label: Label = null
 var _accuracy_label: Label = null
 var _combo_label: Label = null
 var _judgment_label: Label = null
 var _countdown_label: Label = null
 var _pause_button: Button = null
+var _danger_bar_track: Panel = null
+var _danger_bar_fill: Panel = null
+var _style_danger_track: StyleBoxFlat = null
+var _style_danger_fill: StyleBoxFlat = null
+
 var _pause_overlay: ColorRect = null
 var _pause_panel: Panel = null
+var _pause_vbox: VBoxContainer = null
+var _pause_title_label: Label = null
 var _resume_button: Button = null
 var _restart_button: Button = null
+var _pause_menu_button: Button = null
+
+var _results_overlay: ColorRect = null
+var _results_panel: Panel = null
+var _results_vbox: VBoxContainer = null
+var _results_title_label: Label = null
+var _results_record_label: Label = null
+var _results_rank_label: Label = null
+var _results_stats_label: Label = null
+var _results_breakdown_grid: GridContainer = null
+var _results_perfect_label: Label = null
+var _results_great_label: Label = null
+var _results_good_label: Label = null
+var _results_miss_label: Label = null
+var _results_retry_button: Button = null
+var _results_menu_button: Button = null
+
+var _style_results_panel: StyleBoxFlat = null
+var _style_results_retry: StyleBoxFlat = null
+var _style_results_menu: StyleBoxFlat = null
 
 var _countdown_tween: Tween = null
 var _is_counting_down: bool = false
 var _displayed_score: int = 0
 var _displayed_combo: int = 0
-var _displayed_accuracy: float = 1.0
+var _displayed_accuracy: float = 0.0
 var _last_judgment_text: String = "READY"
+var _last_displayed_rank: String = ""
 var _judgment_color: Color = COLOR_JUDGMENT_READY
 
 var _lane_hold_flags: Array[bool] = [false, false, false, false]
@@ -75,6 +128,52 @@ var _combo_bass_boost: float = 0.0
 var _judgment_pop_boost: float = 0.0
 var _banner_idle_sec: float = 0.0
 var _banner_alpha: float = 1.0
+var _target_danger_ratio: float = 0.0
+var _displayed_danger_ratio: float = 0.0
+var _danger_pulse_phase: float = 0.0
+var _font_registry: UiFontRegistry = null
+
+
+static func compute_letter_rank(p_accuracy_percent: float) -> String:
+	if p_accuracy_percent >= 100.0:
+		return "SSS+"
+	if p_accuracy_percent >= 95.0:
+		return "SSS"
+	if p_accuracy_percent >= 90.0:
+		return "SS"
+	if p_accuracy_percent >= 85.0:
+		return "S"
+	if p_accuracy_percent >= 80.0:
+		return "A+"
+	if p_accuracy_percent >= 75.0:
+		return "A"
+	if p_accuracy_percent >= 65.0:
+		return "B"
+	if p_accuracy_percent >= 50.0:
+		return "C"
+	return "D"
+
+
+static func get_rank_color(p_rank: String) -> Color:
+	match p_rank:
+		"SSS+":
+			return Color(0.45, 1.0, 0.98, 1.0)
+		"SSS":
+			return Color(1.0, 0.92, 0.32, 1.0)
+		"SS":
+			return Color(1.0, 0.78, 0.24, 1.0)
+		"S":
+			return Color(1.0, 0.62, 0.26, 1.0)
+		"A+":
+			return Color(0.35, 1.0, 0.60, 1.0)
+		"A":
+			return Color(0.45, 0.95, 0.50, 1.0)
+		"B":
+			return Color(0.40, 0.78, 1.0, 1.0)
+		"C":
+			return Color(0.95, 0.68, 0.36, 1.0)
+		_:
+			return Color(1.0, 0.36, 0.44, 1.0)
 
 
 func _init() -> void:
@@ -85,6 +184,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ensure_ui_nodes()
+	_apply_external_fonts()
 	connect_dependencies()
 
 	if screen_safe_adapter != null:
@@ -109,6 +209,7 @@ func _process(p_delta: float) -> void:
 			_banner_alpha = maxf(0.0, _banner_alpha - (HUD_AUTO_FADE_SPEED * dt))
 
 	_apply_banner_visual_transform()
+	_update_danger_bar_visual(dt)
 
 
 func _exit_tree() -> void:
@@ -129,6 +230,8 @@ func connect_dependencies() -> void:
 			hit_judge.hold_combo_ticked.connect(_on_hold_combo_ticked)
 		if not hit_judge.hold_state_changed.is_connected(_on_hold_state_changed):
 			hit_judge.hold_state_changed.connect(_on_hold_state_changed)
+		if not hit_judge.danger_changed.is_connected(_on_danger_changed):
+			hit_judge.danger_changed.connect(_on_danger_changed)
 
 	if reactive_background != null:
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
@@ -143,14 +246,11 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	var safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
 	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
 
-	_score_label.position = Vector2(16.0, 12.0)
-	_score_label.size = Vector2(safe_w * 0.55, TOP_BAR_HEIGHT_PX * 0.52)
+	if _top_bar_margin != null:
+		_top_bar_margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+		_top_bar_margin.offset_bottom = _top_bar_margin.get_combined_minimum_size().y
 
-	_accuracy_label.position = Vector2(16.0, 58.0)
-	_accuracy_label.size = Vector2(safe_w * 0.55, TOP_BAR_HEIGHT_PX * 0.45)
-
-	_pause_button.position = Vector2(safe_w - PAUSE_BUTTON_WIDTH_PX - 16.0, 12.0)
-	_pause_button.size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
+	_sync_danger_bar_fill_rect()
 
 	var banner_w: float = safe_w * COMBO_MAX_WIDTH_RATIO
 	var banner_x: float = (safe_w - banner_w) * 0.5
@@ -161,7 +261,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_combo_label.pivot_offset = _combo_label.size * 0.5
 
 	_judgment_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.48)
-	_judgment_label.position = Vector2(banner_x, center_y + 68.0)
+	_judgment_label.position = Vector2(banner_x, center_y + 72.0)
 	_judgment_label.pivot_offset = _judgment_label.size * 0.5
 
 	var countdown_size: Vector2 = Vector2(COUNTDOWN_BOX_WIDTH_PX, COUNTDOWN_BOX_HEIGHT_PX)
@@ -176,16 +276,21 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_pause_overlay.size = p_hud_safe_rect.size
 
 	var panel_w: float = minf(MODAL_WIDTH_PX, safe_w - 32.0)
-	var panel_h: float = MODAL_HEIGHT_PX
+	var panel_h: float = minf(MODAL_HEIGHT_PX, safe_h - 64.0)
 	_pause_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
 	_pause_panel.size = Vector2(panel_w, panel_h)
+	_pause_vbox.position = Vector2(28.0, 24.0)
+	_pause_vbox.size = Vector2(maxf(200.0, panel_w - 56.0), maxf(300.0, panel_h - 48.0))
 
-	var btn_w: float = panel_w - 64.0
-	_resume_button.position = Vector2(32.0, 72.0)
-	_resume_button.size = Vector2(btn_w, 68.0)
+	_results_overlay.position = Vector2.ZERO
+	_results_overlay.size = p_hud_safe_rect.size
 
-	_restart_button.position = Vector2(32.0, 164.0)
-	_restart_button.size = Vector2(btn_w, 68.0)
+	var res_w: float = maxf(300.0, safe_w * RESULTS_WIDTH_RATIO)
+	var res_h: float = maxf(460.0, safe_h * RESULTS_HEIGHT_RATIO)
+	_results_panel.position = Vector2((safe_w - res_w) * 0.5, (safe_h - res_h) * 0.5)
+	_results_panel.size = Vector2(res_w, res_h)
+	_results_vbox.position = Vector2(30.0, 28.0)
+	_results_vbox.size = Vector2(maxf(240.0, res_w - 60.0), maxf(400.0, res_h - 56.0))
 
 	_apply_banner_visual_transform()
 
@@ -194,8 +299,9 @@ func reset_hud_display() -> void:
 	_cancel_resume_countdown()
 	_displayed_score = 0
 	_displayed_combo = 0
-	_displayed_accuracy = 1.0
+	_displayed_accuracy = 0.0
 	_last_judgment_text = "READY"
+	_last_displayed_rank = ""
 	_judgment_color = COLOR_JUDGMENT_READY
 	for i: int in range(_lane_hold_flags.size()):
 		_lane_hold_flags[i] = false
@@ -205,14 +311,24 @@ func reset_hud_display() -> void:
 	_judgment_pop_boost = 0.0
 	_banner_idle_sec = 0.0
 	_banner_alpha = 1.0
+	_target_danger_ratio = 0.0
+	_displayed_danger_ratio = 0.0
+	_danger_pulse_phase = 0.0
 	if _pause_overlay != null:
 		_pause_overlay.visible = false
+	if _results_overlay != null:
+		_results_overlay.visible = false
+	if _pause_button != null:
+		_pause_button.disabled = false
 	_refresh_labels()
 	_apply_banner_visual_transform()
+	_sync_danger_bar_fill_rect()
 
 
 func open_pause_menu() -> void:
 	_ensure_ui_nodes()
+	if is_results_overlay_open():
+		return
 	_cancel_resume_countdown()
 	if input_adapter != null:
 		input_adapter.reset_input_state()
@@ -226,6 +342,7 @@ func close_pause_menu_and_resume() -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
 	_pause_overlay.visible = false
+	_results_overlay.visible = false
 	_pause_button.disabled = true
 	_is_counting_down = true
 	_countdown_label.visible = true
@@ -277,17 +394,91 @@ func close_pause_menu_and_resume() -> void:
 	_countdown_tween.tween_callback(_on_resume_countdown_finished)
 
 
+func show_results_overlay(
+	p_title: String,
+	p_score: int,
+	p_accuracy_percent: float,
+	p_max_combo: int,
+	p_breakdown: Dictionary,
+	p_is_new_record: bool = false,
+	p_is_failed: bool = false
+) -> void:
+	_ensure_ui_nodes()
+	_cancel_resume_countdown()
+	if input_adapter != null:
+		input_adapter.reset_input_state()
+	if dsp_clock != null:
+		dsp_clock.pause()
+
+	_pause_overlay.visible = false
+	_pause_button.disabled = true
+
+	var clamped_acc: float = clampf(p_accuracy_percent, 0.0, 100.0)
+	var rank: String = "F" if p_is_failed else compute_letter_rank(clamped_acc)
+	_last_displayed_rank = rank
+
+	var safe_title: String = p_title if not p_title.is_empty() else "RESULTADOS"
+	_results_title_label.text = safe_title
+	if p_is_failed:
+		_results_record_label.text = "PISTA FALLIDA"
+		_results_record_label.modulate = Color(1.0, 0.34, 0.46, 1.0)
+	else:
+		_results_record_label.text = "¡NUEVO RÉCORD!" if p_is_new_record else "RESULTADOS DE PARTIDA"
+		_results_record_label.modulate = Color(1.0, 0.90, 0.30, 1.0) if p_is_new_record else Color(0.76, 0.88, 1.0, 0.90)
+
+	_results_rank_label.text = rank
+	UiFontRegistry.apply_neon_rank_style(_results_rank_label, rank, RESULTS_RANK_FONT_SIZE)
+
+	_results_stats_label.text = (
+		"SCORE: %07d\nACCURACY: %.2f%%\nCOMBO MÁX: x%d"
+		% [p_score, clamped_acc, p_max_combo]
+	)
+
+	var perfect_n: int = int(p_breakdown.get("perfect", 0))
+	var great_n: int = int(p_breakdown.get("great", 0))
+	var good_n: int = int(p_breakdown.get("good", 0))
+	var miss_n: int = int(p_breakdown.get("miss", 0))
+	_results_perfect_label.text = "PERFECT: %d" % perfect_n
+	_results_great_label.text = "GREAT: %d" % great_n
+	_results_good_label.text = "GOOD: %d" % good_n
+	_results_miss_label.text = "MISS: %d" % miss_n
+
+	_results_overlay.visible = true
+
+
+func hide_results_overlay() -> void:
+	if _results_overlay != null:
+		_results_overlay.visible = false
+	if _pause_button != null:
+		_pause_button.disabled = false
+
+
 func request_restart() -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
 	_pause_overlay.visible = false
+	_results_overlay.visible = false
 	if input_adapter != null:
 		input_adapter.reset_input_state()
 	restart_requested.emit()
 
 
+func request_main_menu() -> void:
+	_ensure_ui_nodes()
+	_cancel_resume_countdown()
+	_pause_overlay.visible = false
+	_results_overlay.visible = false
+	if input_adapter != null:
+		input_adapter.reset_input_state()
+	main_menu_requested.emit()
+
+
 func is_pause_menu_open() -> bool:
 	return _pause_overlay != null and _pause_overlay.visible
+
+
+func is_results_overlay_open() -> bool:
+	return _results_overlay != null and _results_overlay.visible
 
 
 func is_resume_countdown_active() -> bool:
@@ -316,6 +507,10 @@ func get_last_judgment_text() -> String:
 	return _last_judgment_text
 
 
+func get_displayed_rank() -> String:
+	return _last_displayed_rank
+
+
 func get_combo_current_scale() -> float:
 	if _combo_label == null:
 		return COMBO_MIN_SCALE
@@ -330,6 +525,53 @@ func get_combo_width_ratio() -> float:
 
 func get_banner_alpha() -> float:
 	return _banner_alpha
+
+
+func set_danger_ratio(p_ratio: float) -> void:
+	_target_danger_ratio = clampf(p_ratio, 0.0, 1.0)
+
+
+func get_displayed_danger_ratio() -> float:
+	return _displayed_danger_ratio
+
+
+func get_top_bar_rects() -> Dictionary:
+	return {
+		"score": _score_label.get_global_rect() if _score_label != null else Rect2(),
+		"accuracy": _accuracy_label.get_global_rect() if _accuracy_label != null else Rect2(),
+		"danger_bar": _danger_bar_track.get_global_rect() if _danger_bar_track != null else Rect2(),
+		"pause": _pause_button.get_global_rect() if _pause_button != null else Rect2(),
+	}
+
+
+func get_font_registry() -> UiFontRegistry:
+	return _font_registry
+
+
+func get_role_control_fonts() -> Dictionary:
+	return {
+		"score": _score_label.get_theme_font("font") if _score_label != null else null,
+		"accuracy": _accuracy_label.get_theme_font("font") if _accuracy_label != null else null,
+		"pause": _pause_button.get_theme_font("font") if _pause_button != null else null,
+		"combo": _combo_label.get_theme_font("font") if _combo_label != null else null,
+		"judgment": _judgment_label.get_theme_font("font") if _judgment_label != null else null,
+		"rank": _results_rank_label.get_theme_font("font") if _results_rank_label != null else null,
+	}
+
+
+func get_results_layout_info() -> Dictionary:
+	return {
+		"grid_columns": _results_breakdown_grid.columns if _results_breakdown_grid != null else 0,
+		"title_font_size": _results_title_label.get_theme_font_size("font_size") if _results_title_label != null else 0,
+		"record_font_size": _results_record_label.get_theme_font_size("font_size") if _results_record_label != null else 0,
+		"rank_font_size": _results_rank_label.get_theme_font_size("font_size") if _results_rank_label != null else 0,
+		"stats_font_size": _results_stats_label.get_theme_font_size("font_size") if _results_stats_label != null else 0,
+		"breakdown_font_size": _results_perfect_label.get_theme_font_size("font_size") if _results_perfect_label != null else 0,
+		"button_font_size": _results_retry_button.get_theme_font_size("font_size") if _results_retry_button != null else 0,
+		"retry_min_height": _results_retry_button.custom_minimum_size.y if _results_retry_button != null else 0.0,
+		"menu_min_height": _results_menu_button.custom_minimum_size.y if _results_menu_button != null else 0.0,
+		"panel_size": _results_panel.size if _results_panel != null else Vector2.ZERO,
+	}
 
 
 func _prepare_countdown_step(p_number: int) -> void:
@@ -364,7 +606,7 @@ func _cancel_resume_countdown() -> void:
 		_countdown_label.visible = false
 		_countdown_label.scale = Vector2.ONE
 		_countdown_label.modulate = Color.WHITE
-	if _pause_button != null:
+	if _pause_button != null and not is_results_overlay_open():
 		_pause_button.disabled = false
 
 
@@ -425,6 +667,68 @@ func _on_hold_state_changed(p_lane: int, p_is_holding: bool) -> void:
 		_apply_banner_visual_transform()
 
 
+func _on_danger_changed(p_ratio: float) -> void:
+	set_danger_ratio(p_ratio)
+
+
+func _update_danger_bar_visual(p_delta: float) -> void:
+	_displayed_danger_ratio = lerpf(
+		_displayed_danger_ratio,
+		_target_danger_ratio,
+		clampf(DANGER_BAR_LERP_SPEED * p_delta, 0.0, 1.0)
+	)
+	if absf(_displayed_danger_ratio - _target_danger_ratio) < 0.001:
+		_displayed_danger_ratio = _target_danger_ratio
+
+	if _displayed_danger_ratio >= DANGER_THRESHOLD_CRITICAL:
+		_danger_pulse_phase += p_delta * DANGER_PULSE_SPEED_RAD
+	else:
+		_danger_pulse_phase = 0.0
+
+	_sync_danger_bar_fill_rect()
+
+
+func _sync_danger_bar_fill_rect() -> void:
+	if _danger_bar_track == null or _danger_bar_fill == null or _style_danger_fill == null or _style_danger_track == null:
+		return
+
+	var ratio: float = clampf(_displayed_danger_ratio, 0.0, 1.0)
+	var track_size: Vector2 = _danger_bar_track.size
+	if track_size.x <= 1.0 or track_size.y <= 1.0:
+		track_size = _danger_bar_track.custom_minimum_size
+	_danger_bar_track.pivot_offset = track_size * 0.5
+	var inner_pad: float = 4.0
+	var inner_w: float = maxf(0.0, track_size.x - (inner_pad * 2.0))
+	var inner_h: float = maxf(4.0, track_size.y - (inner_pad * 2.0))
+	var fill_w: float = inner_w * ratio
+
+	_danger_bar_fill.position = Vector2(inner_pad, inner_pad)
+	_danger_bar_fill.size = Vector2(fill_w, inner_h)
+	_danger_bar_fill.visible = fill_w > 1.0
+
+	var active_color: Color = COLOR_DANGER_CYAN
+	var pulse_boost: float = 0.0
+	if ratio >= DANGER_THRESHOLD_CRITICAL:
+		var pulse_wave: float = sin(_danger_pulse_phase) * 0.5 + 0.5
+		pulse_boost = pulse_wave
+		active_color = COLOR_DANGER_CRITICAL.lerp(Color(1.0, 0.45, 0.78, 1.0), pulse_wave * 0.55)
+		var pulse_scale: float = 1.0 + (pulse_wave * 0.06)
+		_danger_bar_track.scale = Vector2(pulse_scale, pulse_scale)
+	elif ratio >= DANGER_THRESHOLD_AMBER:
+		active_color = COLOR_DANGER_AMBER
+		_danger_bar_track.scale = Vector2.ONE
+	else:
+		active_color = COLOR_DANGER_CYAN
+		_danger_bar_track.scale = Vector2.ONE
+
+	_style_danger_fill.bg_color = active_color
+	_style_danger_fill.shadow_color = Color(active_color.r, active_color.g, active_color.b, 0.55 + (pulse_boost * 0.35))
+	_style_danger_fill.shadow_size = 10 + int(round(pulse_boost * 8.0))
+	_style_danger_track.border_color = Color(active_color.r, active_color.g, active_color.b, 0.58 + (pulse_boost * 0.36))
+	_style_danger_track.shadow_color = Color(active_color.r, active_color.g, active_color.b, 0.25 + (pulse_boost * 0.32))
+	_style_danger_track.shadow_size = 10 + int(round(pulse_boost * 6.0))
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	if _displayed_combo <= 0:
 		return
@@ -478,22 +782,108 @@ func _ensure_ui_nodes() -> void:
 	if _safe_container != null:
 		return
 
+	if ui_sfx_player == null:
+		ui_sfx_player = UiSfxPlayer.new()
+		ui_sfx_player.name = "HudUiSfxPlayer"
+		add_child(ui_sfx_player)
+
 	_safe_container = Control.new()
 	_safe_container.name = "SafeAreaContainer"
 	_safe_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_safe_container)
 
+	_top_bar_margin = MarginContainer.new()
+	_top_bar_margin.name = "TopBarMargin"
+	_top_bar_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_bar_margin.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_top_bar_margin.add_theme_constant_override("margin_left", 16)
+	_top_bar_margin.add_theme_constant_override("margin_right", 16)
+	_top_bar_margin.add_theme_constant_override("margin_top", 12)
+	_top_bar_margin.add_theme_constant_override("margin_bottom", 0)
+	_safe_container.add_child(_top_bar_margin)
+
+	_top_bar_hbox = HBoxContainer.new()
+	_top_bar_hbox.name = "TopBarHBox"
+	_top_bar_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_bar_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_top_bar_hbox.add_theme_constant_override("separation", 20)
+	_top_bar_margin.add_child(_top_bar_hbox)
+
+	_left_stats_vbox = VBoxContainer.new()
+	_left_stats_vbox.name = "LeftStatsVBox"
+	_left_stats_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_left_stats_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_left_stats_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_left_stats_vbox.add_theme_constant_override("separation", 4)
+	_top_bar_hbox.add_child(_left_stats_vbox)
+
 	_score_label = Label.new()
 	_score_label.name = "ScoreLabel"
+	_score_label.clip_text = false
+	_score_label.clip_contents = false
+	_score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_score_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_score_label.add_theme_font_size_override("font_size", SCORE_FONT_SIZE)
-	_safe_container.add_child(_score_label)
+	_left_stats_vbox.add_child(_score_label)
 
 	_accuracy_label = Label.new()
 	_accuracy_label.name = "AccuracyLabel"
+	_accuracy_label.clip_text = false
+	_accuracy_label.clip_contents = false
+	_accuracy_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_accuracy_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_accuracy_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_accuracy_label.add_theme_font_size_override("font_size", ACCURACY_FONT_SIZE)
-	_safe_container.add_child(_accuracy_label)
+	_left_stats_vbox.add_child(_accuracy_label)
+
+	_right_controls_vbox = VBoxContainer.new()
+	_right_controls_vbox.name = "RightControlsVBox"
+	_right_controls_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_right_controls_vbox.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_right_controls_vbox.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_right_controls_vbox.add_theme_constant_override("separation", 12)
+	_top_bar_hbox.add_child(_right_controls_vbox)
+
+	_pause_button = Button.new()
+	_pause_button.name = "PauseButton"
+	_pause_button.text = "PAUSA"
+	_pause_button.custom_minimum_size = Vector2(PAUSE_BUTTON_WIDTH_PX, PAUSE_BUTTON_HEIGHT_PX)
+	_pause_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pause_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_button.add_theme_font_size_override("font_size", PAUSE_BUTTON_FONT_SIZE)
+	_pause_button.pressed.connect(open_pause_menu)
+	_right_controls_vbox.add_child(_pause_button)
+
+	_style_danger_track = StyleBoxFlat.new()
+	_style_danger_track.bg_color = Color(0.03, 0.06, 0.14, 0.78)
+	_style_danger_track.border_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.58)
+	_style_danger_track.set_border_width_all(2)
+	_style_danger_track.set_corner_radius_all(14)
+	_style_danger_track.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.25)
+	_style_danger_track.shadow_size = 10
+
+	_style_danger_fill = StyleBoxFlat.new()
+	_style_danger_fill.bg_color = COLOR_DANGER_CYAN
+	_style_danger_fill.set_border_width_all(0)
+	_style_danger_fill.set_corner_radius_all(10)
+	_style_danger_fill.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.55)
+	_style_danger_fill.shadow_size = 10
+
+	_danger_bar_track = Panel.new()
+	_danger_bar_track.name = "DangerBarTrack"
+	_danger_bar_track.custom_minimum_size = Vector2(PAUSE_BUTTON_WIDTH_PX, DANGER_BAR_HEIGHT_PX)
+	_danger_bar_track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_danger_bar_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_danger_bar_track.add_theme_stylebox_override("panel", _style_danger_track)
+	_right_controls_vbox.add_child(_danger_bar_track)
+
+	_danger_bar_fill = Panel.new()
+	_danger_bar_fill.name = "DangerBarFill"
+	_danger_bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_danger_bar_fill.visible = false
+	_danger_bar_fill.add_theme_stylebox_override("panel", _style_danger_fill)
+	_danger_bar_track.add_child(_danger_bar_fill)
 
 	_combo_label = Label.new()
 	_combo_label.name = "ComboLabel"
@@ -522,17 +912,9 @@ func _ensure_ui_nodes() -> void:
 	_countdown_label.visible = false
 	_safe_container.add_child(_countdown_label)
 
-	_pause_button = Button.new()
-	_pause_button.name = "PauseButton"
-	_pause_button.text = "PAUSA"
-	_pause_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_pause_button.add_theme_font_size_override("font_size", PAUSE_BUTTON_FONT_SIZE)
-	_pause_button.pressed.connect(open_pause_menu)
-	_safe_container.add_child(_pause_button)
-
 	_pause_overlay = ColorRect.new()
 	_pause_overlay.name = "PauseOverlay"
-	_pause_overlay.color = Color(0.02, 0.02, 0.06, 0.78)
+	_pause_overlay.color = Color(0.02, 0.02, 0.06, 0.82)
 	_pause_overlay.visible = false
 	_pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_safe_container.add_child(_pause_overlay)
@@ -542,24 +924,225 @@ func _ensure_ui_nodes() -> void:
 	_pause_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_overlay.add_child(_pause_panel)
 
+	_pause_vbox = VBoxContainer.new()
+	_pause_vbox.name = "PauseVBox"
+	_pause_vbox.add_theme_constant_override("separation", 18)
+	_pause_panel.add_child(_pause_vbox)
+
+	_pause_title_label = Label.new()
+	_pause_title_label.name = "PauseTitleLabel"
+	_pause_title_label.text = "PAUSA"
+	_pause_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pause_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_pause_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
+	_pause_vbox.add_child(_pause_title_label)
+
 	_resume_button = Button.new()
 	_resume_button.name = "ResumeButton"
 	_resume_button.text = "REANUDAR"
+	_resume_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_resume_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_resume_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_resume_button.pressed.connect(close_pause_menu_and_resume)
-	_pause_panel.add_child(_resume_button)
+	_pause_vbox.add_child(_resume_button)
 
 	_restart_button = Button.new()
 	_restart_button.name = "RestartButton"
 	_restart_button.text = "REINICIAR"
+	_restart_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_restart_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_restart_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
 	_restart_button.pressed.connect(request_restart)
-	_pause_panel.add_child(_restart_button)
+	_pause_vbox.add_child(_restart_button)
 
+	_pause_menu_button = Button.new()
+	_pause_menu_button.name = "PauseMenuButton"
+	_pause_menu_button.text = "MENÚ PRINCIPAL"
+	_pause_menu_button.custom_minimum_size = Vector2(0.0, 84.0)
+	_pause_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pause_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
+	_pause_menu_button.pressed.connect(request_main_menu)
+	_pause_vbox.add_child(_pause_menu_button)
+
+	_build_results_styles()
+
+	_results_overlay = ColorRect.new()
+	_results_overlay.name = "ResultsOverlay"
+	_results_overlay.color = Color(0.01, 0.02, 0.06, 0.84)
+	_results_overlay.visible = false
+	_results_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_safe_container.add_child(_results_overlay)
+
+	_results_panel = Panel.new()
+	_results_panel.name = "ResultsPanel"
+	_results_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_panel.add_theme_stylebox_override("panel", _style_results_panel)
+	_results_overlay.add_child(_results_panel)
+
+	_results_vbox = VBoxContainer.new()
+	_results_vbox.name = "ResultsVBox"
+	_results_vbox.add_theme_constant_override("separation", 18)
+	_results_panel.add_child(_results_vbox)
+
+	_results_title_label = Label.new()
+	_results_title_label.name = "ResultsTitleLabel"
+	_results_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_title_label.clip_text = true
+	_results_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_results_title_label.add_theme_font_size_override("font_size", RESULTS_TITLE_FONT_SIZE)
+	_results_title_label.add_theme_color_override("font_color", Color(0.98, 1.0, 1.0, 1.0))
+	_results_vbox.add_child(_results_title_label)
+
+	_results_record_label = Label.new()
+	_results_record_label.name = "ResultsRecordLabel"
+	_results_record_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_record_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_record_label.add_theme_font_size_override("font_size", RESULTS_RECORD_FONT_SIZE)
+	_results_vbox.add_child(_results_record_label)
+
+	_results_rank_label = Label.new()
+	_results_rank_label.name = "ResultsRankLabel"
+	_results_rank_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_rank_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_rank_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_rank_label.custom_minimum_size = Vector2(0.0, 270.0)
+	_results_rank_label.add_theme_font_size_override("font_size", RESULTS_RANK_FONT_SIZE)
+	_results_vbox.add_child(_results_rank_label)
+
+	_results_stats_label = Label.new()
+	_results_stats_label.name = "ResultsStatsLabel"
+	_results_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_results_stats_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_results_stats_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_stats_label.add_theme_constant_override("line_spacing", 14)
+	_results_stats_label.add_theme_font_size_override("font_size", RESULTS_STATS_FONT_SIZE)
+	_results_stats_label.add_theme_color_override("font_color", Color(0.96, 0.99, 1.0, 1.0))
+	_results_vbox.add_child(_results_stats_label)
+
+	_results_breakdown_grid = GridContainer.new()
+	_results_breakdown_grid.name = "ResultsBreakdownGrid"
+	_results_breakdown_grid.columns = 2
+	_results_breakdown_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_results_breakdown_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_results_breakdown_grid.add_theme_constant_override("h_separation", 20)
+	_results_breakdown_grid.add_theme_constant_override("v_separation", 18)
+	_results_vbox.add_child(_results_breakdown_grid)
+
+	_results_perfect_label = _create_results_breakdown_cell("ResultsPerfectLabel", COLOR_JUDGMENT_PERFECT)
+	_results_breakdown_grid.add_child(_results_perfect_label)
+
+	_results_great_label = _create_results_breakdown_cell("ResultsGreatLabel", COLOR_JUDGMENT_GREAT)
+	_results_breakdown_grid.add_child(_results_great_label)
+
+	_results_good_label = _create_results_breakdown_cell("ResultsGoodLabel", COLOR_RESULTS_GOOD_AMBER)
+	_results_breakdown_grid.add_child(_results_good_label)
+
+	_results_miss_label = _create_results_breakdown_cell("ResultsMissLabel", COLOR_JUDGMENT_MISS)
+	_results_breakdown_grid.add_child(_results_miss_label)
+
+	_results_retry_button = Button.new()
+	_results_retry_button.name = "ResultsRetryButton"
+	_results_retry_button.text = "REINTENTAR"
+	_results_retry_button.custom_minimum_size = Vector2(0.0, RESULTS_BUTTON_MIN_HEIGHT_PX)
+	_results_retry_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_retry_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
+	_results_retry_button.add_theme_color_override("font_color", Color(0.98, 1.0, 1.0, 1.0))
+	_apply_results_button_style(_results_retry_button, _style_results_retry)
+	_results_retry_button.pressed.connect(request_restart)
+	_results_vbox.add_child(_results_retry_button)
+
+	_results_menu_button = Button.new()
+	_results_menu_button.name = "ResultsMenuButton"
+	_results_menu_button.text = "MENÚ PRINCIPAL"
+	_results_menu_button.custom_minimum_size = Vector2(0.0, RESULTS_BUTTON_MIN_HEIGHT_PX)
+	_results_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_results_menu_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
+	_results_menu_button.add_theme_color_override("font_color", Color(0.96, 0.99, 1.0, 1.0))
+	_apply_results_button_style(_results_menu_button, _style_results_menu)
+	_results_menu_button.pressed.connect(request_main_menu)
+	_results_vbox.add_child(_results_menu_button)
+
+	ui_sfx_player.bind_buttons_in_tree(_safe_container)
 	_refresh_labels()
 	_apply_banner_visual_transform()
+
+
+func _build_results_styles() -> void:
+	_style_results_panel = StyleBoxFlat.new()
+	_style_results_panel.bg_color = Color(0.03, 0.08, 0.16, 0.84)
+	_style_results_panel.border_color = Color(0.18, 0.90, 1.0, 0.85)
+	_style_results_panel.set_border_width_all(3)
+	_style_results_panel.set_corner_radius_all(22)
+	_style_results_panel.shadow_color = Color(0.12, 0.85, 1.0, 0.30)
+	_style_results_panel.shadow_size = 18
+
+	_style_results_retry = StyleBoxFlat.new()
+	_style_results_retry.bg_color = Color(0.08, 0.56, 0.58, 0.94)
+	_style_results_retry.border_color = Color(0.45, 1.0, 0.96, 1.0)
+	_style_results_retry.set_border_width_all(3)
+	_style_results_retry.set_corner_radius_all(16)
+	_style_results_retry.shadow_color = Color(0.20, 0.95, 0.90, 0.35)
+	_style_results_retry.shadow_size = 10
+
+	_style_results_menu = StyleBoxFlat.new()
+	_style_results_menu.bg_color = Color(0.05, 0.14, 0.26, 0.88)
+	_style_results_menu.border_color = Color(0.22, 0.86, 1.0, 0.85)
+	_style_results_menu.set_border_width_all(3)
+	_style_results_menu.set_corner_radius_all(16)
+	_style_results_menu.shadow_color = Color(0.15, 0.80, 1.0, 0.24)
+	_style_results_menu.shadow_size = 8
+
+
+func _apply_results_button_style(p_button: Button, p_style: StyleBoxFlat) -> void:
+	if p_button == null or p_style == null:
+		return
+	p_button.add_theme_stylebox_override("normal", p_style)
+	p_button.add_theme_stylebox_override("hover", p_style)
+	p_button.add_theme_stylebox_override("pressed", p_style)
+	p_button.add_theme_stylebox_override("focus", p_style)
+
+
+func _create_results_breakdown_cell(p_name: String, p_color: Color) -> Label:
+	var cell: Label = Label.new()
+	cell.name = p_name
+	cell.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cell.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cell.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cell.add_theme_font_size_override("font_size", RESULTS_BREAKDOWN_FONT_SIZE)
+	cell.add_theme_color_override("font_color", p_color)
+	return cell
+
+
+func _apply_external_fonts() -> void:
+	if _font_registry == null:
+		_font_registry = UiFontRegistry.new()
+	_font_registry.apply_global_theme(get_tree())
+
+	var global_font: Font = _font_registry.get_global_font()
+	if global_font != null:
+		_font_registry.apply_global_font_override(_score_label, 5)
+		_font_registry.apply_global_font_override(_accuracy_label, 4)
+		_font_registry.apply_global_font_override(_pause_button, 4)
+		_font_registry.apply_global_font_override(_pause_title_label, 4)
+		_font_registry.apply_global_font_override(_resume_button)
+		_font_registry.apply_global_font_override(_restart_button)
+		_font_registry.apply_global_font_override(_pause_menu_button)
+		_font_registry.apply_global_font_override(_results_title_label, 5)
+		_font_registry.apply_global_font_override(_results_record_label, 4)
+		_font_registry.apply_global_font_override(_results_stats_label, 5)
+		_font_registry.apply_global_font_override(_results_perfect_label, 4)
+		_font_registry.apply_global_font_override(_results_great_label, 4)
+		_font_registry.apply_global_font_override(_results_good_label, 4)
+		_font_registry.apply_global_font_override(_results_miss_label, 4)
+		_font_registry.apply_global_font_override(_results_retry_button, 4)
+		_font_registry.apply_global_font_override(_results_menu_button, 4)
+
+	_font_registry.apply_combo_role(_combo_label, 8)
+	_font_registry.apply_combo_role(_judgment_label, 7)
+	UiFontRegistry.apply_neon_rank_style(_results_rank_label, _last_displayed_rank if not _last_displayed_rank.is_empty() else "SSS+", RESULTS_RANK_FONT_SIZE)
+	_font_registry.apply_global_font_override(_countdown_label, 8)
 
 
 func _refresh_labels() -> void:

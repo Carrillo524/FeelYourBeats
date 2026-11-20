@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://k4j0b7d6yiqp"
+path="res://.godot/imported/Sleek Step Garage.ogg-eb5c4275cb45c8d860c3b7ef7a5f9230.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/bgm/Sleek Step Garage.ogg"
+dest_files=["res://.godot/imported/Sleek Step Garage.ogg-eb5c4275cb45c8d860c3b7ef7a5f9230.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

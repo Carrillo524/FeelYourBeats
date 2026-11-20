@@ -25,6 +25,10 @@ En cumplimiento con `AGENTS.md`:
 - `beat_pulse: float` (`0.0..1.0`): Pulso disparado por `DSPClock.beat_pulsed` con decaimiento lineal en `_process`.
 - `energy_level: float` (`0.0..1.0`) e `intensity_tier: int` (`0..3`): Nivel energético y tier discreto recibidos desde `DSPClock.intensity_changed(block)`.
 - `lane_hit_energies: vec4`: Energía de destello por carril (`x = lane 0`, `y = lane 1`, `z = lane 2`, `w = lane 3`) modulada exclusivamente por `HitJudge.note_judged(lane, grade, error_ms, combo)`.
+- **Relleno Difuminado de Onda Neón Azul Clarito Exclusivo de Gameplay (`perimeter_wave_enabled`, `aspect_ratio`, `wave_amplitude`, `wave_blur_intensity`, `edge_glow_intensity`, `edge_drop_boost`, `edge_primary_color`, `edge_drop_color`):**
+  - Controlado explícitamente por `@export var perimeter_wave_enabled: bool = false` y `set_perimeter_wave_enabled(p_enabled: bool) -> void`: permanece **desactivado (`false`) en `MainMenu`** y se activa únicamente durante la partida en **`GameSession` (`true`)**.
+  - Sin hilo, contorno ni trazo flotante: utiliza una coordenada angular continua alrededor del centro (`angle = atan(p.y, p.x)` corregida por `aspect_ratio`) con armónicos enteros (`3*angle`, `5*angle`, `8*angle`, `11*angle`) ponderados por `bass_energy`, `mid_energy` y `high_energy` para evitar costuras diagonales en las 4 esquinas y mantener el centro y el HUD 100 % limpios.
+  - **Alcance lateral acentuado y opacidad calibrada suave:** pondera suavemente al alza la amplitud y contraste cresta-valle en los bordes laterales izquierdo y derecho (`lateral_wave_boost = 1.60`, alcance lateral hasta **`0.044`** —dentro del rango `~0.042–0.045` en pleno *drop* sin invadir los carriles—), mientras mantiene los bordes superior e inferior contenidos (`<= 0.028` para preservar el contraste del HUD), conservando la opacidad translúcida suave del relleno difuminado (`pow(smoothstep(wave_reach, 0.0, edge_dist), 1.45)`, neón azul clarito `Color(0.28, 0.86, 1.0)`) en `~0.22–0.28` en beats normales y `<= 0.52` en picos de *drop* sin saturar a blanco sólido.
 
 ### 2.2. Aislamiento de Audio
 - `ReactiveBackground` **no accede** a `AudioServer`, buses de audio ni buffers FFT; únicamente consume señales de `DSPClock` y `HitJudge`.
@@ -34,20 +38,26 @@ En cumplimiento con `AGENTS.md`:
 ## 3. HUD Seguro, Tipografía 1.5K, Combo Dinámico Acotado y Flujo de Pausa (`ui/safe_hud.gd`)
 
 - **Herencia:** `class_name SafeHud extends Control`
-- **Señales:** `pause_requested()`, `resume_requested()` y `restart_requested()`.
+- **Señales:** `pause_requested()`, `resume_requested()`, `restart_requested()` y `main_menu_requested()`.
 - **Propiedades Exportadas:** `screen_safe_adapter: ScreenSafeAdapter`, `hit_judge: HitJudge`, `dsp_clock: DSPClock`, `input_adapter: RhythmInputAdapter` y `reactive_background: ReactiveBackground`.
-- **Tipografía y Controles para Pantallas 1.5K:**
-  - `SCORE`: `34 px` (`SCORE_FONT_SIZE`).
-  - `ACC`: `26 px` (`ACCURACY_FONT_SIZE`).
-  - Botón `PAUSA`: `28 px` de fuente con área táctil amplia de `156x66 px` (`>= 150x64 px`).
-  - `COMBO xN`: `50 px` (`COMBO_FONT_SIZE`) y etiqueta de juicio `PERFECT / GREAT / GOOD / MISS`: `46 px` (`JUDGMENT_FONT_SIZE`) con color saturado específico por grado.
+- **Tipografía, Barra Superior Responsiva y Barra Neón de Riesgo bajo `PAUSA` (`UiFontRegistry` en `ui/ui_font_registry.gd`):**
+  - La barra superior dentro de `SafeAreaContainer` se estructura con contenedores modernos de Godot 4 (`TopBarMargin: MarginContainer` anclado `PRESET_TOP_WIDE` -> `TopBarHBox: HBoxContainer`):
+    - **Columna superior izquierda (`LeftStatsVBox: VBoxContainer`, `SIZE_EXPAND_FILL`):** aloja `SCORE` (`50 px`, `SCORE_FONT_SIZE`) y `ACC` (`40 px`, `ACCURACY_FONT_SIZE`) sin recorte (`clip_text = false`, `clip_contents = false`) y con todo el ancho disponible libre de colisiones horizontales.
+    - **Columna superior derecha (`RightControlsVBox: VBoxContainer`, `SIZE_SHRINK_END`, `separation = 12`):** aloja el botón `PAUSA` (`38 px`, `212x82 px`) y, alineada verticalmente justo debajo con el mismo ancho y espaciado uniforme (`12 px`), la **Barra Neón de Pérdida / Riesgo Estilo MELOBEAT (`DangerBarTrack` / `DangerBarFill`, `212x28 px`)**. Su relleno se interpola suavemente (`lerp`) con halo blur neón y cambia de color según `danger_ratio`: **cian neón** (`< 0.45`), **ámbar neón** (`< 0.75`) y **rojo/magenta neón pulsante** (`>= 0.75`).
+  - `SCORE`, `ACC` y `PAUSA` aplican explícitamente **`global_font.{ttf,otf}`** (`UiFontRegistry.get_global_font()`) además del `Theme` raíz (`get_tree().root.theme`).
+  - `COMBO xN` (`52 px`, `COMBO_FONT_SIZE`) y etiqueta de juicio `PERFECT / GREAT / GOOD / MISS` (`48 px`, `JUDGMENT_FONT_SIZE`) usan exclusivamente **`combo_font.{ttf,otf}`** con borde oscuro nítido (`outline_size`) para máxima legibilidad sobre las notas.
+  - En el overlay de Resultados (`ResultsOverlay` / `ResultsPanel`, ocupando `~90%` del ancho y `~84%` del alto de `hud_safe_rect` con estilo neón translúcido y bloques verticales equilibrados con `SIZE_EXPAND_FILL`): título de canción (`54 px`, `global_font`, `OVERRUN_TRIM_ELLIPSIS`), etiqueta `¡NUEVO RÉCORD!` (`40 px`, `global_font`), letra de rango gigante (`250 px`, **`rank_font.{ttf,otf}`** estilizada con `UiFontRegistry.apply_neon_rank_style()` — núcleo casi blanco luminoso, contorno saturado y halo radial difuminado con `shadow_offset = Vector2.ZERO` y `shadow_outline_size` ~`46 px`), métricas principales `SCORE / ACCURACY / COMBO MÁX` (`56 px`, `global_font`), desglose en `GridContainer` de **2 columnas (`2x2`)** (`46 px`, `global_font`, colores diferenciados por juicio: cian en `PERFECT`, verde en `GREAT`, ámbar en `GOOD`, rojo coral en `MISS`) y botones `REINTENTAR / MENÚ PRINCIPAL` (`50 px`, `global_font`, altura mínima `96 px` con borde neón interactivo).
+  - Si falta cualquiera de los archivos `.ttf`/`.otf` en `res://assets/fonts/`, `UiFontRegistry` mantiene la fuente por defecto de Godot sin emitir errores ni advertencias.
 - **Escala Progresiva Acotada, Rebote al Bombo y Auto-Fade de `1.0 s`:**
   - `COMBO xN` incrementa su escala base progresivamente con cada `+1` de combo desde `1.0x` hasta un **tope máximo estricto de `1.30x`** (`COMBO_MAX_SCALE`), sumando un micro-rebote en cada golpe de bombo (`ReactiveBackground.bass_kick_pulsed`) y un *pop* en `note_judged` y `hold_combo_ticked` sin superar jamás `1.30x`.
   - Su contenedor horizontal está acotado a `COMBO_MAX_WIDTH_RATIO = 0.44` (`<= 44%` del ancho jugable seguro, estrictamente menor que los 2 carriles centrales) con `clip_text = true` y `pivot_offset` centrado para no tapar las notas en caída.
   - Tras `1.0 s` (`HUD_AUTO_FADE_DELAY_SEC`) sin nuevas notas juzgadas ni retenciones *hold* activas, tanto `COMBO xN` como el texto de juicio se desvanecen suavemente (`modulate.a -> 0.0`).
 - **Inicialización Inmediata en `_ready()`:**
   - Lee `screen_safe_adapter.get_hud_safe_rect()` de inmediato en `_ready()` y se suscribe a `safe_play_rect_changed`.
-- **Flujo de Pausa, Cuenta Regresiva de 3 Segundos y Reinicio:**
+- **Flujo de Pausa, Cuenta Regresiva de 3 Segundos, Reinicio y Resultados:**
+  - `PauseOverlay` contiene **exclusivamente** los 3 botones legítimos: **`REANUDAR`**, **`REINICIAR`** y **`MENÚ PRINCIPAL`** (sin atajo hacia Resultados).
+  - `ResultsOverlay` y el guardado de récords (`save_song_record_if_better`) se disparan únicamente al finalizar naturalmente la reproducción de la pista (`DSPClock.playback_finished` -> `GameSession._on_playback_finished`). Si el total de notas juzgadas en `HitJudge` es `0` (`get_total_judged() <= 0`), la precisión devuelta es estrictamente `0.0%` (rango `D`), nunca `100.0%` (`SSS+`).
+  - **Flujo de Derrota (`HitJudge.danger_overflowed` -> `GameSession._on_danger_overflowed`):** cuando `danger_ratio >= 1.0`, `GameSession` detiene `DSPClock`, limpia entradas y sacudida, y despliega `ResultsOverlay` en estado **Pista Fallida** (`p_is_failed = true`, encabezado `"PISTA FALLIDA"`, rango `F`, sin guardar récord como victoria, ofreciendo `REINTENTAR` y `MENÚ PRINCIPAL`).
   - `open_pause_menu() -> void`: cancela cualquier cuenta regresiva activa, invoca `input_adapter.reset_input_state()` para liberar cualquier dedo o tecla retenida, llama a `dsp_clock.pause()`, muestra `PauseOverlay` y emite `pause_requested`.
   - `close_pause_menu_and_resume() -> void`: oculta `PauseOverlay`, deshabilita `PauseButton` durante el conteo y muestra `CountdownLabel` centrado dentro de `SafeAreaContainer` (`font_size = 110`, `mouse_filter = Control.MOUSE_FILTER_IGNORE`, `pivot_offset` centrado). Anima secuencialmente los pasos `3`, `2`, `1` durante `1.0 s` cada uno mediante un `Tween` de escala (`1.35 -> 1.0`) y opacidad manteniendo `DSPClock` en pausa; al concluir el `1`, oculta `CountdownLabel`, rehabilita `PauseButton`, invoca `dsp_clock.resume()` y emite `resume_requested`.
   - `request_restart() -> void` y `_exit_tree() -> void`: cancelan cualquier `Tween` activo de cuenta regresiva (`_cancel_resume_countdown()`), ocultan `CountdownLabel` y `PauseOverlay`, rehabilitan `PauseButton`, limpian `input_adapter.reset_input_state()` y (en el caso de `request_restart()`) emiten `restart_requested`.
@@ -74,3 +84,10 @@ La escena principal `res://ui/game_session.tscn` (configurada como `run/main_sce
 ### 4.3. Vista Previa en Escritorio (`window_width_override` / `window_height_override`)
 - En `project.godot` (sección `[display]`), se definen `window/size/window_width_override=450` y `window/size/window_height_override=800`.
 - Esto permite que al ejecutar la escena en Windows (`F5`) la ventana física quepa íntegramente en monitores horizontales conservando la relación 9:16 y el espacio lógico virtual de `1080x1920` escalado mediante `canvas_items` + `keep_width`, sin alterar el despliegue a pantalla completa nativa en dispositivos Android.
+
+### 4.4. Protección del Gesto / Botón Atrás de Android (`NOTIFICATION_WM_GO_BACK_REQUEST` y `ui_cancel`)
+- En `_ready()`, `GameSession` ejecuta `get_tree().set_auto_accept_quit(false)` para evitar cierres abruptos de la aplicación.
+- Al recibir `NOTIFICATION_WM_GO_BACK_REQUEST` (o `ui_cancel` en escritorio), `handle_back_request()` aplica la máquina de estados:
+  1. **Resultados abiertos (`safe_hud.is_results_overlay_open()`):** retorna directamente al selector de canciones del menú principal (`MainMenu.open_directly_to_selector = true` -> `res://ui/main_menu.tscn`).
+  2. **Pausa abierta (`safe_hud.is_pause_menu_open()`):** reanuda la partida mediante `safe_hud.close_pause_menu_and_resume()` (cuenta regresiva 3-2-1).
+  3. **Partida en curso (o cuenta regresiva activa):** abre el menú de **Pausa** (`safe_hud.open_pause_menu()`), equivalente a pulsar `PAUSA`.

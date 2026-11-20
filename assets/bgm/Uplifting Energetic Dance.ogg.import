@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://htuhlurgtma4"
+path="res://.godot/imported/Uplifting Energetic Dance.ogg-e622a91ce71a637d0534e064f09c35b9.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/bgm/Uplifting Energetic Dance.ogg"
+dest_files=["res://.godot/imported/Uplifting Energetic Dance.ogg-e622a91ce71a637d0534e064f09c35b9.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -1,0 +1,32 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://ui/main_menu.gd" id="1_t7e0r"]
+[ext_resource type="Script" path="res://vfx/reactive_background.gd" id="2_e0npq"]
+[ext_resource type="Script" path="res://platform/screen_safe_adapter.gd" id="3_r1err"]
+[ext_resource type="Script" path="res://ui/menu_bgm_player.gd" id="4_l6phr"]
+[ext_resource type="Script" path="res://ui/ui_sfx_player.gd" id="5_vjjk5"]
+[ext_resource type="Script" path="res://core/audio/audio_analyzer.gd" id="6_qietq"]
+
+[node name="root" type="Control" unique_id=954227115]
+layout_mode = 3
+anchors_preset = 0
+mouse_filter = 2
+script = ExtResource("1_t7e0r")
+
+[node name="ReactiveBackground" type="ColorRect" parent="." unique_id=1574728652]
+layout_mode = 0
+mouse_filter = 2
+color = Color(0.05, 0.05, 0.12, 1)
+script = ExtResource("2_e0npq")
+
+[node name="ScreenSafeAdapter" type="Node" parent="." unique_id=532391462]
+script = ExtResource("3_r1err")
+
+[node name="MenuBgmPlayer" type="Node" parent="." unique_id=2115538043]
+script = ExtResource("4_l6phr")
+
+[node name="UiSfxPlayer" type="Node" parent="." unique_id=851042992]
+script = ExtResource("5_vjjk5")
+
+[node name="AudioAnalyzer" type="Node" parent="." unique_id=1812488125]
+script = ExtResource("6_qietq")

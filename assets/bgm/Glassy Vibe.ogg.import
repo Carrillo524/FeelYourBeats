@@ -1,0 +1,19 @@
+[remap]
+
+importer="oggvorbisstr"
+type="AudioStreamOggVorbis"
+uid="uid://bhsj54amr8sb5"
+path="res://.godot/imported/Glassy Vibe.ogg-a720a921a91282c65b61aad49f7961f0.oggvorbisstr"
+
+[deps]
+
+source_file="res://assets/bgm/Glassy Vibe.ogg"
+dest_files=["res://.godot/imported/Glassy Vibe.ogg-a720a921a91282c65b61aad49f7961f0.oggvorbisstr"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
