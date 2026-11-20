@@ -38,6 +38,8 @@ const EDGE_EPSILON: float = 0.004
 var edge_glow_intensity: float = 0.0
 var edge_glow_width: float = EDGE_BASE_WIDTH
 var edge_drop_boost: float = 0.0
+var wave_amplitude: float = 0.65
+var wave_filament_intensity: float = 0.42
 
 var _shader_material: ShaderMaterial = null
 var _backdrop_mode: int = BackdropMode.GAMEPLAY
@@ -194,6 +196,22 @@ func get_edge_drop_boost() -> float:
 
 func get_aspect_ratio() -> float:
 	return _aspect_ratio
+
+
+func get_wave_amplitude() -> float:
+	return wave_amplitude
+
+
+func get_wave_filament_intensity() -> float:
+	return wave_filament_intensity
+
+
+func get_smoothed_mid_energy() -> float:
+	return _smoothed_mid
+
+
+func get_smoothed_high_energy() -> float:
+	return _smoothed_high
 
 
 func reset_shake() -> void:
@@ -420,6 +438,33 @@ func _update_edge_halo(p_delta: float) -> void:
 		clampf(EDGE_WIDTH_RELAX_SPEED * p_delta, 0.0, 1.0)
 	)
 
+	var spectral_activity: float = clampf(
+		(_smoothed_bass * 0.45) + (_smoothed_mid * 0.35) + (_smoothed_high * 0.25),
+		0.0,
+		1.0
+	)
+	var target_wave_amp: float = 0.42
+	var target_filament: float = 0.34
+	if _backdrop_mode == BackdropMode.MENU:
+		if _menu_bgm_active:
+			target_wave_amp = clampf(0.55 + (spectral_activity * 0.45) + (edge_glow_intensity * 0.25), 0.50, 1.10)
+			target_filament = clampf(0.42 + (spectral_activity * 0.36) + (edge_glow_intensity * 0.24), 0.38, 0.90)
+	else:
+		target_wave_amp = clampf(
+			0.62 + (spectral_activity * 0.55) + (edge_glow_intensity * 0.28) + (edge_drop_boost * 0.42),
+			0.55,
+			1.50
+		)
+		target_filament = clampf(
+			0.48 + (spectral_activity * 0.42) + (edge_glow_intensity * 0.28) + (edge_drop_boost * 0.30),
+			0.44,
+			1.20
+		)
+
+	var wave_lerp: float = clampf(8.5 * p_delta, 0.0, 1.0)
+	wave_amplitude = lerpf(wave_amplitude, target_wave_amp, wave_lerp)
+	wave_filament_intensity = lerpf(wave_filament_intensity, target_filament, wave_lerp)
+
 
 func _sync_shader_parameters() -> void:
 	if _shader_material == null:
@@ -438,5 +483,7 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_glow_intensity", edge_glow_intensity)
 	_shader_material.set_shader_parameter("edge_glow_width", edge_glow_width)
 	_shader_material.set_shader_parameter("edge_drop_boost", edge_drop_boost)
+	_shader_material.set_shader_parameter("wave_amplitude", wave_amplitude)
+	_shader_material.set_shader_parameter("wave_filament_intensity", wave_filament_intensity)
 	_shader_material.set_shader_parameter("edge_primary_color", edge_primary_color)
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
