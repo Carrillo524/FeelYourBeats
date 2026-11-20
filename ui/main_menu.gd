@@ -9,8 +9,10 @@ enum MenuTab {
 
 const GAME_SESSION_SCENE_PATH: String = "res://ui/game_session.tscn"
 const SONGS_DIR_PATH: String = "res://assets/songs"
+const IMPORTED_SONGS_DIR_PATH: String = "user://imported_songs"
+const ANDROID_SHARED_STORAGE_DIR: String = "/storage/emulated/0"
 const RECENT_TRACKS_CONFIG_PATH: String = "user://recent_tracks.cfg"
-const MAX_RECENT_TRACKS: int = 16
+const MAX_RECENT_TRACKS: int = 32
 const SUPPORTED_AUDIO_EXTENSIONS: PackedStringArray = ["mp3", "ogg", "wav"]
 const ANDROID_PERM_READ_MEDIA_AUDIO: String = "android.permission.READ_MEDIA_AUDIO"
 const ANDROID_PERM_READ_EXTERNAL_STORAGE: String = "android.permission.READ_EXTERNAL_STORAGE"
@@ -71,6 +73,7 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _font_registry: UiFontRegistry = null
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
+var _imported_songs_dir: String = IMPORTED_SONGS_DIR_PATH
 
 var _safe_container: Control = null
 
@@ -432,8 +435,16 @@ func open_song_setup_modal(p_entry: Dictionary) -> void:
 	_selected_entry = p_entry.duplicate()
 	var is_demo: bool = _selected_entry.get("is_demo", false) as bool
 	var audio_path: String = str(_selected_entry.get("audio_path", ""))
-	var raw_title: String = str(_selected_entry.get("title", "Pista"))
-	var display_title: String = raw_title if (is_demo or audio_path.is_empty()) else _format_song_display_title(audio_path)
+	var raw_title: String = str(_selected_entry.get("title", "")).strip_edges()
+	var display_title: String = raw_title
+	if is_demo:
+		display_title = raw_title if not raw_title.is_empty() else "Pista"
+	elif not raw_title.is_empty():
+		display_title = _format_song_display_title(raw_title)
+	elif not audio_path.is_empty():
+		display_title = _format_song_display_title(audio_path)
+	else:
+		display_title = "Pista"
 	_selected_entry["title"] = display_title
 	_modal_song_title_label.text = display_title
 	_refresh_modal_record_label()
@@ -488,24 +499,128 @@ func select_track_by_index(p_index: int) -> void:
 	open_song_setup_modal(_song_entries[clamped])
 
 
+func import_external_track_to_storage(p_source_path: String) -> Dictionary:
+	var cleaned: String = p_source_path.strip_edges()
+	if cleaned.is_empty():
+		return {"ok": false, "error": "Ruta de archivo vacía."}
+
+	var display_title: String = _format_song_display_title(cleaned)
+	var normalized_dir: String = _imported_songs_dir.trim_suffix("/")
+
+	# If already stored inside the persistent imported directory, keep it in place
+	if cleaned.begins_with(normalized_dir + "/") and FileAccess.file_exists(cleaned):
+		var existing_key: String = ChartCacheRepository.normalize_song_key(cleaned)
+		return {
+			"ok": true,
+			"audio_path": cleaned,
+			"title": display_title,
+			"song_key": existing_key,
+			"error": "",
+		}
+
+	var raw_bytes: PackedByteArray = FileAccess.get_file_as_bytes(cleaned)
+	if raw_bytes.is_empty():
+		return {"ok": false, "error": "No se pudo leer el archivo de audio seleccionado."}
+
+	var detected_ext: String = AudioAnalyzer.detect_audio_extension_from_bytes(raw_bytes, cleaned)
+	if detected_ext.is_empty() or not SUPPORTED_AUDIO_EXTENSIONS.has(detected_ext):
+		return {"ok": false, "error": "Formato de audio no soportado (usa MP3, OGG o WAV)."}
+
+	var dir_err: Error = DirAccess.make_dir_recursive_absolute(normalized_dir)
+	if dir_err != OK and dir_err != ERR_ALREADY_EXISTS:
+		return {"ok": false, "error": "No se pudo crear la carpeta de canciones importadas."}
+
+	var content_hash: String = _compute_bytes_short_hash(raw_bytes)
+	var safe_stem: String = _sanitize_filename_stem(display_title)
+	var dest_path: String = "%s/%s_%s.%s" % [normalized_dir, safe_stem, content_hash, detected_ext]
+
+	var needs_write: bool = true
+	if FileAccess.file_exists(dest_path):
+		var existing_file: FileAccess = FileAccess.open(dest_path, FileAccess.READ)
+		if existing_file != null:
+			var existing_len: int = existing_file.get_length()
+			existing_file.close()
+			if existing_len == raw_bytes.size():
+				needs_write = false
+
+	if needs_write:
+		var out_file: FileAccess = FileAccess.open(dest_path, FileAccess.WRITE)
+		if out_file == null:
+			return {"ok": false, "error": "No se pudo guardar una copia local de la canción."}
+		out_file.store_buffer(raw_bytes)
+		out_file.flush()
+		out_file.close()
+
+	var song_key: String = ChartCacheRepository.normalize_song_key(dest_path)
+	return {
+		"ok": true,
+		"audio_path": dest_path,
+		"title": display_title,
+		"song_key": song_key,
+		"error": "",
+	}
+
+
 func register_external_track(p_audio_path: String, p_open_modal: bool = true) -> void:
 	var cleaned: String = p_audio_path.strip_edges()
 	if cleaned.is_empty():
 		return
 
-	_save_recent_track(cleaned)
+	var import_result: Dictionary = import_external_track_to_storage(cleaned)
+	var import_ok: bool = import_result.get("ok", false) as bool
+	if not import_ok:
+		var err_msg: String = str(import_result.get("error", "No se pudo importar la canción."))
+		_set_import_status(err_msg, true)
+		return
+
+	var persisted_path: String = str(import_result.get("audio_path", ""))
+	var display_title: String = str(import_result.get("title", "Pista"))
+	var song_key: String = str(import_result.get("song_key", ChartCacheRepository.normalize_song_key(persisted_path)))
+
+	_set_import_status("")
+	_save_recent_track(persisted_path, display_title, song_key)
 	_reload_all_track_lists()
 
-	var norm_target: String = ChartCacheRepository.normalize_song_key(cleaned)
 	var count: int = _imported_entries.size()
 	for i: int in range(count):
 		var entry: Dictionary = _imported_entries[i]
-		if str(entry.get("song_key", "")) == norm_target:
+		if str(entry.get("song_key", "")) == song_key:
 			_selected_entry = entry.duplicate()
 			if p_open_modal:
 				show_browser_screen(MenuTab.IMPORT)
 				open_song_setup_modal(entry)
 			return
+
+
+func _sanitize_filename_stem(p_title: String) -> String:
+	var lowered: String = p_title.strip_edges().to_lower()
+	var chars: PackedStringArray = PackedStringArray()
+	var prev_underscore: bool = false
+	for i: int in range(lowered.length()):
+		var code: int = lowered.unicode_at(i)
+		var is_alnum: bool = (
+			(code >= 48 and code <= 57)
+			or (code >= 97 and code <= 122)
+		)
+		if is_alnum:
+			chars.append(lowered.substr(i, 1))
+			prev_underscore = false
+		elif not prev_underscore and not chars.is_empty():
+			chars.append("_")
+			prev_underscore = true
+		if chars.size() >= 48:
+			break
+	var result: String = "".join(chars).trim_suffix("_")
+	return result if not result.is_empty() else "track"
+
+
+func _compute_bytes_short_hash(p_bytes: PackedByteArray) -> String:
+	var ctx: HashingContext = HashingContext.new()
+	if ctx.start(HashingContext.HASH_SHA256) == OK:
+		ctx.update(p_bytes)
+		var digest: PackedByteArray = ctx.finish()
+		return digest.hex_encode().substr(0, 12)
+	return str(p_bytes.size()).sha256_text().substr(0, 12)
 
 
 func get_track_entries() -> Array[Dictionary]:
@@ -858,9 +973,15 @@ func _open_import_file_dialog(p_platform_name: String) -> void:
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.use_native_dialog = true
 	if p_platform_name == "Android":
-		var music_dir: String = OS.get_system_dir(OS.SYSTEM_DIR_MUSIC)
-		if not music_dir.is_empty() and DirAccess.dir_exists_absolute(music_dir):
-			_file_dialog.current_dir = music_dir
+		if DirAccess.dir_exists_absolute(ANDROID_SHARED_STORAGE_DIR):
+			_file_dialog.current_dir = ANDROID_SHARED_STORAGE_DIR
+		else:
+			var downloads_dir: String = OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
+			var shared_root: String = downloads_dir.get_base_dir() if not downloads_dir.is_empty() else ""
+			if not shared_root.is_empty() and DirAccess.dir_exists_absolute(shared_root):
+				_file_dialog.current_dir = shared_root
+			elif not downloads_dir.is_empty() and DirAccess.dir_exists_absolute(downloads_dir):
+				_file_dialog.current_dir = downloads_dir
 	_file_dialog.popup_centered_ratio(0.85)
 
 
@@ -1079,9 +1200,42 @@ func _sync_live_audio_monitoring() -> void:
 
 
 func _format_song_display_title(p_raw_path: String) -> String:
-	var base_name: String = p_raw_path.get_file().get_basename()
-	var decoded: String = base_name.uri_decode().uri_decode()
-	var cleaned: String = " ".join(decoded.replace("\t", " ").split(" ", false)).strip_edges()
+	var normalized: String = p_raw_path.strip_edges().replace("\\", "/")
+	var decoded_full: String = normalized.uri_decode().uri_decode()
+	var lower_full: String = decoded_full.to_lower()
+	var doc_marker_idx: int = lower_full.rfind("/document/")
+	var segment: String = decoded_full.substr(doc_marker_idx + 10) if doc_marker_idx >= 0 else decoded_full
+
+	var saf_prefixes: PackedStringArray = PackedStringArray([
+		"document:",
+		"primary:music/",
+		"primary:download/",
+		"primary:downloads/",
+		"primary:",
+		"audio:",
+	])
+	var stripped_prefix: bool = true
+	while stripped_prefix:
+		stripped_prefix = false
+		var trimmed: String = segment.strip_edges()
+		var low: String = trimmed.to_lower()
+		for i: int in range(saf_prefixes.size()):
+			var prefix: String = saf_prefixes[i]
+			if low.begins_with(prefix):
+				segment = trimmed.substr(prefix.length())
+				stripped_prefix = true
+				break
+
+	var file_part: String = segment.get_file()
+	if file_part.is_empty():
+		file_part = segment
+	var colon_idx: int = file_part.rfind(":")
+	if colon_idx >= 0 and colon_idx < file_part.length() - 1:
+		file_part = file_part.substr(colon_idx + 1)
+
+	var ext_lower: String = file_part.get_extension().to_lower()
+	var base_name: String = file_part.get_basename() if SUPPORTED_AUDIO_EXTENSIONS.has(ext_lower) else file_part
+	var cleaned: String = " ".join(base_name.replace("\t", " ").split(" ", false)).strip_edges()
 	return cleaned if not cleaned.is_empty() else "Pista"
 
 
@@ -1114,17 +1268,39 @@ func _reload_all_track_lists() -> void:
 			})
 
 	var seen_imported: Dictionary = {}
-	var recent_paths: PackedStringArray = _load_recent_tracks()
-	for j: int in range(recent_paths.size()):
-		var recent_path: String = recent_paths[j]
-		var recent_key: String = ChartCacheRepository.normalize_song_key(recent_path)
-		if not seen_imported.has(recent_key) and FileAccess.file_exists(recent_path):
-			seen_imported[recent_key] = true
+	var persisted_entries: Array[Dictionary] = _load_imported_catalog_entries()
+	for j: int in range(persisted_entries.size()):
+		var item: Dictionary = persisted_entries[j]
+		var item_path: String = str(item.get("audio_path", "")).strip_edges()
+		if item_path.is_empty() or not FileAccess.file_exists(item_path):
+			continue
+		var item_key: String = str(item.get("song_key", "")).strip_edges()
+		if item_key.is_empty():
+			item_key = ChartCacheRepository.normalize_song_key(item_path)
+		if not seen_imported.has(item_key):
+			seen_imported[item_key] = true
+			var stored_title: String = str(item.get("title", "")).strip_edges()
+			var final_title: String = _format_song_display_title(stored_title) if not stored_title.is_empty() else _format_song_display_title(item_path)
 			_imported_entries.append({
 				"is_demo": false,
-				"song_key": recent_key,
-				"audio_path": recent_path,
-				"title": _format_song_display_title(recent_path),
+				"song_key": item_key,
+				"audio_path": item_path,
+				"title": final_title,
+				"source_tag": "IMPORTADA",
+			})
+
+	# Also include any audio files present inside user://imported_songs/ not yet listed in config
+	var disk_imported_paths: PackedStringArray = _scan_imported_songs_dir()
+	for k: int in range(disk_imported_paths.size()):
+		var disk_path: String = disk_imported_paths[k]
+		var disk_key: String = ChartCacheRepository.normalize_song_key(disk_path)
+		if not seen_imported.has(disk_key) and FileAccess.file_exists(disk_path):
+			seen_imported[disk_key] = true
+			_imported_entries.append({
+				"is_demo": false,
+				"song_key": disk_key,
+				"audio_path": disk_path,
+				"title": _format_song_display_title(disk_path),
 				"source_tag": "IMPORTADA",
 			})
 
@@ -1133,6 +1309,27 @@ func _reload_all_track_lists() -> void:
 
 	_rebuild_songs_list_ui()
 	_rebuild_imported_list_ui()
+
+
+func _scan_imported_songs_dir() -> PackedStringArray:
+	var found: Array[String] = []
+	var normalized_dir: String = _imported_songs_dir.trim_suffix("/")
+	var dir: DirAccess = DirAccess.open(normalized_dir)
+	if dir == null:
+		return PackedStringArray()
+
+	dir.list_dir_begin()
+	var entry: String = dir.get_next()
+	while not entry.is_empty():
+		if not dir.current_is_dir() and not entry.begins_with("."):
+			var ext: String = entry.get_extension().to_lower()
+			if SUPPORTED_AUDIO_EXTENSIONS.has(ext):
+				found.append("%s/%s" % [normalized_dir, entry])
+		entry = dir.get_next()
+	dir.list_dir_end()
+
+	found.sort()
+	return PackedStringArray(found)
 
 
 func _scan_bundled_songs() -> PackedStringArray:
@@ -1162,43 +1359,106 @@ func _scan_bundled_songs() -> PackedStringArray:
 	return PackedStringArray(found)
 
 
-func _load_recent_tracks() -> PackedStringArray:
-	var result: Array[String] = []
+func _load_imported_catalog_entries() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
 	if not FileAccess.file_exists(_recent_tracks_path):
-		return PackedStringArray()
+		return entries
 
 	var cfg: ConfigFile = ConfigFile.new()
 	if cfg.load(_recent_tracks_path) != OK:
-		return PackedStringArray()
+		return entries
 
-	var raw_list: Variant = cfg.get_value("recent", "paths", PackedStringArray())
-	if raw_list is PackedStringArray:
-		var packed: PackedStringArray = raw_list as PackedStringArray
+	var raw_paths: Variant = cfg.get_value("recent", "paths", PackedStringArray())
+	var titles_map: Dictionary = {}
+	var raw_titles: Variant = cfg.get_value("recent_meta", "titles", {})
+	if raw_titles is Dictionary:
+		titles_map = raw_titles as Dictionary
+
+	var keys_map: Dictionary = {}
+	var raw_keys: Variant = cfg.get_value("recent_meta", "song_keys", {})
+	if raw_keys is Dictionary:
+		keys_map = raw_keys as Dictionary
+
+	var path_list: Array[String] = []
+	if raw_paths is PackedStringArray:
+		var packed: PackedStringArray = raw_paths as PackedStringArray
 		for i: int in range(packed.size()):
 			var p: String = packed[i].strip_edges()
 			if not p.is_empty():
-				result.append(p)
-	elif raw_list is Array:
-		var arr: Array = raw_list as Array
+				path_list.append(p)
+	elif raw_paths is Array:
+		var arr: Array = raw_paths as Array
 		for i: int in range(arr.size()):
 			var p: String = str(arr[i]).strip_edges()
 			if not p.is_empty():
-				result.append(p)
+				path_list.append(p)
 
+	for idx: int in range(path_list.size()):
+		var audio_path: String = path_list[idx]
+		var norm_path: String = ChartCacheRepository.normalize_song_key(audio_path)
+		var song_key: String = str(keys_map.get(norm_path, norm_path)).strip_edges()
+		if song_key.is_empty():
+			song_key = norm_path
+		var title: String = str(titles_map.get(song_key, titles_map.get(norm_path, ""))).strip_edges()
+		entries.append({
+			"audio_path": audio_path,
+			"song_key": song_key,
+			"title": title,
+		})
+
+	return entries
+
+
+func _load_recent_tracks() -> PackedStringArray:
+	var catalog: Array[Dictionary] = _load_imported_catalog_entries()
+	var result: Array[String] = []
+	for i: int in range(catalog.size()):
+		var p: String = str(catalog[i].get("audio_path", "")).strip_edges()
+		if not p.is_empty():
+			result.append(p)
 	return PackedStringArray(result)
 
 
-func _save_recent_track(p_audio_path: String) -> void:
-	var existing: PackedStringArray = _load_recent_tracks()
+func _save_recent_track(
+	p_audio_path: String,
+	p_display_title: String = "",
+	p_song_key: String = ""
+) -> void:
+	var existing_entries: Array[Dictionary] = _load_imported_catalog_entries()
 	var target_norm: String = ChartCacheRepository.normalize_song_key(p_audio_path)
-	var updated: Array[String] = [p_audio_path]
-	for i: int in range(existing.size()):
-		var item: String = existing[i]
-		if ChartCacheRepository.normalize_song_key(item) != target_norm and updated.size() < MAX_RECENT_TRACKS:
-			updated.append(item)
+	var target_key: String = p_song_key.strip_edges() if not p_song_key.strip_edges().is_empty() else target_norm
+	var target_title: String = p_display_title.strip_edges() if not p_display_title.strip_edges().is_empty() else _format_song_display_title(p_audio_path)
+
+	var updated_paths: Array[String] = [p_audio_path]
+	var updated_titles: Dictionary = {}
+	var updated_keys: Dictionary = {}
+	updated_titles[target_key] = target_title
+	updated_keys[target_norm] = target_key
+
+	for i: int in range(existing_entries.size()):
+		var entry: Dictionary = existing_entries[i]
+		var item_path: String = str(entry.get("audio_path", "")).strip_edges()
+		if item_path.is_empty():
+			continue
+		var item_norm: String = ChartCacheRepository.normalize_song_key(item_path)
+		var item_key: String = str(entry.get("song_key", item_norm)).strip_edges()
+		if item_key.is_empty():
+			item_key = item_norm
+		if item_norm != target_norm and item_key != target_key and updated_paths.size() < MAX_RECENT_TRACKS:
+			updated_paths.append(item_path)
+			updated_keys[item_norm] = item_key
+			var existing_title: String = str(entry.get("title", "")).strip_edges()
+			if not existing_title.is_empty():
+				updated_titles[item_key] = existing_title
+
+	var parent_dir: String = _recent_tracks_path.get_base_dir()
+	if not parent_dir.is_empty() and parent_dir != "user://":
+		DirAccess.make_dir_recursive_absolute(parent_dir)
 
 	var cfg: ConfigFile = ConfigFile.new()
-	cfg.set_value("recent", "paths", PackedStringArray(updated))
+	cfg.set_value("recent", "paths", PackedStringArray(updated_paths))
+	cfg.set_value("recent_meta", "titles", updated_titles)
+	cfg.set_value("recent_meta", "song_keys", updated_keys)
 	cfg.save(_recent_tracks_path)
 
 
@@ -1264,7 +1524,16 @@ func _rebuild_entry_list(
 		var song_key: String = str(entry.get("song_key", ""))
 		var entry_is_demo: bool = entry.get("is_demo", false) as bool
 		var entry_audio_path: String = str(entry.get("audio_path", ""))
-		var title: String = str(entry.get("title", "Pista")) if (entry_is_demo or entry_audio_path.is_empty()) else _format_song_display_title(entry_audio_path)
+		var entry_raw_title: String = str(entry.get("title", "")).strip_edges()
+		var title: String = entry_raw_title
+		if entry_is_demo:
+			title = entry_raw_title if not entry_raw_title.is_empty() else "Pista"
+		elif not entry_raw_title.is_empty():
+			title = _format_song_display_title(entry_raw_title)
+		elif not entry_audio_path.is_empty():
+			title = _format_song_display_title(entry_audio_path)
+		else:
+			title = "Pista"
 		var summary: Dictionary = _chart_cache_repo.load_song_summary(song_key)
 		var has_record: bool = summary.get("has_record", false) as bool
 		var best_rank: String = str(summary.get("best_rank", ""))

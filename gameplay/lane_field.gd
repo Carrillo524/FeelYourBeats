@@ -4,11 +4,12 @@ extends Control
 const DEFAULT_LANE_COUNT: int = 4
 const MIN_SPEED_MULTIPLIER: int = 1
 const MAX_SPEED_MULTIPLIER: int = 4
+const SPEED_MULTIPLIER_FACTORS: Array[float] = [2.0, 3.0, 4.0, 5.0]
 const DEFAULT_BASE_SCROLL_SPEED_PX_PER_SEC: float = 550.0
 const TOP_SPAWN_MARGIN_PX: float = 64.0
 const DEFAULT_PLAY_WIDTH: float = 950.4
 const DEFAULT_PLAY_HEIGHT: float = 1920.0
-const HIT_LINE_VERTICAL_LIFT_PX: float = 60.0
+const HIT_LINE_VERTICAL_LIFT_PX: float = 175.0
 const LANE_DIVIDER_COLOR: Color = Color(0.28, 0.88, 1.0, 0.24)
 const OUTER_BORDER_COLOR: Color = Color(0.32, 0.92, 1.0, 0.34)
 const LANE_DIVIDER_GLOW_COLOR: Color = Color(0.22, 0.86, 1.0, 0.34)
@@ -89,11 +90,19 @@ var _divider_shake_offset_x: float = 0.0
 var _divider_tier: int = 0
 
 
+static func resolve_speed_factor(p_speed_level: int) -> float:
+	var clamped_level: int = clampi(p_speed_level, MIN_SPEED_MULTIPLIER, MAX_SPEED_MULTIPLIER)
+	var idx: int = clamped_level - MIN_SPEED_MULTIPLIER
+	if idx >= 0 and idx < SPEED_MULTIPLIER_FACTORS.size():
+		return SPEED_MULTIPLIER_FACTORS[idx]
+	return float(clamped_level)
+
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if not _speed_multiplier_configured:
 		_base_scroll_speed_px_per_sec = maxf(100.0, scroll_speed_px_per_sec)
-	scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * float(_speed_multiplier)
+	scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * resolve_speed_factor(_speed_multiplier)
 	_ensure_pool()
 	_connect_dependencies()
 
@@ -437,7 +446,7 @@ func _on_dsp_time_updated(p_dsp_time_sec: float) -> void:
 func set_speed_multiplier(p_multiplier: int) -> void:
 	_speed_multiplier = clampi(p_multiplier, MIN_SPEED_MULTIPLIER, MAX_SPEED_MULTIPLIER)
 	_speed_multiplier_configured = true
-	scroll_speed_px_per_sec = maxf(100.0, _base_scroll_speed_px_per_sec) * float(_speed_multiplier)
+	scroll_speed_px_per_sec = maxf(100.0, _base_scroll_speed_px_per_sec) * resolve_speed_factor(_speed_multiplier)
 
 	var active_count: int = _active_views.size()
 	for i: int in range(active_count):

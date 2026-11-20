@@ -74,6 +74,65 @@ func _process(_delta: float) -> void:
 	spectrum_updated.emit(bass_energy, mid_energy, high_energy, total_energy)
 
 
+static func detect_audio_extension_from_bytes(
+	p_bytes: PackedByteArray,
+	p_fallback_path: String = ""
+) -> String:
+	var byte_count: int = p_bytes.size()
+	if byte_count >= 4:
+		# OGG Vorbis: "OggS"
+		if (
+			p_bytes[0] == 0x4F
+			and p_bytes[1] == 0x67
+			and p_bytes[2] == 0x67
+			and p_bytes[3] == 0x53
+		):
+			return "ogg"
+		# MP3 with ID3v2 header: "ID3"
+		if p_bytes[0] == 0x49 and p_bytes[1] == 0x44 and p_bytes[2] == 0x33:
+			return "mp3"
+
+	if byte_count >= 12:
+		# WAV: "RIFF" ... "WAVE"
+		if (
+			p_bytes[0] == 0x52
+			and p_bytes[1] == 0x49
+			and p_bytes[2] == 0x46
+			and p_bytes[3] == 0x46
+			and p_bytes[8] == 0x57
+			and p_bytes[9] == 0x41
+			and p_bytes[10] == 0x56
+			and p_bytes[11] == 0x45
+		):
+			return "wav"
+
+	# Raw MP3 frame sync header (11-bit sync 0xFFE0, valid MPEG version != 01, valid layer != 00)
+	if byte_count >= 2:
+		var scan_limit: int = mini(byte_count - 1, 16)
+		for offset: int in range(scan_limit):
+			var b0: int = p_bytes[offset]
+			var b1: int = p_bytes[offset + 1]
+			if b0 == 0xFF and (b1 & 0xE0) == 0xE0 and (b1 & 0x18) != 0x08 and (b1 & 0x06) != 0x00:
+				return "mp3"
+			if b0 != 0x00:
+				break
+
+	var fallback_ext: String = p_fallback_path.get_extension().to_lower()
+	if fallback_ext == "mp3" or fallback_ext == "ogg" or fallback_ext == "wav":
+		return fallback_ext
+	return ""
+
+
+static func _read_file_header_bytes(p_path: String, p_max_bytes: int = 32) -> PackedByteArray:
+	var file: FileAccess = FileAccess.open(p_path, FileAccess.READ)
+	if file == null:
+		return PackedByteArray()
+	var to_read: int = mini(p_max_bytes, file.get_length())
+	var header: PackedByteArray = file.get_buffer(to_read) if to_read > 0 else PackedByteArray()
+	file.close()
+	return header
+
+
 func load_audio_stream(p_path: String) -> AudioStream:
 	if p_path.is_empty():
 		return null
@@ -83,19 +142,42 @@ func load_audio_stream(p_path: String) -> AudioStream:
 		if res is AudioStream:
 			return res as AudioStream
 
-	if not FileAccess.file_exists(p_path):
+	var header_bytes: PackedByteArray = _read_file_header_bytes(p_path, 32)
+	if header_bytes.is_empty() and not FileAccess.file_exists(p_path):
 		return null
 
 	var ext: String = p_path.get_extension().to_lower()
+	if ext != "wav" and ext != "ogg" and ext != "mp3":
+		ext = detect_audio_extension_from_bytes(header_bytes, p_path)
+	if ext.is_empty():
+		return null
+
+	var stream: AudioStream = null
 	match ext:
 		"wav":
-			return AudioStreamWAV.load_from_file(p_path)
+			stream = AudioStreamWAV.load_from_file(p_path)
+			if stream == null:
+				var wav_bytes: PackedByteArray = FileAccess.get_file_as_bytes(p_path)
+				if not wav_bytes.is_empty():
+					stream = AudioStreamWAV.load_from_buffer(wav_bytes)
 		"ogg":
-			return AudioStreamOggVorbis.load_from_file(p_path)
+			stream = AudioStreamOggVorbis.load_from_file(p_path)
+			if stream == null:
+				var ogg_bytes: PackedByteArray = FileAccess.get_file_as_bytes(p_path)
+				if not ogg_bytes.is_empty():
+					stream = AudioStreamOggVorbis.load_from_buffer(ogg_bytes)
 		"mp3":
-			return AudioStreamMP3.load_from_file(p_path)
+			stream = AudioStreamMP3.load_from_file(p_path)
+			if stream == null:
+				var mp3_bytes: PackedByteArray = FileAccess.get_file_as_bytes(p_path)
+				if not mp3_bytes.is_empty():
+					var mp3_stream: AudioStreamMP3 = AudioStreamMP3.new()
+					mp3_stream.data = mp3_bytes
+					stream = mp3_stream
 		_:
 			return null
+
+	return stream
 
 
 func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_SEC) -> Dictionary:
