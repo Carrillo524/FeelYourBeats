@@ -26,20 +26,23 @@ const EDGE_BEAT_DECAY_RATE: float = 14.5
 const EDGE_DROP_INTENSITY_DECAY_RATE: float = 6.5
 const EDGE_DROP_DECAY_SPEED: float = 5.0
 const EDGE_WIDTH_RELAX_SPEED: float = 6.0
-const EDGE_BASE_WIDTH: float = 0.10
+const EDGE_BASE_WIDTH: float = 0.008
+const EDGE_MAX_REACH: float = 0.030
+const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
 @export var audio_analyzer: AudioAnalyzer = null
+@export var perimeter_wave_enabled: bool = false
 @export var edge_primary_color: Color = Color(0.28, 0.86, 1.0, 1.0)
-@export var edge_drop_color: Color = Color(0.56, 0.94, 1.0, 1.0)
+@export var edge_drop_color: Color = Color(0.46, 0.92, 1.0, 1.0)
 
 var edge_glow_intensity: float = 0.0
 var edge_glow_width: float = EDGE_BASE_WIDTH
 var edge_drop_boost: float = 0.0
 var wave_amplitude: float = 0.65
-var wave_blur_intensity: float = 0.34
+var wave_blur_intensity: float = 0.10
 
 var _shader_material: ShaderMaterial = null
 var _backdrop_mode: int = BackdropMode.GAMEPLAY
@@ -153,6 +156,20 @@ func _process(p_delta: float) -> void:
 	_sync_shader_parameters()
 
 
+func set_perimeter_wave_enabled(p_enabled: bool) -> void:
+	perimeter_wave_enabled = p_enabled
+	if not perimeter_wave_enabled:
+		edge_glow_intensity = 0.0
+		edge_drop_boost = 0.0
+		edge_glow_width = EDGE_BASE_WIDTH
+		wave_blur_intensity = 0.0
+	_sync_shader_parameters()
+
+
+func is_perimeter_wave_enabled() -> bool:
+	return perimeter_wave_enabled
+
+
 func set_backdrop_mode(p_mode: int) -> void:
 	_backdrop_mode = clampi(p_mode, BackdropMode.MENU, BackdropMode.GAMEPLAY)
 	if _backdrop_mode == BackdropMode.MENU:
@@ -204,6 +221,24 @@ func get_wave_amplitude() -> float:
 
 func get_wave_blur_intensity() -> float:
 	return wave_blur_intensity
+
+
+func get_effective_wave_reach() -> float:
+	if not perimeter_wave_enabled:
+		return 0.0
+	var spectral_max: float = ((_smoothed_bass * 0.007) + (_smoothed_mid * 0.005) + (_smoothed_high * 0.003)) * wave_amplitude
+	var beat_max: float = (edge_glow_intensity * 0.012) + (edge_drop_boost * 0.012)
+	return clampf(0.010 + spectral_max + beat_max, 0.006, EDGE_MAX_REACH)
+
+
+func get_effective_wave_opacity() -> float:
+	if not perimeter_wave_enabled:
+		return 0.0
+	return clampf(
+		wave_blur_intensity + (edge_glow_intensity * 0.16) + (edge_drop_boost * 0.22),
+		0.0,
+		EDGE_MAX_OPACITY
+	)
 
 
 func get_smoothed_mid_energy() -> float:
@@ -381,31 +416,28 @@ func _is_gameplay_drop_active() -> bool:
 
 
 func _trigger_edge_beat_impulse(p_strength: float) -> void:
+	if not perimeter_wave_enabled:
+		return
 	var s: float = clampf(p_strength, 0.0, 1.0)
 	if _backdrop_mode == BackdropMode.MENU:
-		if not _menu_bgm_active:
-			return
-		var menu_peak: float = lerpf(0.42, 0.58, s)
-		var menu_width: float = lerpf(0.11, 0.145, s)
-		edge_glow_intensity = maxf(edge_glow_intensity, menu_peak)
-		edge_glow_width = maxf(edge_glow_width, menu_width)
-		edge_drop_boost = 0.0
 		return
 
 	if _is_gameplay_drop_active():
 		_trigger_edge_drop_impulse(s)
 		return
 
-	var beat_peak: float = lerpf(0.50, 0.68, s)
-	var beat_width: float = lerpf(0.12, 0.155, s)
+	var beat_peak: float = lerpf(0.55, 0.78, s)
+	var beat_width: float = lerpf(0.014, 0.020, s)
 	edge_glow_intensity = maxf(edge_glow_intensity, beat_peak)
 	edge_glow_width = maxf(edge_glow_width, beat_width)
 
 
 func _trigger_edge_drop_impulse(p_strength: float) -> void:
+	if not perimeter_wave_enabled:
+		return
 	var s: float = clampf(p_strength, 0.0, 1.0)
 	var drop_peak: float = lerpf(0.85, 1.0, s)
-	var drop_width: float = lerpf(0.21, 0.25, s)
+	var drop_width: float = lerpf(0.024, EDGE_MAX_REACH, s)
 	var drop_mix: float = lerpf(0.85, 1.0, s)
 	edge_glow_intensity = maxf(edge_glow_intensity, drop_peak)
 	edge_glow_width = maxf(edge_glow_width, drop_width)
@@ -422,7 +454,14 @@ func _update_edge_halo(p_delta: float) -> void:
 			ref_size = Vector2(1080.0, 1920.0)
 	_aspect_ratio = clampf(ref_size.x / maxf(1.0, ref_size.y), 0.25, 4.0)
 
-	# Zero idle glow: impulses decay exponentially back to 0.0 between beats and after drops
+	if not perimeter_wave_enabled:
+		edge_glow_intensity = 0.0
+		edge_drop_boost = 0.0
+		edge_glow_width = EDGE_BASE_WIDTH
+		wave_blur_intensity = 0.0
+		return
+
+	# Zero idle glow spike: impulses decay exponentially between beats and after drops
 	var decay_rate: float = EDGE_DROP_INTENSITY_DECAY_RATE if edge_drop_boost > 0.25 else EDGE_BEAT_DECAY_RATE
 	edge_glow_intensity *= exp(-decay_rate * p_delta)
 	if edge_glow_intensity < EDGE_EPSILON:
@@ -443,23 +482,17 @@ func _update_edge_halo(p_delta: float) -> void:
 		0.0,
 		1.0
 	)
-	var target_wave_amp: float = 0.42
-	var target_blur_intensity: float = 0.30
-	if _backdrop_mode == BackdropMode.MENU:
-		if _menu_bgm_active:
-			target_wave_amp = clampf(0.55 + (spectral_activity * 0.45) + (edge_glow_intensity * 0.25), 0.50, 1.10)
-			target_blur_intensity = clampf(0.36 + (spectral_activity * 0.32) + (edge_glow_intensity * 0.24), 0.32, 0.86)
-	else:
-		target_wave_amp = clampf(
-			0.62 + (spectral_activity * 0.55) + (edge_glow_intensity * 0.28) + (edge_drop_boost * 0.42),
-			0.55,
-			1.50
-		)
-		target_blur_intensity = clampf(
-			0.40 + (spectral_activity * 0.38) + (edge_glow_intensity * 0.26) + (edge_drop_boost * 0.30),
-			0.36,
-			1.12
-		)
+	var target_wave_amp: float = clampf(
+		0.45 + (spectral_activity * 0.35) + (edge_glow_intensity * 0.18) + (edge_drop_boost * 0.25),
+		0.40,
+		1.15
+	)
+	# Base blur opacity (~0.10..0.15) so normal beats land at ~0.20..0.28 and drops cap at <= 0.52
+	var target_blur_intensity: float = clampf(
+		0.09 + (spectral_activity * 0.05) + (edge_drop_boost * 0.02),
+		0.08,
+		0.16
+	)
 
 	var wave_lerp: float = clampf(8.5 * p_delta, 0.0, 1.0)
 	wave_amplitude = lerpf(wave_amplitude, target_wave_amp, wave_lerp)
@@ -480,6 +513,7 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("zoom_bounce", _zoom_bounce)
 	_shader_material.set_shader_parameter("shake_offset", _shake_offset_uv)
 	_shader_material.set_shader_parameter("aspect_ratio", _aspect_ratio)
+	_shader_material.set_shader_parameter("perimeter_wave_enabled", 1.0 if perimeter_wave_enabled else 0.0)
 	_shader_material.set_shader_parameter("edge_glow_intensity", edge_glow_intensity)
 	_shader_material.set_shader_parameter("edge_glow_width", edge_glow_width)
 	_shader_material.set_shader_parameter("edge_drop_boost", edge_drop_boost)

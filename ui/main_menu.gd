@@ -942,6 +942,7 @@ func _connect_dependencies() -> void:
 
 	if reactive_background != null and audio_analyzer != null:
 		reactive_background.set_backdrop_mode(ReactiveBackground.BackdropMode.MENU)
+		reactive_background.set_perimeter_wave_enabled(false)
 		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):

@@ -347,6 +347,7 @@ func _resolve_and_wire_nodes() -> void:
 
 	if reactive_background != null:
 		reactive_background.set_backdrop_mode(ReactiveBackground.BackdropMode.GAMEPLAY)
+		reactive_background.set_perimeter_wave_enabled(true)
 		reactive_background.dsp_clock = dsp_clock
 		reactive_background.hit_judge = hit_judge
 		reactive_background.audio_analyzer = audio_analyzer
