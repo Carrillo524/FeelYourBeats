@@ -6,6 +6,7 @@ const DEMO_SONG_KEY: String = ChartCacheRepository.BUILTIN_DEMO_SONG_KEY
 const DEMO_BPM: float = 128.0
 const DEMO_DURATION_SEC: float = 15.0
 const DEMO_SAMPLE_RATE: int = 8000
+const BACK_DEBOUNCE_MSEC: int = 300
 
 static var pending_session_config: Dictionary = {}
 
@@ -30,6 +31,7 @@ var _active_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _active_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _last_chart_loaded_from_cache: bool = false
+var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 
 
 static func set_pending_session(p_config: Dictionary) -> void:
@@ -71,6 +73,18 @@ func _notification(p_what: int) -> void:
 		handle_back_request()
 
 
+func _input(p_event: InputEvent) -> void:
+	if p_event is InputEventKey:
+		var key_event: InputEventKey = p_event as InputEventKey
+		if key_event.pressed and not key_event.echo:
+			var code: Key = key_event.keycode if key_event.keycode != KEY_NONE else key_event.physical_keycode
+			if code == KEY_BACK:
+				var vp: Viewport = get_viewport()
+				if vp != null:
+					vp.set_input_as_handled()
+				handle_back_request()
+
+
 func _unhandled_input(p_event: InputEvent) -> void:
 	if p_event != null and p_event.is_action_pressed(&"ui_cancel"):
 		var vp: Viewport = get_viewport()
@@ -79,8 +93,18 @@ func _unhandled_input(p_event: InputEvent) -> void:
 		handle_back_request()
 
 
-func handle_back_request() -> void:
+func _consume_back_debounce(p_now_msec: int = -1) -> bool:
+	var now_msec: int = p_now_msec if p_now_msec >= 0 else Time.get_ticks_msec()
+	if (now_msec - _last_back_msec) < BACK_DEBOUNCE_MSEC:
+		return false
+	_last_back_msec = now_msec
+	return true
+
+
+func handle_back_request(p_now_msec: int = -1) -> void:
 	if safe_hud == null:
+		return
+	if not _consume_back_debounce(p_now_msec):
 		return
 	if safe_hud.is_results_overlay_open():
 		_on_main_menu_requested()

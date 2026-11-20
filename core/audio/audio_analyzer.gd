@@ -133,6 +133,326 @@ static func _read_file_header_bytes(p_path: String, p_max_bytes: int = 32) -> Pa
 	return header
 
 
+static func extract_audio_metadata_title_from_file(p_path: String) -> String:
+	if p_path.is_empty():
+		return ""
+	var file: FileAccess = FileAccess.open(p_path, FileAccess.READ)
+	if file == null:
+		return ""
+	var file_len: int = file.get_length()
+	if file_len <= 0:
+		file.close()
+		return ""
+
+	var probe_len: int = mini(file_len, 65536)
+	var head_bytes: PackedByteArray = file.get_buffer(probe_len)
+	if head_bytes.size() >= 10 and head_bytes[0] == 0x49 and head_bytes[1] == 0x44 and head_bytes[2] == 0x33:
+		var id3_size: int = _decode_synchsafe_u32(head_bytes, 6)
+		var desired_id3_len: int = mini(file_len, mini(10 + id3_size, 524288))
+		if desired_id3_len > head_bytes.size():
+			file.seek(0)
+			head_bytes = file.get_buffer(desired_id3_len)
+
+	var title_from_head: String = extract_audio_metadata_title(head_bytes)
+	if not title_from_head.is_empty():
+		file.close()
+		return title_from_head
+
+	# Fallback to ID3v1 tag in the last 128 bytes when file is larger than head probe
+	if file_len > head_bytes.size() and file_len >= 128:
+		file.seek(file_len - 128)
+		var tail_bytes: PackedByteArray = file.get_buffer(128)
+		file.close()
+		return _extract_id3v1_title(tail_bytes)
+
+	file.close()
+	return ""
+
+
+static func extract_audio_metadata_title(p_bytes: PackedByteArray) -> String:
+	var byte_count: int = p_bytes.size()
+	if byte_count < 4:
+		return ""
+
+	# 1. MP3 ID3v2 ("ID3")
+	if p_bytes[0] == 0x49 and p_bytes[1] == 0x44 and p_bytes[2] == 0x33:
+		var id3v2_title: String = _extract_id3v2_title(p_bytes)
+		if not id3v2_title.is_empty():
+			return id3v2_title
+
+	# 2. OGG Vorbis Comments ("\x03vorbis" within first 64 KB)
+	if (
+		p_bytes[0] == 0x4F
+		and p_bytes[1] == 0x67
+		and p_bytes[2] == 0x67
+		and p_bytes[3] == 0x53
+	):
+		var vorbis_title: String = _extract_ogg_vorbis_title(p_bytes)
+		if not vorbis_title.is_empty():
+			return vorbis_title
+
+	# 3. MP3 ID3v1 (last 128 bytes starting with "TAG")
+	if byte_count >= 128:
+		var id3v1_title: String = _extract_id3v1_title(p_bytes)
+		if not id3v1_title.is_empty():
+			return id3v1_title
+
+	return ""
+
+
+static func _combine_metadata_artist_title(p_artist: String, p_title: String) -> String:
+	var clean_title: String = _clean_metadata_text(p_title)
+	if clean_title.is_empty():
+		return ""
+	var clean_artist: String = _clean_metadata_text(p_artist)
+	if not clean_artist.is_empty():
+		return "%s - %s" % [clean_artist, clean_title]
+	return clean_title
+
+
+static func _clean_metadata_text(p_text: String) -> String:
+	var sanitized: String = p_text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+	return " ".join(sanitized.split(" ", false)).strip_edges()
+
+
+static func _decode_synchsafe_u32(p_bytes: PackedByteArray, p_offset: int) -> int:
+	if p_offset + 4 > p_bytes.size():
+		return 0
+	return (
+		((p_bytes[p_offset] & 0x7F) << 21)
+		| ((p_bytes[p_offset + 1] & 0x7F) << 14)
+		| ((p_bytes[p_offset + 2] & 0x7F) << 7)
+		| (p_bytes[p_offset + 3] & 0x7F)
+	)
+
+
+static func _decode_big_endian_u32(p_bytes: PackedByteArray, p_offset: int) -> int:
+	if p_offset + 4 > p_bytes.size():
+		return 0
+	return (
+		(p_bytes[p_offset] << 24)
+		| (p_bytes[p_offset + 1] << 16)
+		| (p_bytes[p_offset + 2] << 8)
+		| p_bytes[p_offset + 3]
+	)
+
+
+static func _extract_id3v2_title(p_bytes: PackedByteArray) -> String:
+	var total_len: int = p_bytes.size()
+	if total_len < 10:
+		return ""
+
+	var major_version: int = p_bytes[3]
+	var header_flags: int = p_bytes[5]
+	var tag_size: int = _decode_synchsafe_u32(p_bytes, 6)
+	var tag_end: int = mini(total_len, 10 + tag_size)
+	var cursor: int = 10
+
+	# Skip optional extended header for ID3v2.3 / ID3v2.4
+	if (header_flags & 0x40) != 0 and major_version >= 3 and cursor + 4 <= tag_end:
+		if major_version == 4:
+			var ext_size_v4: int = _decode_synchsafe_u32(p_bytes, cursor)
+			if ext_size_v4 >= 6:
+				cursor += ext_size_v4
+		else:
+			var ext_size_v3: int = _decode_big_endian_u32(p_bytes, cursor)
+			cursor += 4 + ext_size_v3
+
+	var found_title: String = ""
+	var found_artist: String = ""
+
+	if major_version == 2:
+		while cursor + 6 <= tag_end:
+			if p_bytes[cursor] == 0x00:
+				break
+			var frame_id_v2: String = p_bytes.slice(cursor, cursor + 3).get_string_from_ascii()
+			var frame_size_v2: int = (
+				(p_bytes[cursor + 3] << 16)
+				| (p_bytes[cursor + 4] << 8)
+				| p_bytes[cursor + 5]
+			)
+			var data_start_v2: int = cursor + 6
+			if frame_size_v2 <= 0 or data_start_v2 + frame_size_v2 > tag_end:
+				break
+			if frame_id_v2 == "TT2" and found_title.is_empty():
+				found_title = _decode_id3_text_payload(p_bytes.slice(data_start_v2, data_start_v2 + frame_size_v2))
+			elif frame_id_v2 == "TP1" and found_artist.is_empty():
+				found_artist = _decode_id3_text_payload(p_bytes.slice(data_start_v2, data_start_v2 + frame_size_v2))
+			cursor = data_start_v2 + frame_size_v2
+			if not found_title.is_empty() and not found_artist.is_empty():
+				break
+	else:
+		while cursor + 10 <= tag_end:
+			if p_bytes[cursor] == 0x00:
+				break
+			var frame_id: String = p_bytes.slice(cursor, cursor + 4).get_string_from_ascii()
+			var frame_size: int = 0
+			if major_version == 4:
+				var has_high_bit: bool = (
+					((p_bytes[cursor + 4] | p_bytes[cursor + 5] | p_bytes[cursor + 6] | p_bytes[cursor + 7]) & 0x80) != 0
+				)
+				frame_size = _decode_big_endian_u32(p_bytes, cursor + 4) if has_high_bit else _decode_synchsafe_u32(p_bytes, cursor + 4)
+			else:
+				frame_size = _decode_big_endian_u32(p_bytes, cursor + 4)
+
+			var data_start: int = cursor + 10
+			if frame_size <= 0 or data_start + frame_size > tag_end:
+				break
+
+			if frame_id == "TIT2" and found_title.is_empty():
+				found_title = _decode_id3_text_payload(p_bytes.slice(data_start, data_start + frame_size))
+			elif frame_id == "TPE1" and found_artist.is_empty():
+				found_artist = _decode_id3_text_payload(p_bytes.slice(data_start, data_start + frame_size))
+
+			cursor = data_start + frame_size
+			if not found_title.is_empty() and not found_artist.is_empty():
+				break
+
+	return _combine_metadata_artist_title(found_artist, found_title)
+
+
+static func _decode_id3_text_payload(p_payload: PackedByteArray) -> String:
+	if p_payload.size() < 2:
+		return ""
+	var encoding: int = p_payload[0]
+	var raw: PackedByteArray = p_payload.slice(1, p_payload.size())
+	match encoding:
+		0x00:
+			return _decode_iso_8859_1(raw)
+		0x01:
+			return _decode_utf16_with_bom(raw)
+		0x02:
+			return _decode_utf16_raw(raw, true)
+		0x03:
+			var end_idx: int = raw.size()
+			for i: int in range(raw.size()):
+				if raw[i] == 0x00:
+					end_idx = i
+					break
+			return raw.slice(0, end_idx).get_string_from_utf8()
+		_:
+			return _decode_iso_8859_1(raw)
+
+
+static func _decode_iso_8859_1(p_bytes: PackedByteArray) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	for i: int in range(p_bytes.size()):
+		var b: int = p_bytes[i]
+		if b == 0x00:
+			break
+		parts.append(String.chr(b))
+	return "".join(parts)
+
+
+static func _decode_utf16_with_bom(p_bytes: PackedByteArray) -> String:
+	if p_bytes.size() < 2:
+		return ""
+	var is_big_endian: bool = false
+	var start_offset: int = 0
+	if p_bytes[0] == 0xFE and p_bytes[1] == 0xFF:
+		is_big_endian = true
+		start_offset = 2
+	elif p_bytes[0] == 0xFF and p_bytes[1] == 0xFE:
+		is_big_endian = false
+		start_offset = 2
+	return _decode_utf16_raw(p_bytes.slice(start_offset, p_bytes.size()), is_big_endian)
+
+
+static func _decode_utf16_raw(p_bytes: PackedByteArray, p_big_endian: bool) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	var byte_len: int = p_bytes.size()
+	var i: int = 0
+	while i + 1 < byte_len:
+		var unit: int = (
+			((p_bytes[i] << 8) | p_bytes[i + 1])
+			if p_big_endian
+			else (p_bytes[i] | (p_bytes[i + 1] << 8))
+		)
+		i += 2
+		if unit == 0x0000:
+			break
+		if unit >= 0xD800 and unit <= 0xDBFF and i + 1 < byte_len:
+			var low: int = (
+				((p_bytes[i] << 8) | p_bytes[i + 1])
+				if p_big_endian
+				else (p_bytes[i] | (p_bytes[i + 1] << 8))
+			)
+			if low >= 0xDC00 and low <= 0xDFFF:
+				i += 2
+				var codepoint: int = 0x10000 + (((unit - 0xD800) << 10) | (low - 0xDC00))
+				parts.append(String.chr(codepoint))
+				continue
+		parts.append(String.chr(unit))
+	return "".join(parts)
+
+
+static func _extract_id3v1_title(p_bytes: PackedByteArray) -> String:
+	var byte_len: int = p_bytes.size()
+	if byte_len < 128:
+		return ""
+	var base: int = byte_len - 128
+	if p_bytes[base] != 0x54 or p_bytes[base + 1] != 0x41 or p_bytes[base + 2] != 0x47:
+		return ""
+	var raw_title: String = _decode_iso_8859_1(p_bytes.slice(base + 3, base + 33))
+	var raw_artist: String = _decode_iso_8859_1(p_bytes.slice(base + 33, base + 63))
+	return _combine_metadata_artist_title(raw_artist, raw_title)
+
+
+static func _extract_ogg_vorbis_title(p_bytes: PackedByteArray) -> String:
+	var limit: int = mini(p_bytes.size(), 65536)
+	var marker_pos: int = -1
+	for i: int in range(limit - 7):
+		if (
+			p_bytes[i] == 0x03
+			and p_bytes[i + 1] == 0x76
+			and p_bytes[i + 2] == 0x6F
+			and p_bytes[i + 3] == 0x72
+			and p_bytes[i + 4] == 0x62
+			and p_bytes[i + 5] == 0x69
+			and p_bytes[i + 6] == 0x73
+		):
+			marker_pos = i
+			break
+
+	if marker_pos < 0:
+		return ""
+
+	var cursor: int = marker_pos + 7
+	if cursor + 4 > limit:
+		return ""
+	var vendor_len: int = p_bytes.decode_u32(cursor)
+	cursor += 4 + vendor_len
+	if vendor_len < 0 or cursor + 4 > limit:
+		return ""
+
+	var comment_count: int = mini(p_bytes.decode_u32(cursor), 256)
+	cursor += 4
+
+	var found_title: String = ""
+	var found_artist: String = ""
+	for _idx: int in range(comment_count):
+		if cursor + 4 > limit:
+			break
+		var comment_len: int = p_bytes.decode_u32(cursor)
+		cursor += 4
+		if comment_len < 0 or cursor + comment_len > limit:
+			break
+		var comment: String = p_bytes.slice(cursor, cursor + comment_len).get_string_from_utf8()
+		cursor += comment_len
+		var eq_idx: int = comment.find("=")
+		if eq_idx > 0:
+			var key: String = comment.substr(0, eq_idx).strip_edges().to_upper()
+			var val: String = comment.substr(eq_idx + 1).strip_edges()
+			if key == "TITLE" and found_title.is_empty():
+				found_title = val
+			elif key == "ARTIST" and found_artist.is_empty():
+				found_artist = val
+		if not found_title.is_empty() and not found_artist.is_empty():
+			break
+
+	return _combine_metadata_artist_title(found_artist, found_title)
+
+
 func load_audio_stream(p_path: String) -> AudioStream:
 	if p_path.is_empty():
 		return null

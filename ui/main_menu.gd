@@ -29,6 +29,7 @@ const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
 const USEC_TO_SEC: float = 0.000001
+const BACK_DEBOUNCE_MSEC: int = 300
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -162,6 +163,7 @@ var _selected_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
 var _pending_import_after_permission: bool = false
+var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 
 var _pulse_phase: float = 0.0
 var _title_bass_boost: float = 0.0
@@ -254,6 +256,18 @@ func _notification(p_what: int) -> void:
 		handle_back_request()
 
 
+func _input(p_event: InputEvent) -> void:
+	if p_event is InputEventKey:
+		var key_event: InputEventKey = p_event as InputEventKey
+		if key_event.pressed and not key_event.echo:
+			var code: Key = key_event.keycode if key_event.keycode != KEY_NONE else key_event.physical_keycode
+			if code == KEY_BACK:
+				var vp: Viewport = get_viewport()
+				if vp != null:
+					vp.set_input_as_handled()
+				handle_back_request()
+
+
 func _unhandled_input(p_event: InputEvent) -> void:
 	if p_event != null and p_event.is_action_pressed(&"ui_cancel"):
 		var vp: Viewport = get_viewport()
@@ -262,8 +276,18 @@ func _unhandled_input(p_event: InputEvent) -> void:
 		handle_back_request()
 
 
-func handle_back_request() -> void:
+func _consume_back_debounce(p_now_msec: int = -1) -> bool:
+	var now_msec: int = p_now_msec if p_now_msec >= 0 else Time.get_ticks_msec()
+	if (now_msec - _last_back_msec) < BACK_DEBOUNCE_MSEC:
+		return false
+	_last_back_msec = now_msec
+	return true
+
+
+func handle_back_request(p_now_msec: int = -1) -> void:
 	if _is_launching:
+		return
+	if not _consume_back_debounce(p_now_msec):
 		return
 	if is_exit_confirm_modal_open():
 		close_exit_confirm_modal()
@@ -434,10 +458,11 @@ func open_song_setup_modal(p_entry: Dictionary) -> void:
 		return
 	_selected_entry = p_entry.duplicate()
 	var is_demo: bool = _selected_entry.get("is_demo", false) as bool
+	var title_resolved: bool = _selected_entry.get("title_resolved", false) as bool
 	var audio_path: String = str(_selected_entry.get("audio_path", ""))
 	var raw_title: String = str(_selected_entry.get("title", "")).strip_edges()
 	var display_title: String = raw_title
-	if is_demo:
+	if is_demo or (title_resolved and not raw_title.is_empty()):
 		display_title = raw_title if not raw_title.is_empty() else "Pista"
 	elif not raw_title.is_empty():
 		display_title = _format_song_display_title(raw_title)
@@ -504,16 +529,16 @@ func import_external_track_to_storage(p_source_path: String) -> Dictionary:
 	if cleaned.is_empty():
 		return {"ok": false, "error": "Ruta de archivo vacía."}
 
-	var display_title: String = _format_song_display_title(cleaned)
 	var normalized_dir: String = _imported_songs_dir.trim_suffix("/")
 
 	# If already stored inside the persistent imported directory, keep it in place
 	if cleaned.begins_with(normalized_dir + "/") and FileAccess.file_exists(cleaned):
 		var existing_key: String = ChartCacheRepository.normalize_song_key(cleaned)
+		var existing_title: String = _resolve_imported_song_title(cleaned, PackedByteArray(), cleaned)
 		return {
 			"ok": true,
 			"audio_path": cleaned,
-			"title": display_title,
+			"title": existing_title,
 			"song_key": existing_key,
 			"error": "",
 		}
@@ -525,6 +550,8 @@ func import_external_track_to_storage(p_source_path: String) -> Dictionary:
 	var detected_ext: String = AudioAnalyzer.detect_audio_extension_from_bytes(raw_bytes, cleaned)
 	if detected_ext.is_empty() or not SUPPORTED_AUDIO_EXTENSIONS.has(detected_ext):
 		return {"ok": false, "error": "Formato de audio no soportado (usa MP3, OGG o WAV)."}
+
+	var display_title: String = _resolve_imported_song_title(cleaned, raw_bytes, "")
 
 	var dir_err: Error = DirAccess.make_dir_recursive_absolute(normalized_dir)
 	if dir_err != OK and dir_err != ERR_ALREADY_EXISTS:
@@ -1239,6 +1266,53 @@ func _format_song_display_title(p_raw_path: String) -> String:
 	return cleaned if not cleaned.is_empty() else "Pista"
 
 
+func _strip_trailing_content_hash(p_stem: String) -> String:
+	var trimmed: String = p_stem.strip_edges()
+	var underscore_idx: int = trimmed.rfind("_")
+	if underscore_idx <= 0:
+		return trimmed
+	var suffix: String = trimmed.substr(underscore_idx + 1)
+	if suffix.length() != 12:
+		return trimmed
+	for i: int in range(12):
+		var code: int = suffix.unicode_at(i)
+		var is_hex: bool = (
+			(code >= 48 and code <= 57)
+			or (code >= 97 and code <= 102)
+			or (code >= 65 and code <= 70)
+		)
+		if not is_hex:
+			return trimmed
+	return trimmed.substr(0, underscore_idx)
+
+
+func _resolve_imported_song_title(
+	p_raw_source_path: String,
+	p_audio_bytes: PackedByteArray = PackedByteArray(),
+	p_persisted_file_path: String = ""
+) -> String:
+	# Priority 1: Binary metadata tags (ID3v2 / ID3v1 / Vorbis Comments)
+	var meta_title: String = ""
+	if not p_audio_bytes.is_empty():
+		meta_title = AudioAnalyzer.extract_audio_metadata_title(p_audio_bytes)
+	elif not p_persisted_file_path.is_empty():
+		meta_title = AudioAnalyzer.extract_audio_metadata_title_from_file(p_persisted_file_path)
+	if not meta_title.is_empty():
+		return meta_title
+
+	# Priority 2: Clean URI/filename title as long as it is NOT purely numeric
+	var uri_title: String = _format_song_display_title(p_raw_source_path)
+	var stem_candidate: String = _strip_trailing_content_hash(uri_title)
+	if not stem_candidate.is_empty() and stem_candidate != "Pista" and not stem_candidate.is_valid_int():
+		return uri_title
+
+	# Priority 3: Purely numeric MediaStore ID (e.g. "1000009633") -> "Pista Importada #<ID>"
+	if stem_candidate.is_valid_int():
+		return "Pista Importada #%s" % stem_candidate
+
+	return "Pista Importada"
+
+
 func _reload_all_track_lists() -> void:
 	_song_entries.clear()
 	_imported_entries.clear()
@@ -1249,6 +1323,7 @@ func _reload_all_track_lists() -> void:
 		"song_key": ChartCacheRepository.BUILTIN_DEMO_SONG_KEY,
 		"audio_path": "",
 		"title": "Demo Integrada (128 BPM)",
+		"title_resolved": true,
 		"source_tag": "DEMO",
 	})
 	seen_songs[ChartCacheRepository.BUILTIN_DEMO_SONG_KEY] = true
@@ -1264,11 +1339,13 @@ func _reload_all_track_lists() -> void:
 				"song_key": song_key,
 				"audio_path": song_path,
 				"title": _format_song_display_title(song_path),
+				"title_resolved": true,
 				"source_tag": "LOCAL",
 			})
 
 	var seen_imported: Dictionary = {}
 	var persisted_entries: Array[Dictionary] = _load_imported_catalog_entries()
+	var titles_upgraded: Dictionary = {}
 	for j: int in range(persisted_entries.size()):
 		var item: Dictionary = persisted_entries[j]
 		var item_path: String = str(item.get("audio_path", "")).strip_edges()
@@ -1280,14 +1357,21 @@ func _reload_all_track_lists() -> void:
 		if not seen_imported.has(item_key):
 			seen_imported[item_key] = true
 			var stored_title: String = str(item.get("title", "")).strip_edges()
-			var final_title: String = _format_song_display_title(stored_title) if not stored_title.is_empty() else _format_song_display_title(item_path)
+			var title_source: String = stored_title if not stored_title.is_empty() else item_path
+			var final_title: String = _resolve_imported_song_title(title_source, PackedByteArray(), item_path)
+			if final_title != stored_title:
+				titles_upgraded[item_key] = final_title
 			_imported_entries.append({
 				"is_demo": false,
 				"song_key": item_key,
 				"audio_path": item_path,
 				"title": final_title,
+				"title_resolved": true,
 				"source_tag": "IMPORTADA",
 			})
+
+	if not titles_upgraded.is_empty():
+		_update_persisted_imported_titles(titles_upgraded)
 
 	# Also include any audio files present inside user://imported_songs/ not yet listed in config
 	var disk_imported_paths: PackedStringArray = _scan_imported_songs_dir()
@@ -1300,7 +1384,8 @@ func _reload_all_track_lists() -> void:
 				"is_demo": false,
 				"song_key": disk_key,
 				"audio_path": disk_path,
-				"title": _format_song_display_title(disk_path),
+				"title": _resolve_imported_song_title(disk_path, PackedByteArray(), disk_path),
+				"title_resolved": true,
 				"source_tag": "IMPORTADA",
 			})
 
@@ -1309,6 +1394,24 @@ func _reload_all_track_lists() -> void:
 
 	_rebuild_songs_list_ui()
 	_rebuild_imported_list_ui()
+
+
+func _update_persisted_imported_titles(p_upgraded_titles: Dictionary) -> void:
+	if p_upgraded_titles.is_empty() or not FileAccess.file_exists(_recent_tracks_path):
+		return
+	var cfg: ConfigFile = ConfigFile.new()
+	if cfg.load(_recent_tracks_path) != OK:
+		return
+	var titles_map: Dictionary = {}
+	var raw_titles: Variant = cfg.get_value("recent_meta", "titles", {})
+	if raw_titles is Dictionary:
+		titles_map = (raw_titles as Dictionary).duplicate()
+	var keys: Array = p_upgraded_titles.keys()
+	for i: int in range(keys.size()):
+		var k: String = str(keys[i])
+		titles_map[k] = str(p_upgraded_titles[k])
+	cfg.set_value("recent_meta", "titles", titles_map)
+	cfg.save(_recent_tracks_path)
 
 
 func _scan_imported_songs_dir() -> PackedStringArray:
@@ -1523,10 +1626,11 @@ func _rebuild_entry_list(
 		var entry: Dictionary = p_entries[idx]
 		var song_key: String = str(entry.get("song_key", ""))
 		var entry_is_demo: bool = entry.get("is_demo", false) as bool
+		var entry_title_resolved: bool = entry.get("title_resolved", false) as bool
 		var entry_audio_path: String = str(entry.get("audio_path", ""))
 		var entry_raw_title: String = str(entry.get("title", "")).strip_edges()
 		var title: String = entry_raw_title
-		if entry_is_demo:
+		if entry_is_demo or (entry_title_resolved and not entry_raw_title.is_empty()):
 			title = entry_raw_title if not entry_raw_title.is_empty() else "Pista"
 		elif not entry_raw_title.is_empty():
 			title = _format_song_display_title(entry_raw_title)
