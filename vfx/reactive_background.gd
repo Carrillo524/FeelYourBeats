@@ -53,14 +53,16 @@ const TUNNEL_FRAME_COLORS: Array[Color] = [
 	Color(0.32, 0.68, 1.0, 1.0),
 ]
 
-const AURORA_CURTAIN_COUNT: int = 4
+const AURORA_CURTAIN_COUNT: int = 7
 const AURORA_RIBBON_SEGMENTS: int = 16
 const AURORA_BEAT_DECAY_RATE: float = 4.2
-const AURORA_BASE_TOP_COLOR: Color = Color(0.024, 0.036, 0.092, 1.0)
-const AURORA_BASE_BOTTOM_COLOR: Color = Color(0.052, 0.024, 0.112, 1.0)
-const AURORA_COLOR_CYAN: Color = Color(0.18, 0.90, 0.96, 1.0)
-const AURORA_COLOR_VIOLET: Color = Color(0.64, 0.30, 0.98, 1.0)
-const AURORA_COLOR_BLUE: Color = Color(0.24, 0.56, 1.0, 1.0)
+const AURORA_MAX_ALPHA: float = 0.26
+const AURORA_MAX_RGB_CHANNEL: float = 0.91
+const AURORA_BASE_TOP_COLOR: Color = Color(0.022, 0.034, 0.088, 1.0)
+const AURORA_BASE_BOTTOM_COLOR: Color = Color(0.048, 0.022, 0.105, 1.0)
+const AURORA_COLOR_TURQUOISE: Color = Color(0.06, 0.84, 0.78, 1.0)
+const AURORA_COLOR_CYAN: Color = Color(0.08, 0.76, 0.91, 1.0)
+const AURORA_COLOR_VIOLET: Color = Color(0.48, 0.24, 0.90, 1.0)
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
@@ -117,6 +119,8 @@ var _aurora_color_phase: float = 0.0
 var _aurora_beat_boost: float = 0.0
 var _aurora_drop_boost: float = 0.0
 var _aurora_pulse_count: int = 0
+var _aurora_vertical_texture: GradientTexture2D = null
+var _aurora_horizontal_texture: GradientTexture2D = null
 var _hit_effect_style: String = HIT_EFFECT_CLASSIC
 var _hit_beam_texture: GradientTexture2D = null
 var _hit_radial_texture: GradientTexture2D = null
@@ -137,6 +141,8 @@ func _init() -> void:
 	_quad_cols_buf.resize(4)
 	_tunnel_frame_pts.resize(9)
 	_init_tunnel_depths()
+	_aurora_vertical_texture = _create_aurora_vertical_texture()
+	_aurora_horizontal_texture = _create_aurora_horizontal_texture()
 	_hit_beam_texture = _create_hit_beam_texture()
 	_hit_radial_texture = _create_hit_radial_texture()
 
@@ -339,17 +345,30 @@ func get_aurora_curtain_count() -> int:
 
 func get_aurora_brightness_multiplier() -> float:
 	var drive: float = _compute_aurora_musical_drive()
-	return 1.0 + (drive * 1.25)
+	return 1.0 + (drive * 1.10)
 
 
 func get_aurora_blur_scale() -> float:
 	var drive: float = _compute_aurora_musical_drive()
-	return 1.0 + (drive * 0.62)
+	return 1.0 + (drive * 0.58)
+
+
+func get_aurora_vertical_stretch() -> float:
+	var drive: float = _compute_aurora_musical_drive()
+	return clampf(1.0 + (drive * 0.20), 1.0, 1.38)
 
 
 func get_aurora_peak_alpha() -> float:
 	var bright_mult: float = get_aurora_brightness_multiplier()
-	return clampf(0.20 * bright_mult, 0.0, 0.46)
+	return clampf(0.125 * bright_mult, 0.0, AURORA_MAX_ALPHA)
+
+
+func get_aurora_vertical_texture() -> GradientTexture2D:
+	return _aurora_vertical_texture
+
+
+func get_aurora_horizontal_texture() -> GradientTexture2D:
+	return _aurora_horizontal_texture
 
 
 func get_aurora_undulation_multiplier() -> float:
@@ -977,11 +996,19 @@ func _draw_tunnel_backdrop() -> void:
 
 func _sample_aurora_color(p_phase: float) -> Color:
 	var norm: float = fposmod(p_phase / TAU, 1.0)
+	var col: Color = AURORA_COLOR_TURQUOISE
 	if norm < 0.3333:
-		return AURORA_COLOR_CYAN.lerp(AURORA_COLOR_VIOLET, smoothstep(0.0, 0.3333, norm))
+		col = AURORA_COLOR_TURQUOISE.lerp(AURORA_COLOR_CYAN, smoothstep(0.0, 0.3333, norm))
 	elif norm < 0.6666:
-		return AURORA_COLOR_VIOLET.lerp(AURORA_COLOR_BLUE, smoothstep(0.3333, 0.6666, norm))
-	return AURORA_COLOR_BLUE.lerp(AURORA_COLOR_CYAN, smoothstep(0.6666, 1.0, norm))
+		col = AURORA_COLOR_CYAN.lerp(AURORA_COLOR_VIOLET, smoothstep(0.3333, 0.6666, norm))
+	else:
+		col = AURORA_COLOR_VIOLET.lerp(AURORA_COLOR_TURQUOISE, smoothstep(0.6666, 1.0, norm))
+	return Color(
+		minf(col.r, AURORA_MAX_RGB_CHANNEL),
+		minf(col.g, AURORA_MAX_RGB_CHANNEL),
+		minf(col.b, AURORA_MAX_RGB_CHANNEL),
+		1.0
+	)
 
 
 func _draw_aurora_backdrop() -> void:
@@ -990,83 +1017,136 @@ func _draw_aurora_backdrop() -> void:
 	var h: float = bounds.y
 	_draw_vertical_dark_gradient(w, h, AURORA_BASE_TOP_COLOR, AURORA_BASE_BOTTOM_COLOR)
 
+	if _aurora_vertical_texture == null or _aurora_horizontal_texture == null:
+		_draw_global_note_hit_flashes(bounds)
+		return
+
+	var vert_grad: Gradient = _aurora_vertical_texture.gradient
 	var bright_mult: float = get_aurora_brightness_multiplier()
 	var blur_scale: float = get_aurora_blur_scale()
+	var stretch_v: float = get_aurora_vertical_stretch()
 	var undul_mult: float = get_aurora_undulation_multiplier()
-	var glow_flash_mix: float = clampf((bright_mult - 1.0) * 0.22, 0.0, 0.40)
 
-	# Atmospheric neon sky wash in active aurora color for richer luminous presence
+	# Subtle colored upper-sky ambient glow (kept strictly colored, never white, leaving lower hit zone clean)
 	var wash_col: Color = _sample_aurora_color(_aurora_color_phase)
-	var wash_alpha: float = clampf(0.055 * bright_mult, 0.0, 0.14)
+	var wash_alpha: float = clampf(0.045 * bright_mult, 0.0, 0.09)
 	_quad_pts_buf[0] = Vector2(0.0, 0.0)
 	_quad_pts_buf[1] = Vector2(w, 0.0)
-	_quad_pts_buf[2] = Vector2(w, h * 0.78)
-	_quad_pts_buf[3] = Vector2(0.0, h * 0.78)
+	_quad_pts_buf[2] = Vector2(w, h * 0.66)
+	_quad_pts_buf[3] = Vector2(0.0, h * 0.66)
 	_quad_cols_buf[0] = Color(wash_col.r, wash_col.g, wash_col.b, wash_alpha)
 	_quad_cols_buf[1] = Color(wash_col.r, wash_col.g, wash_col.b, wash_alpha)
 	_quad_cols_buf[2] = Color(wash_col.r, wash_col.g, wash_col.b, 0.0)
 	_quad_cols_buf[3] = Color(wash_col.r, wash_col.g, wash_col.b, 0.0)
 	draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
-	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.16, 0.42, 0.66, 0.86])
-	var slants: PackedFloat32Array = PackedFloat32Array([0.14, -0.10, 0.12, -0.13])
-	var half_widths: PackedFloat32Array = PackedFloat32Array([0.24, 0.28, 0.25, 0.22])
-	var y_starts: PackedFloat32Array = PackedFloat32Array([0.04, 0.08, 0.05, 0.10])
-	var y_ends: PackedFloat32Array = PackedFloat32Array([0.74, 0.82, 0.78, 0.72])
-	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 1.55, 3.10, 4.65])
-	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.65 * blur_scale, 1.85 * blur_scale, 1.18 * blur_scale, 0.58])
-	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.22, 0.42, 0.70, 1.0])
+	# 7 ethereal vertical curtains in mid-upper region (hit-line area below ~74% stays clean)
+	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.08, 0.22, 0.37, 0.51, 0.65, 0.79, 0.92])
+	var half_widths: PackedFloat32Array = PackedFloat32Array([0.15, 0.18, 0.16, 0.20, 0.17, 0.18, 0.15])
+	var y_starts: PackedFloat32Array = PackedFloat32Array([0.03, 0.06, 0.02, 0.05, 0.03, 0.07, 0.04])
+	var y_spans: PackedFloat32Array = PackedFloat32Array([0.48, 0.54, 0.50, 0.56, 0.52, 0.49, 0.46])
+	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 0.95, 1.90, 2.85, 3.80, 4.75, 5.70])
+	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.15 * blur_scale, 0.96 * blur_scale])
+	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.52, 1.00])
 
 	for c_idx: int in range(AURORA_CURTAIN_COUNT):
-		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15))
-		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15) + 1.65)
-		var base_alpha: float = clampf((0.16 + (0.035 * float(c_idx % 2))) * bright_mult, 0.0, 0.46)
-		var y_top_px: float = h * y_starts[c_idx]
-		var y_bot_px: float = h * y_ends[c_idx]
-		var span_y: float = maxf(1.0, y_bot_px - y_top_px)
-		var base_hw: float = w * half_widths[c_idx]
-		var sway_amp: float = w * 0.065 * undul_mult
+		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92))
+		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92) + 1.85)
+		var base_alpha: float = clampf((0.10 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, AURORA_MAX_ALPHA)
 
-		# Four soft concentric curtain passes for lush neon blur glow without hiding notes
-		for pass_idx: int in range(4):
+		var breath: float = 1.0 + (0.06 * sin((_aurora_time * 0.85) + phase_offsets[c_idx]))
+		var y_top_px: float = h * y_starts[c_idx]
+		var span_ratio: float = minf(0.68, y_spans[c_idx] * breath * stretch_v)
+		var span_y: float = maxf(1.0, h * span_ratio)
+		var base_hw: float = w * half_widths[c_idx]
+		var sway_amp: float = w * 0.042 * undul_mult
+
+		# Double-layer soft textured curtains (wide diffused neon veil + smooth vertical core, zero hard edges)
+		for pass_idx: int in range(2):
 			var width_scale: float = pass_widths[pass_idx]
 			var pass_alpha_scale: float = pass_alphas[pass_idx]
-			var core_flash: float = glow_flash_mix if pass_idx == 3 else (glow_flash_mix * 0.42)
+			var pass_top: float = maxf(0.0, y_top_px - (h * 0.03 if pass_idx == 0 else 0.0))
+			var pass_span: float = minf(h * 0.74 - pass_top, span_y * (1.10 if pass_idx == 0 else 1.0))
+			if pass_span <= 4.0:
+				continue
+
 			for s_idx: int in range(AURORA_RIBBON_SEGMENTS):
 				var t0: float = float(s_idx) / float(AURORA_RIBBON_SEGMENTS)
 				var t1: float = float(s_idx + 1) / float(AURORA_RIBBON_SEGMENTS)
 
-				var y0: float = y_top_px + (t0 * span_y)
-				var y1: float = y_top_px + (t1 * span_y)
+				var y0: float = pass_top + (t0 * pass_span)
+				var y1: float = pass_top + (t1 * pass_span)
 
-				var sway0: float = sin((_aurora_time * 0.75) + (t0 * 3.4) + phase_offsets[c_idx]) * sway_amp
-				var sway1: float = sin((_aurora_time * 0.75) + (t1 * 3.4) + phase_offsets[c_idx]) * sway_amp
+				var sway0: float = sin((_aurora_time * 0.72) + (t0 * 2.8) + phase_offsets[c_idx]) * sway_amp
+				var sway1: float = sin((_aurora_time * 0.72) + (t1 * 2.8) + phase_offsets[c_idx]) * sway_amp
 
-				var cx0: float = (w * (x_anchors[c_idx] + (slants[c_idx] * (t0 - 0.5)))) + sway0
-				var cx1: float = (w * (x_anchors[c_idx] + (slants[c_idx] * (t1 - 0.5)))) + sway1
+				var cx0: float = (w * x_anchors[c_idx]) + sway0
+				var cx1: float = (w * x_anchors[c_idx]) + sway1
 
-				var hw0: float = base_hw * width_scale * (0.78 + (0.28 * sin(t0 * PI)))
-				var hw1: float = base_hw * width_scale * (0.78 + (0.28 * sin(t1 * PI)))
+				var hw0: float = base_hw * width_scale * (0.82 + (0.24 * sin(t0 * PI)))
+				var hw1: float = base_hw * width_scale * (0.82 + (0.24 * sin(t1 * PI)))
 
-				var env0: float = pow(sin(clampf(t0, 0.0, 1.0) * PI), 1.35)
-				var env1: float = pow(sin(clampf(t1, 0.0, 1.0) * PI), 1.35)
+				var v_env0: float = vert_grad.sample(t0).a if vert_grad != null else sin(t0 * PI)
+				var v_env1: float = vert_grad.sample(t1).a if vert_grad != null else sin(t1 * PI)
 
-				var c0_rgb: Color = col_top.lerp(col_bot, t0).lerp(Color(0.94, 0.99, 1.0, 1.0), core_flash)
-				var c1_rgb: Color = col_top.lerp(col_bot, t1).lerp(Color(0.94, 0.99, 1.0, 1.0), core_flash)
-				var c0: Color = Color(c0_rgb.r, c0_rgb.g, c0_rgb.b, base_alpha * pass_alpha_scale * env0)
-				var c1: Color = Color(c1_rgb.r, c1_rgb.g, c1_rgb.b, base_alpha * pass_alpha_scale * env1)
+				var c0_rgb: Color = col_top.lerp(col_bot, t0)
+				var c1_rgb: Color = col_top.lerp(col_bot, t1)
+				var a0: float = clampf(base_alpha * pass_alpha_scale * v_env0, 0.0, AURORA_MAX_ALPHA)
+				var a1: float = clampf(base_alpha * pass_alpha_scale * v_env1, 0.0, AURORA_MAX_ALPHA)
 
 				_quad_pts_buf[0] = Vector2(cx0 - hw0, y0)
 				_quad_pts_buf[1] = Vector2(cx0 + hw0, y0)
 				_quad_pts_buf[2] = Vector2(cx1 + hw1, y1)
 				_quad_pts_buf[3] = Vector2(cx1 - hw1, y1)
-				_quad_cols_buf[0] = c0
-				_quad_cols_buf[1] = c0
-				_quad_cols_buf[2] = c1
-				_quad_cols_buf[3] = c1
-				draw_polygon(_quad_pts_buf, _quad_cols_buf)
+				_quad_cols_buf[0] = Color(minf(c0_rgb.r, AURORA_MAX_RGB_CHANNEL), minf(c0_rgb.g, AURORA_MAX_RGB_CHANNEL), minf(c0_rgb.b, AURORA_MAX_RGB_CHANNEL), a0)
+				_quad_cols_buf[1] = _quad_cols_buf[0]
+				_quad_cols_buf[2] = Color(minf(c1_rgb.r, AURORA_MAX_RGB_CHANNEL), minf(c1_rgb.g, AURORA_MAX_RGB_CHANNEL), minf(c1_rgb.b, AURORA_MAX_RGB_CHANNEL), a1)
+				_quad_cols_buf[3] = _quad_cols_buf[2]
+				draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _aurora_horizontal_texture)
 
 	_draw_global_note_hit_flashes(bounds)
+
+
+func _create_aurora_vertical_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.68, 0.86, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.35),
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.45),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_LINEAR
+	tex.fill_from = Vector2(0.5, 0.0)
+	tex.fill_to = Vector2(0.5, 1.0)
+	tex.width = 8
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
+
+
+func _create_aurora_horizontal_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.24, 0.50, 0.76, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.26),
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.26),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_LINEAR
+	tex.fill_from = Vector2(0.0, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 128
+	tex.height = 8
+	tex.use_hdr = false
+	return tex
 
 
 func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:

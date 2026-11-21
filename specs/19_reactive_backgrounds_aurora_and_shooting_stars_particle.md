@@ -89,9 +89,9 @@ Incluye exclusivamente:
 - El renderizado se encapsula bajo la constante `HIT_EFFECT_CLASSIC = "classic"` como estilo base predeterminado del futuro selector de **Efectos de Acierto de Nota** planificado rumbo a la **`v1.1.0`** (sin añadir controles nuevos en `AJUSTES` en esta entrega).
 
 ### 7.2 Fondo `Aurora` Boreal (`style == "aurora"`)
-- **Base:** `material = null` + cielo nocturno profundo (`Color(0.024, 0.036, 0.092)` → `Color(0.052, 0.024, 0.112)`).
-- **4 cortinas amplias verticales/diagonales (`16` bandas por cortina):** mallas de quads translúcidos con opacidad nula en bordes superior e inferior y doble capa de ancho (cortina difusa amplia + núcleo luminoso suave), evitando bordes duros y manteniendo opacidad contenida (`<= 0.24` por cortina) para máxima legibilidad.
-- **Transición de color y ondulación:** ciclo sinusoidal continuo entre **cian** (`Color(0.18, 0.90, 0.96)`), **violeta** (`Color(0.64, 0.30, 0.98)`) y **azul neón** (`Color(0.24, 0.56, 1.0)`). En beats y drops aumenta brillo (`1.0 + drive * 0.58`) y amplitud de ondulación (`1.0 + drive * 0.48`), regresando suavemente al reposo.
+- **Base:** `material = null` + cielo nocturno profundo (`Color(0.022, 0.034, 0.088)` → `Color(0.048, 0.022, 0.105)`).
+- **7 cortinas verticales etéreas sin bordes duros:** ubicadas en la zona media-superior (dejando despejada la zona inferior de la línea de juicio), dibujadas combinando dos `GradientTexture2D` precreadas en `_init()` (perfil vertical `0.0 -> 0.35 -> 1.0 -> 0.45 -> 0.0` y caída horizontal en campana suave `0.0 -> 0.26 -> 1.0 -> 0.26 -> 0.0`) en doble capa (estela difusa ancha de fondo + núcleo vertical suave), sin `WorldEnvironment`.
+- **Paleta y respiración musical:** transición fluida entre **turquesa neón** (`Color(0.06, 0.84, 0.78)`), **cian neón** (`Color(0.08, 0.76, 0.91)`) y **violeta eléctrico** (`Color(0.48, 0.24, 0.90)`). En beats y Drops las cortinas respiran estirándose verticalmente (`get_aurora_vertical_stretch()`), abriendo su velo difuminado (`get_aurora_blur_scale()`) e intensificando su resplandor coloreado con alfa acotado (`<= 0.26`) y canales RGB estrictamente `< 0.92` para nunca saturar a luz blanca.
 
 ### 7.3 Partícula `Estrellas Fugaces` (`TYPE_SHOOTING_STARS = "shooting_stars"`)
 - **Presupuesto acotado:** `3` (Baja), `6` (Media), `10` (Alta) slots en los arreglos paralelos `Packed*Array` existentes (0 asignaciones por frame).
