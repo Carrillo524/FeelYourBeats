@@ -8,6 +8,12 @@ const AUDIO_TARGET_DECAY_SPEED: float = 4.0
 const MAX_EFFECTIVE_DRIVE: float = 1.65
 
 const CIRCLE_SPEED_BEAT_BOOST: float = 1.15
+const CIRCLE_MIN_RADIUS_PX: float = 1.2
+const CIRCLE_MAX_RADIUS_PX: float = 3.8
+const CIRCLE_FADE_IN_END: float = 0.14
+const CIRCLE_EDGE_FADE_START: float = 0.72
+const CIRCLE_BASE_HALO_SCALE: float = 2.3
+const CIRCLE_BEAT_HALO_BOOST: float = 1.75
 const SQUARE_SCALE_BEAT_BOOST: float = 0.28
 const DEFAULT_VIEWPORT_SIZE: Vector2 = Vector2(1080.0, 1920.0)
 
@@ -143,6 +149,43 @@ func get_particle_life_phases_snapshot() -> PackedFloat32Array:
 	return _life_phase.duplicate()
 
 
+func get_circle_halo_scale() -> float:
+	return CIRCLE_BASE_HALO_SCALE + (_current_drive * CIRCLE_BEAT_HALO_BOOST)
+
+
+func get_circle_halo_alpha_factor() -> float:
+	return clampf(0.24 + (_current_drive * 0.22), 0.0, 0.56)
+
+
+func get_circle_effective_radius(p_index: int) -> float:
+	if p_index < 0 or p_index >= _active_count:
+		return 0.0
+	var bounds: Vector2 = _resolve_bounds()
+	var edge_norm: float = _compute_rect_edge_norm(_pos[p_index], bounds)
+	var depth_t: float = clampf(edge_norm, 0.0, 1.0)
+	var max_r: float = clampf(_size_param[p_index], CIRCLE_MIN_RADIUS_PX, CIRCLE_MAX_RADIUS_PX)
+	return clampf(lerpf(CIRCLE_MIN_RADIUS_PX, max_r, depth_t), CIRCLE_MIN_RADIUS_PX, CIRCLE_MAX_RADIUS_PX)
+
+
+func compute_circle_edge_fade(p_pos: Vector2, p_bounds: Vector2 = Vector2.ZERO) -> float:
+	var bounds: Vector2 = p_bounds if (p_bounds.x > 1.0 and p_bounds.y > 1.0) else _resolve_bounds()
+	var edge_norm: float = _compute_rect_edge_norm(p_pos, bounds)
+	return 1.0 - smoothstep(CIRCLE_EDGE_FADE_START, 1.0, edge_norm)
+
+
+func get_circle_effective_alpha(p_index: int) -> float:
+	if p_index < 0 or p_index >= _active_count:
+		return 0.0
+	var bounds: Vector2 = _resolve_bounds()
+	var edge_norm: float = _compute_rect_edge_norm(_pos[p_index], bounds)
+	var spawn_fade: float = clampf(_life_phase[p_index], 0.0, 1.0)
+	var center_fade: float = smoothstep(0.02, CIRCLE_FADE_IN_END, edge_norm)
+	var in_fade: float = minf(spawn_fade, center_fade)
+	var edge_fade: float = 1.0 - smoothstep(CIRCLE_EDGE_FADE_START, 1.0, edge_norm)
+	var alpha_boost: float = minf(0.14, _current_drive * 0.10)
+	return clampf((_alpha_base[p_index] + alpha_boost) * in_fade * edge_fade, 0.0, 0.72)
+
+
 func trigger_beat_impulse(p_strength: float = 0.85) -> void:
 	var clamped: float = clampf(p_strength, 0.0, 1.0)
 	if clamped <= 0.0:
@@ -255,25 +298,30 @@ func _resize_arrays(p_count: int) -> void:
 
 
 func _spawn_circle(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:
-	var radius: float = _rng.randf_range(6.0, 18.0)
-	var margin: float = radius * 2.2
-	var start_x: float = _rng.randf_range(0.0, p_bounds.x)
-	var start_y: float = _rng.randf_range(-margin, p_bounds.y + margin) if p_initial_fill else -margin
+	var center: Vector2 = p_bounds * 0.5
+	var half_w: float = maxf(1.0, p_bounds.x * 0.5)
+	var half_h: float = maxf(1.0, p_bounds.y * 0.5)
+	var theta: float = _rng.randf_range(0.0, TAU)
+	var radial_dir: Vector2 = Vector2(cos(theta), sin(theta))
 
-	_pos[p_index] = Vector2(start_x, start_y)
-	_vel[p_index] = Vector2(
-		_rng.randf_range(-8.0, 8.0),
-		_rng.randf_range(42.0, 108.0)
-	)
-	_size_param[p_index] = radius
-	_angle[p_index] = 0.0
-	_ang_vel[p_index] = 0.0
-	_alpha_base[p_index] = _rng.randf_range(0.22, 0.46)
-	_life_phase[p_index] = _rng.randf()
-	_life_speed[p_index] = 0.0
-	_sway_phase[p_index] = _rng.randf_range(0.0, TAU)
-	_sway_freq[p_index] = _rng.randf_range(0.65, 1.55)
-	_sway_amp[p_index] = _rng.randf_range(14.0, 34.0)
+	var ray_edge_dist: float = _compute_ray_edge_distance(radial_dir, half_w, half_h)
+	var norm_dist: float = _rng.randf_range(0.06, 0.92) if p_initial_fill else _rng.randf_range(0.02, 0.09)
+	var start_pos: Vector2 = center + (radial_dir * (ray_edge_dist * norm_dist))
+
+	var base_speed: float = _rng.randf_range(58.0, 128.0)
+	var max_radius: float = _rng.randf_range(1.9, CIRCLE_MAX_RADIUS_PX)
+
+	_pos[p_index] = start_pos
+	_vel[p_index] = radial_dir * base_speed
+	_size_param[p_index] = max_radius
+	_angle[p_index] = theta
+	_ang_vel[p_index] = base_speed
+	_alpha_base[p_index] = _rng.randf_range(0.28, 0.56)
+	_life_phase[p_index] = 1.0 if p_initial_fill else 0.0
+	_life_speed[p_index] = _rng.randf_range(1.6, 2.6)
+	_sway_phase[p_index] = 0.0
+	_sway_freq[p_index] = 0.0
+	_sway_amp[p_index] = 0.0
 	_color_idx[p_index] = _rng.randi_range(0, CIRCLE_PALETTE.size() - 1)
 
 
@@ -308,31 +356,28 @@ func _spawn_square(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> voi
 
 
 func _step_circles(p_dt: float, p_bounds: Vector2) -> void:
+	var center: Vector2 = p_bounds * 0.5
 	var speed_mult: float = _current_speed_mult
-	var sway_mult: float = 1.0 + (_current_drive * 0.25)
 
 	for i: int in range(_active_count):
 		var pos: Vector2 = _pos[i]
-		var vel: Vector2 = _vel[i]
-		var radius: float = _size_param[i]
-		var sway_vx: float = sin((_elapsed_time * _sway_freq[i]) + _sway_phase[i]) * _sway_amp[i] * sway_mult
+		var offset: Vector2 = pos - center
+		var radial_dir: Vector2 = offset.normalized() if offset.length_squared() > 0.01 else _vel[i].normalized()
+		if radial_dir.length_squared() <= 0.01:
+			radial_dir = Vector2(cos(_angle[i]), sin(_angle[i]))
 
-		pos.x += (vel.x + sway_vx) * p_dt
-		pos.y += (vel.y * speed_mult) * p_dt
+		var edge_norm: float = _compute_rect_edge_norm(pos, p_bounds)
+		var depth_accel: float = 0.45 + (1.85 * pow(clampf(edge_norm, 0.0, 1.2), 1.35))
+		var base_speed: float = maxf(24.0, _ang_vel[i])
 
-		var margin: float = radius * 2.2
-		if pos.y > p_bounds.y + margin:
-			pos.y = -margin
-			pos.x = _rng.randf_range(0.0, p_bounds.x)
-		elif pos.y < -margin * 2.0:
-			pos.y = p_bounds.y + margin
+		pos += radial_dir * (base_speed * depth_accel * speed_mult) * p_dt
+		_life_phase[i] = minf(1.0, _life_phase[i] + (_life_speed[i] * p_dt))
 
-		if pos.x < -margin:
-			pos.x = p_bounds.x + margin
-		elif pos.x > p_bounds.x + margin:
-			pos.x = -margin
-
-		_pos[i] = pos
+		var next_edge_norm: float = _compute_rect_edge_norm(pos, p_bounds)
+		if next_edge_norm >= 1.02:
+			_spawn_circle(i, p_bounds, false)
+		else:
+			_pos[i] = pos
 
 
 func _step_squares(p_dt: float, p_bounds: Vector2) -> void:
@@ -370,20 +415,54 @@ func _step_squares(p_dt: float, p_bounds: Vector2) -> void:
 
 
 func _draw_circles() -> void:
-	var alpha_boost: float = minf(0.12, _current_drive * 0.08)
+	var bounds: Vector2 = _resolve_bounds()
+	var halo_scale: float = get_circle_halo_scale()
+	var halo_alpha_factor: float = get_circle_halo_alpha_factor()
+	var alpha_boost: float = minf(0.14, _current_drive * 0.10)
 	var palette_len: int = CIRCLE_PALETTE.size()
 
 	for i: int in range(_active_count):
 		var pos: Vector2 = _pos[i]
-		var radius: float = _size_param[i]
-		var base_col: Color = CIRCLE_PALETTE[_color_idx[i] % palette_len]
-		var core_alpha: float = clampf(_alpha_base[i] + alpha_boost, 0.0, 0.62)
+		var edge_norm: float = _compute_rect_edge_norm(pos, bounds)
+		var spawn_fade: float = clampf(_life_phase[i], 0.0, 1.0)
+		var center_fade: float = smoothstep(0.02, CIRCLE_FADE_IN_END, edge_norm)
+		var in_fade: float = minf(spawn_fade, center_fade)
+		var edge_fade: float = 1.0 - smoothstep(CIRCLE_EDGE_FADE_START, 1.0, edge_norm)
+		var core_alpha: float = clampf((_alpha_base[i] + alpha_boost) * in_fade * edge_fade, 0.0, 0.72)
+		if core_alpha <= 0.005:
+			continue
 
-		var halo_col: Color = Color(base_col.r, base_col.g, base_col.b, core_alpha * 0.24)
+		var max_r: float = clampf(_size_param[i], CIRCLE_MIN_RADIUS_PX, CIRCLE_MAX_RADIUS_PX)
+		var radius: float = clampf(
+			lerpf(CIRCLE_MIN_RADIUS_PX, max_r, clampf(edge_norm, 0.0, 1.0)),
+			CIRCLE_MIN_RADIUS_PX,
+			CIRCLE_MAX_RADIUS_PX
+		)
+		var base_col: Color = CIRCLE_PALETTE[_color_idx[i] % palette_len]
+
+		var outer_blur_col: Color = Color(base_col.r, base_col.g, base_col.b, core_alpha * halo_alpha_factor * 0.42)
+		var inner_blur_col: Color = Color(base_col.r, base_col.g, base_col.b, core_alpha * halo_alpha_factor)
 		var core_col: Color = Color(base_col.r, base_col.g, base_col.b, core_alpha)
 
-		draw_circle(pos, radius * 1.65, halo_col)
+		draw_circle(pos, radius * halo_scale * 1.45, outer_blur_col)
+		draw_circle(pos, radius * halo_scale, inner_blur_col)
 		draw_circle(pos, radius, core_col)
+
+
+func _compute_rect_edge_norm(p_pos: Vector2, p_bounds: Vector2) -> float:
+	var half_w: float = maxf(1.0, p_bounds.x * 0.5)
+	var half_h: float = maxf(1.0, p_bounds.y * 0.5)
+	var nx: float = absf(p_pos.x - half_w) / half_w
+	var ny: float = absf(p_pos.y - half_h) / half_h
+	return maxf(nx, ny)
+
+
+func _compute_ray_edge_distance(p_dir: Vector2, p_half_w: float, p_half_h: float) -> float:
+	var abs_x: float = absf(p_dir.x)
+	var abs_y: float = absf(p_dir.y)
+	var tx: float = (p_half_w / abs_x) if abs_x > 0.0001 else 1e9
+	var ty: float = (p_half_h / abs_y) if abs_y > 0.0001 else 1e9
+	return minf(tx, ty)
 
 
 func _draw_squares() -> void:

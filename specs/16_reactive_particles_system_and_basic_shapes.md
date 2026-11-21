@@ -35,7 +35,7 @@ Incluye exclusivamente:
    - Consumo exclusivo por señales (`DSPClock.beat_pulsed`, `ReactiveBackground.bass_kick_pulsed`, `AudioAnalyzer.spectrum_updated`) respetando la separación estricta de capas (`AGENTS.md` §4).
    - Movimiento ambiental suave aun sin música ni beats detectados.
 4. **Variantes implementadas en Fase 7A:**
-   - **`Círculos` (`"circles"`):** círculos translúcidos de tamaño moderado con caída/deriva suave tipo nieve que aceleran brevemente en cada beat y regresan suavemente a su velocidad base.
+   - **`Círculos` (`"circles"`):** micro-puntos y círculos mínimos translúcidos (`1.2 .. 3.8 px`) con proyección radial de profundidad desde el centro hacia afuera (acercándose hacia el jugador), aceleración progresiva y refuerzo suave en cada beat, *fade-in* al nacer cerca del centro, *fade-out* progresivo hacia los bordes (`72%–100%`) y halo de blur reactivo al ritmo.
    - **`Cuadrados` (`"squares"`):** cuadrados neón flotantes de distintos tamaños que derivan, rotan lentamente, aparecen y desaparecen mediante ciclos de fade aleatorios sin pop-in, y ejecutan un pulso sutil de escala (zoom) en cada beat regresando suavemente a su tamaño base.
    - **`Neblina` (`"mist"`) y `Destellos` (`"sparkles"`):** registrados y persistibles en el contrato base y UI; en Fase 7A actúan como reservado sin renderizado invasivo (0 partículas dibujadas) listos para conectarse en Fase 7B.
 
@@ -114,10 +114,10 @@ Incluye exclusivamente:
 
 ### 7.3 Comportamiento de Variantes Fase 7A
 1. **`Círculos` (`"circles"`):**
-   - **Aspecto:** círculos translúcidos de radio `6.0 .. 18.0 px` en tonos cian, celeste hielo y violeta suave. Cada partícula dibuja un halo exterior muy sutil (`radius * 1.65`, `alpha * 0.24`) y un núcleo translúcido (`alpha = 0.22 .. 0.46`, más un realce máximo de `+0.10` en beat).
-   - **Movimiento ambiental (sin música):** caída vertical constante `vy_base = 42.0 .. 108.0 px/s` + deriva horizontal sinusoidal suave `vx = sin(time * sway_freq + phase) * 26.0 px/s`.
-   - **Reacción al beat:** la velocidad de caída multiplica suavemente por `speed_mult = 1.0 + (drive * 1.15)` y retorna exponencialmente a `1.0` al decaer `drive`.
-   - **Reciclado:** envolvente toroidal limpia (`y > bounds.y + margin` -> reaparece en `y = -margin` con X aleatoria).
+   - **Aspecto:** micro-puntos y círculos mínimos translúcidos de radio `1.2 .. 3.8 px` (creciendo sutilmente desde `1.2 px` en el fondo hasta máx. `3.8 px` al acercarse) en tonos cian, celeste hielo y violeta suave. Cada punto dibuja un doble halo difuminado translúcido (`blur`) alrededor de su núcleo cuyo radio e intensidad crecen con el beat (`_beat_impulse` / `drive`) y regresan suavemente al reposo.
+   - **Movimiento ambiental (sin música):** proyección radial hacia adelante desde el centro del rectángulo visible hacia los bordes (`dir = (pos - center).normalized()`), con aceleración radial progresiva al aproximarse al espectador.
+   - **Desvanecimiento y reciclado:** *fade-in* suave al nacer cerca del centro y *fade-out* progresivo al acercarse al borde visible (`edge_fade` entre el `72%` y el `100%` de distancia al borde), reciclándose de forma invisible cerca del centro al completar el recorrido.
+   - **Reacción al beat:** la velocidad radial multiplica suavemente por `speed_mult = 1.0 + (drive * 1.15)` y el halo de blur expande radio e intensidad, regresando exponencialmente al estado base.
 2. **`Cuadrados` (`"squares"`):**
    - **Aspecto:** cuadrados neón de semilado `7.0 .. 22.0 px` en paleta cian, azul eléctrico, violeta/magenta y menta neón. Relleno translúcido (`alpha * 0.26`) + borde nítido neón (`2.0 px`, `alpha * 0.62`), nunca saturando ni compitiendo con las notas.
    - **Movimiento ambiental (sin música):** flotación multidireccional suave (`vx = -22..22 px/s`, `vy = -34..18 px/s`) + rotación lenta (`ang_vel = -0.65..0.65 rad/s`).
