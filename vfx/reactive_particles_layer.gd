@@ -15,12 +15,14 @@ const CIRCLE_EDGE_FADE_START: float = 0.72
 const CIRCLE_BASE_HALO_SCALE: float = 2.3
 const CIRCLE_BEAT_HALO_BOOST: float = 1.75
 const SQUARE_SCALE_BEAT_BOOST: float = 0.28
-const MIST_SPEED_BEAT_BOOST: float = 0.85
-const MIST_INTENSITY_BEAT_BOOST: float = 0.55
-const MIST_MIN_Y_RATIO: float = 0.62
-const MIST_MAX_Y_RATIO: float = 1.02
-const MIST_SAFE_TOP_RATIO: float = 0.56
-const MIST_MAX_ALPHA: float = 0.28
+const MIST_SPEED_BEAT_BOOST: float = 0.95
+const MIST_INTENSITY_BEAT_BOOST: float = 0.65
+const STREAK_LENGTH_BEAT_BOOST: float = 0.75
+const STREAK_MIN_WIDTH_PX: float = 1.4
+const STREAK_MAX_WIDTH_PX: float = 2.6
+const STREAK_MIN_LENGTH_PX: float = 22.0
+const STREAK_MAX_LENGTH_PX: float = 48.0
+const STREAK_GRADIENT_SEGMENTS: int = 5
 const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.65
 const SPARKLE_BASE_HALO_SCALE: float = 4.2
 const SPARKLE_HALO_BEAT_BOOST: float = 2.6
@@ -41,10 +43,10 @@ const SQUARE_PALETTE: Array[Color] = [
 ]
 
 const MIST_PALETTE: Array[Color] = [
-	Color(0.24, 0.72, 0.96, 1.0),
-	Color(0.32, 0.52, 0.95, 1.0),
-	Color(0.56, 0.36, 0.92, 1.0),
-	Color(0.24, 0.86, 0.88, 1.0),
+	Color(0.32, 0.96, 1.0, 1.0),
+	Color(0.70, 0.44, 1.0, 1.0),
+	Color(0.88, 0.98, 1.0, 1.0),
+	Color(0.42, 0.78, 1.0, 1.0),
 ]
 
 const SPARKLE_PALETTE: Array[Color] = [
@@ -71,6 +73,7 @@ var _current_speed_mult: float = 1.0
 var _current_scale_mult: float = 1.0
 var _current_mist_speed_mult: float = 1.0
 var _current_mist_intensity_mult: float = 1.0
+var _current_streak_length_mult: float = 1.0
 var _current_sparkle_brightness_mult: float = 1.0
 var _current_sparkle_halo_scale: float = SPARKLE_BASE_HALO_SCALE
 var _audio_active: bool = true
@@ -227,6 +230,10 @@ func get_mist_intensity_multiplier() -> float:
 	return _current_mist_intensity_mult
 
 
+func get_streak_length_multiplier() -> float:
+	return _current_streak_length_mult
+
+
 func get_sparkle_brightness_multiplier() -> float:
 	return _current_sparkle_brightness_mult
 
@@ -316,6 +323,7 @@ func _recompute_drive_metrics() -> void:
 	_current_scale_mult = 1.0 + (_current_drive * SQUARE_SCALE_BEAT_BOOST)
 	_current_mist_speed_mult = 1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST)
 	_current_mist_intensity_mult = 1.0 + (_current_drive * MIST_INTENSITY_BEAT_BOOST)
+	_current_streak_length_mult = 1.0 + (_current_drive * STREAK_LENGTH_BEAT_BOOST)
 	_current_sparkle_brightness_mult = 1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST)
 	_current_sparkle_halo_scale = SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST)
 
@@ -560,78 +568,108 @@ func _draw_squares() -> void:
 
 
 func _spawn_mist(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:
-	var rx: float = p_bounds.x * _rng.randf_range(0.24, 0.44)
-	var ry: float = p_bounds.y * _rng.randf_range(0.065, 0.125)
-	var dir_sign: float = -1.0 if _rng.randf() < 0.35 else 1.0
-	var drift_speed: float = _rng.randf_range(12.0, 28.0) * dir_sign
+	# Neon Streaks (reusing TYPE_MIST = "mist" for config compatibility)
+	var depth: float = _rng.randf()
+	var width_px: float = lerpf(STREAK_MIN_WIDTH_PX, STREAK_MAX_WIDTH_PX, depth)
+	var base_len_px: float = lerpf(STREAK_MIN_LENGTH_PX, STREAK_MAX_LENGTH_PX, clampf((depth * 0.72) + _rng.randf_range(0.0, 0.28), 0.0, 1.0))
+	var rise_speed: float = lerpf(72.0, 215.0, depth) * _rng.randf_range(0.88, 1.14)
 
-	var base_y: float = p_bounds.y * _rng.randf_range(MIST_MIN_Y_RATIO, MIST_MAX_Y_RATIO)
-	var start_x: float = (
-		_rng.randf_range(-rx * 0.5, p_bounds.x + (rx * 0.5))
+	var start_x: float = _rng.randf_range(12.0, maxf(13.0, p_bounds.x - 12.0))
+	var start_y: float = (
+		_rng.randf_range(0.0, p_bounds.y + base_len_px)
 		if p_initial_fill
-		else (-rx if dir_sign > 0.0 else p_bounds.x + rx)
+		else (p_bounds.y + _rng.randf_range(18.0, 96.0))
 	)
-	var sway_amp: float = minf(p_bounds.y * 0.025, maxf(6.0, base_y - (p_bounds.y * MIST_SAFE_TOP_RATIO)))
 
-	_pos[p_index] = Vector2(start_x, base_y)
-	_vel[p_index] = Vector2(drift_speed, base_y)
-	_size_param[p_index] = rx
-	_angle[p_index] = ry
-	_ang_vel[p_index] = _rng.randf_range(0.35, 0.75)
-	_alpha_base[p_index] = _rng.randf_range(0.075, 0.155)
+	_pos[p_index] = Vector2(start_x, start_y)
+	_vel[p_index] = Vector2(0.0, -rise_speed)
+	_size_param[p_index] = base_len_px
+	_angle[p_index] = width_px
+	_ang_vel[p_index] = depth
+	_alpha_base[p_index] = lerpf(0.24, 0.66, depth)
 	_life_phase[p_index] = _rng.randf_range(0.0, TAU)
-	_life_speed[p_index] = _rng.randf_range(0.25, 0.60)
-	_sway_phase[p_index] = _rng.randf_range(0.0, TAU)
-	_sway_freq[p_index] = _rng.randf_range(0.40, 0.95)
-	_sway_amp[p_index] = sway_amp
+	_life_speed[p_index] = _rng.randf_range(1.2, 2.8)
+	_sway_phase[p_index] = 0.0
+	_sway_freq[p_index] = 0.0
+	_sway_amp[p_index] = 0.0
 	_color_idx[p_index] = _rng.randi_range(0, MIST_PALETTE.size() - 1)
 
 
 func _step_mist(p_dt: float, p_bounds: Vector2) -> void:
 	var speed_mult: float = _current_mist_speed_mult
-	var min_y: float = p_bounds.y * MIST_SAFE_TOP_RATIO
-	var max_y: float = p_bounds.y * (MIST_MAX_Y_RATIO + 0.04)
+	var length_mult: float = _current_streak_length_mult
 
 	for i: int in range(_active_count):
 		var pos: Vector2 = _pos[i]
-		var vx: float = _vel[i].x
-		var base_y: float = clampf(_vel[i].y, p_bounds.y * MIST_MIN_Y_RATIO, p_bounds.y * MIST_MAX_Y_RATIO)
-		var rx: float = maxf(64.0, _size_param[i])
+		var vy: float = _vel[i].y
+		var current_len: float = _size_param[i] * length_mult
 
-		pos.x += vx * speed_mult * p_dt
-		var wave_y: float = sin((_elapsed_time * _sway_freq[i]) + _sway_phase[i]) * _sway_amp[i]
-		pos.y = clampf(base_y + wave_y, min_y, max_y)
-
-		if pos.x > p_bounds.x + rx:
-			pos.x = -rx
-		elif pos.x < -rx:
-			pos.x = p_bounds.x + rx
-
-		_pos[i] = pos
-		_vel[i].y = base_y
+		pos.y += vy * speed_mult * p_dt
+		if pos.y + current_len < -24.0:
+			_spawn_mist(i, p_bounds, false)
+		else:
+			if pos.x < 0.0 or pos.x > p_bounds.x:
+				pos.x = wrapf(pos.x, 8.0, maxf(16.0, p_bounds.x - 8.0))
+			_pos[i] = pos
 
 
 func _draw_mist() -> void:
-	if _soft_radial_texture == null:
-		return
-
+	var length_mult: float = _current_streak_length_mult
 	var intensity_mult: float = _current_mist_intensity_mult
-	var scale_pulse: float = 1.0 + (_current_drive * 0.09)
+	var flare_scale: float = 3.2 + (_current_drive * 1.65)
 	var palette_len: int = MIST_PALETTE.size()
+	var seg_count: int = STREAK_GRADIENT_SEGMENTS
 
 	for i: int in range(_active_count):
-		var breath: float = 0.88 + (0.12 * sin((_elapsed_time * _life_speed[i]) + _life_phase[i]))
-		var alpha: float = clampf(_alpha_base[i] * breath * intensity_mult, 0.0, MIST_MAX_ALPHA)
-		if alpha <= 0.004:
+		var tip: Vector2 = _pos[i]
+		var total_len: float = _size_param[i] * length_mult
+		var width_px: float = _angle[i]
+		var base_col: Color = MIST_PALETTE[_color_idx[i] % palette_len]
+		var shimmer: float = 0.90 + (0.10 * sin((_elapsed_time * _life_speed[i]) + _life_phase[i]))
+		var tip_alpha: float = clampf(_alpha_base[i] * shimmer * intensity_mult, 0.0, 0.88)
+		if tip_alpha <= 0.01:
 			continue
 
-		var rx: float = _size_param[i] * (0.94 + (0.06 * breath)) * scale_pulse
-		var ry: float = _angle[i] * scale_pulse
-		var pos: Vector2 = _pos[i]
-		var base_col: Color = MIST_PALETTE[_color_idx[i] % palette_len]
-		var tint: Color = Color(base_col.r, base_col.g, base_col.b, alpha)
-		var dest_rect: Rect2 = Rect2(pos.x - rx, pos.y - ry, rx * 2.0, ry * 2.0)
-		draw_texture_rect(_soft_radial_texture, dest_rect, false, tint)
+		# Smooth segmented trail from transparent lower tail (t=0) up to bright leading tip (t=1)
+		for seg_idx: int in range(seg_count):
+			var t_tail: float = float(seg_idx) / float(seg_count)
+			var t_head: float = float(seg_idx + 1) / float(seg_count)
+			var t_mid: float = (t_tail + t_head) * 0.5
+			var seg_alpha: float = tip_alpha * pow(t_mid, 1.85)
+			if seg_alpha <= 0.004:
+				continue
+
+			var y_bottom: float = tip.y + ((1.0 - t_tail) * total_len)
+			var y_top: float = tip.y + ((1.0 - t_head) * total_len)
+			var seg_col: Color = Color(
+				lerpf(base_col.r, 1.0, t_mid * 0.28),
+				lerpf(base_col.g, 1.0, t_mid * 0.28),
+				lerpf(base_col.b, 1.0, t_mid * 0.28),
+				seg_alpha
+			)
+			draw_line(
+				Vector2(tip.x, y_bottom),
+				Vector2(tip.x, y_top),
+				seg_col,
+				width_px,
+				true
+			)
+
+		# Subtle circular glow flare at the leading top tip using shared _soft_radial_texture
+		if _soft_radial_texture != null:
+			var flare_r: float = width_px * flare_scale
+			var flare_alpha: float = clampf(tip_alpha * (0.58 + minf(0.24, _current_drive * 0.18)), 0.0, 0.72)
+			var flare_rect: Rect2 = Rect2(tip.x - flare_r, tip.y - flare_r, flare_r * 2.0, flare_r * 2.0)
+			var flare_tint: Color = Color(base_col.r, base_col.g, base_col.b, flare_alpha)
+			draw_texture_rect(_soft_radial_texture, flare_rect, false, flare_tint)
+
+		var core_col: Color = Color(
+			lerpf(base_col.r, 1.0, 0.65),
+			lerpf(base_col.g, 1.0, 0.65),
+			lerpf(base_col.b, 1.0, 0.65),
+			minf(0.95, tip_alpha * 1.12)
+		)
+		draw_circle(tip, width_px * 0.62, core_col)
 
 
 func _spawn_sparkle(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:

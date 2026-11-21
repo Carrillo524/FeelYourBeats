@@ -124,8 +124,6 @@ func get_max_particle_count() -> int:
 func get_effective_particle_count() -> int:
 	if not is_rendered_type():
 		return 0
-	if particle_type == TYPE_MIST:
-		return density_to_mist_count(density)
 	return density_to_max_count(density)
 
 
@@ -170,7 +168,7 @@ static func sanitize_type(p_raw_type: String) -> String:
 			return TYPE_CIRCLES
 		TYPE_SQUARES, "cuadrados":
 			return TYPE_SQUARES
-		TYPE_MIST, "neblina":
+		TYPE_MIST, "neblina", "estelas":
 			return TYPE_MIST
 		TYPE_SPARKLES, "destellos":
 			return TYPE_SPARKLES
@@ -202,13 +200,7 @@ static func density_to_max_count(p_density: String) -> int:
 
 
 static func density_to_mist_count(p_density: String) -> int:
-	match sanitize_level(p_density):
-		LEVEL_LOW:
-			return MAX_MIST_LOW
-		LEVEL_HIGH:
-			return MAX_MIST_HIGH
-		_:
-			return MAX_MIST_MEDIUM
+	return density_to_max_count(p_density)
 
 
 static func reactivity_to_multiplier(p_level: String) -> float:
@@ -228,7 +220,7 @@ static func type_to_label(p_type: String) -> String:
 		TYPE_SQUARES:
 			return "Cuadrados"
 		TYPE_MIST:
-			return "Neblina"
+			return "Estelas"
 		TYPE_SPARKLES:
 			return "Destellos"
 		_:

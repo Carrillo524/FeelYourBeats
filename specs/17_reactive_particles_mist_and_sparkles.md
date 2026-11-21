@@ -13,11 +13,11 @@ En la Fase 7A (`specs/16_reactive_particles_system_and_basic_shapes.md`) se cons
 
 ## 3. Alcance Exacto (Fase 7B)
 Incluye exclusivamente:
-1. **Variante `Neblina` (`TYPE_MIST = "mist"`):**
-   - Capa ligera de volutas de humo/neblina translúcida confinada a la **zona inferior y ligeramente por debajo de la mitad de la pantalla** (`y` centrada entre `62%` y `102%` del alto visible, manteniendo la mitad superior limpia y preservando legibilidad de notas, línea de juicio y botones).
-   - Textura radial suave generada por código (`GradientTexture2D`, `128x128`, `FILL_RADIAL`) creada **una sola vez en `_init()`** (0 recreación de recursos por frame).
-   - Presupuesto estrictamente acotado de volutas: **`8` en Baja, `14` en Media, `20` en Alta**.
-   - Movimiento continuo de deriva horizontal y ondulación suave incluso sin música; en cada beat incrementa ligeramente su velocidad de deriva y su intensidad/opacidad translúcida, decayendo suavemente hacia el reposo.
+1. **Variante `Estelas Neón` (clave interna retrocompatible `TYPE_MIST = "mist"`, etiqueta UI `"Estelas"`):**
+   - Filamentos verticales delgados (`1.4 .. 2.6 px` de ancho y `22.0 .. 48.0 px` de largo base) con paralaje (lejanas más tenues/lentas y cercanas más nítidas/rápidas) que **ascienden** (`vy < 0`) por toda la pantalla para contrastar claramente con las notas que caen.
+   - Presupuesto estándar de partículas: **`28` en Baja, `48` en Media, `72` en Alta**.
+   - Dibujo en `_draw()` por tramos de degradado suave desde cola inferior transparente (`alpha = 0.0`) hasta punta superior brillante en tonos cian, violeta y blanco hielo, coronada con un sutil destello circular usando la textura radial `_soft_radial_texture` precreada en `_init()`.
+   - Ascenso ambiental continuo aun sin música; en cada beat acelera la velocidad vertical, estira la longitud (`length_mult = 1.0 + _current_drive * 0.75`) y potencia el brillo de la punta, retornando suavemente al estado base.
 2. **Variante `Destellos` (`TYPE_SPARKLES = "sparkles"`):**
    - Puntos de luz / destellos suaves circulares (nunca estrellas con puntas literales ni polígonos estrellados) distribuidos por el fondo con distintos tamaños e intensidades.
    - Presupuesto moderado estándar (`28` en Baja, `48` en Media, `72` en Alta).
@@ -74,19 +74,19 @@ Incluye exclusivamente:
 ### 7.2 Presupuestos y Límites por Densidad
 | Variante | Baja (`low`) | Media (`medium`) | Alta (`high`) | Primitivas por partícula |
 | :--- | :---: | :---: | :---: | :--- |
-| `Neblina` (`"mist"`) | `8` | `14` | `20` | `1` `draw_texture_rect` elíptico suave |
+| `Estelas` (`"mist"`) | `28` | `48` | `72` | `5` segmentos `draw_line` en degradado + `1` destello circular en punta |
 | `Destellos` (`"sparkles"`) | `28` | `48` | `72` | `1` `draw_texture_rect` halo circular + `1` `draw_circle` núcleo |
 | `Círculos` (`"circles"`) | `28` | `48` | `72` | Sin cambios (Fase 7A + refinamiento) |
 | `Cuadrados` (`"squares"`) | `28` | `48` | `72` | Sin cambios (Fase 7A) |
 
-### 7.3 Detalle de `Neblina` (`TYPE_MIST`)
-- **Ubicación vertical:** centro base `y` en `[0.64, 1.02] * bounds.y` con radio vertical `ry` acotado (`0.06 .. 0.13 * bounds.y`), de modo que la neblina habita la zona inferior y ligeramente por debajo de la mitad de pantalla (`y_center >= 0.60 * bounds.y`), sin invadir la mitad superior ni oscurecer notas o HUD.
-- **Dimensiones:** volutas horizontales anchas y etéreas (`rx = 0.22 .. 0.44 * bounds.x`, `ry = 0.06 .. 0.13 * bounds.y`).
-- **Movimiento y ondulación:** deriva lateral suave (`vx = -28..28 px/s`, garantizando velocidad mínima `|vx| >= 8 px/s`), ondulación vertical sinusoidal suave (`sin(elapsed * freq + phase) * amp`) acotada dentro de la banda inferior, y respiración sutil de escala.
+### 7.3 Detalle de `Estelas Neón` (`TYPE_MIST = "mist"`)
+- **Geometría y paralaje:** filamentos verticales delgados (`1.4 .. 2.6 px` de ancho, `22.0 .. 48.0 px` de largo base) con profundidad de paralaje que modula velocidad ascendente (`vy = -72 .. -215 px/s`), grosor y nitidez.
+- **Movimiento ascendente:** todas las estelas suben suavemente (`vy < 0`) por toda la pantalla para distinguirse inmediatamente de las notas que caen, reciclándose por el borde inferior al salir por el borde superior.
+- **Degradado y punta brillante:** tramos conectados desde cola inferior transparente (`alpha = 0.0`) hasta la punta superior brillante en paleta cian, violeta y blanco hielo, rematada con un halo circular sutil (`_soft_radial_texture`) y núcleo luminoso.
 - **Reacción al beat:**
-  - `mist_speed_mult = 1.0 + (_current_drive * 0.85)`
-  - `mist_intensity_mult = 1.0 + (_current_drive * 0.55)`
-  - Opacidad translúcida controlada por voluta (`base 0.07 .. 0.16`, tope máximo absoluto `<= 0.28` incluso en picos de beat) para mantener contraste nítido en notas y texto.
+  - `mist_speed_mult = 1.0 + (_current_drive * 0.95)`
+  - `streak_length_mult = 1.0 + (_current_drive * 0.75)`
+  - `mist_intensity_mult = 1.0 + (_current_drive * 0.65)` (potencia el brillo de la punta y retorna suavemente al estado base).
 
 ### 7.4 Detalle de `Destellos` (`TYPE_SPARKLES`)
 - **Aspecto (cero estrellas con puntas):** cada partícula consta únicamente de un halo circular suave (`draw_texture_rect` cuadrado centrado usando `_soft_radial_texture`, radio `core_r * halo_scale`) y un núcleo circular limpio (`draw_circle`, radio `1.4 .. 4.2 px`). Paleta de blancos fríos, cian hielo, lavanda suave y destello champán cálido.
