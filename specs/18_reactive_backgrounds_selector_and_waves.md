@@ -25,7 +25,7 @@ Incluye exclusivamente:
    - Aviso sutil provisional únicamente al seleccionar `Aurora` o `Estrellas Fugaces` indicando que quedan reservados para Fase 8B (manteniendo el fondo `Clásico` mientras tanto).
 3. **Estilos operativos en Fase 8A (`ReactiveBackground`, Menú y Gameplay):**
    - **`Clásico` (`"classic"`):** conserva exactamente el shader (`vfx/reactive_backdrop.gdshader`), paleta, parámetros y rendimiento actual sin ninguna alteración visual.
-   - **`Ondas` (`"waves"`):** sobre la base oscura del juego (`material = null`, omitiendo el shader clásico), dibuja anillos circulares concéntricos **sin relleno** (`draw_arc`) en tonos cian y violeta con halo difuminado suave simulado por 4 capas translúcidas de grosor creciente y alfa decreciente (sin `WorldEnvironment` global). Mantiene expansión ambiental lenta aun sin música, emite ondas más marcadas en cada beat/drop y se desvanece progresivamente antes de alcanzar los bordes.
+   - **`Ondas` (`"waves"`):** sobre la base oscura del juego (`material = null`, omitiendo el shader clásico), dibuja ondas circulares **sin relleno** (`draw_arc`, `48` segmentos) tipo gotas de lluvia distribuidas en posiciones `(x, y)` independientes por toda la pantalla (`[36, w - 36]` × `[36, h - 36]`), con radio máximo compacto (`65.0`–`135.0 px`) y halo difuminado suave en 4 capas translúcidas en cian y violeta (sin `WorldEnvironment`). Mantiene llovizna ambiental continua (`~2.5` ondas/s) aun sin música, dispara ráfagas de ondas con aceleración y mayor luminosidad en cada beat/drop y se desvanece suavemente al acercarse a su radio máximo sin reducir la legibilidad de notas, línea de juicio ni botones.
 4. **Carga automática en `GameSession`:**
    - Al inicializar `GameSession`, se recarga `[reactive_background]` desde `user://user_settings.cfg` y se aplica a `ReactiveBackground` (detrás de `ReactiveParticlesLayer`, `LaneField` y `SafeHud`).
 
@@ -84,22 +84,20 @@ reactivity="medium"
 - `_draw()` retorna en la primera línea (`0` llamadas 2D adicionales).
 - Todos los uniforms, colores, pulso de horizonte y ondas perimetrales del gameplay permanecen 100 % idénticos a la versión anterior.
 
-### 7.3 Estilo `Ondas` (`"waves"`) — Anillos Concéntricos sin Relleno
+### 7.3 Estilo `Ondas` (`"waves"`) — Ondas de Lluvia Compactas sin Relleno
 - **Base oscura limpia:** `material = null` (ahorra evaluación del shader clásico en GPU móvil) y fondo degradado oscuro sutil (`Color(0.035, 0.045, 0.11, 1.0)` arriba → `Color(0.075, 0.03, 0.145, 1.0)` abajo) coherente con la paleta del juego.
-- **Pool acotado sin asignaciones por frame:** máximo `MAX_WAVE_RINGS = 14` anillos simultáneos en arreglos paralelos tipados (`PackedFloat32Array`, `PackedInt32Array`).
-- **Expansión ambiental y por beat/drop:**
-  - **Sin música / ambiente:** un temporizador emite anillos suaves cada `~1.85 s` desde el centro `(bounds * 0.5)` expandiéndose a `140–175 px/s`, presembrados con 3 anillos escalonados al activar `"waves"` para evitar espera inicial.
-  - **Con beat o drop:** `_on_beat_pulsed`, `_on_intensity_changed` (drop) y `_on_spectrum_updated` (transiente de bajos) invocan `trigger_wave_pulse(strength, is_drop)` con enfriamiento mínimo (`0.14 s`) para emitir anillos más marcados y rápidos (`230–340 px/s` modulados por `reactivity_mult`) en cian neón (`Color(0.24, 0.90, 1.0)`) y violeta neón (`Color(0.72, 0.36, 1.0)`), además de acelerar ligeramente los anillos ya activos.
-- **Halo difuminado simulado (sin `WorldEnvironment`):** cada anillo activo dibuja **4 arcos circulares concéntricos sin relleno** (`draw_arc(..., 0.0, TAU, 64, col, width, true)`):
-  1. Halo exterior: `width * 6.5`, `alpha * 0.08`
-  2. Halo medio: `width * 3.8`, `alpha * 0.16`
-  3. Halo interior: `width * 2.0`, `alpha * 0.30`
-  4. Núcleo nítido: `width * 1.0`, `alpha * 0.72`
-- **Desvanecimiento en nacimiento y bordes (`edge_fade`):**
-  - Progreso radial $t = \mathrm{clamp}(r / r_{\max},\ 0.0,\ 1.0)$ donde $r_{\max} = \sqrt{(w/2)^2 + (h/2)^2} \cdot 1.04$.
-  - $\text{fade\_in} = \mathrm{smoothstep}(0.0,\ 0.08,\ t)$ y $\text{edge\_fade} = (1.0 - \mathrm{smoothstep}(0.60,\ 1.0,\ t))^{1.35}$.
-  - Opacidad máxima contenida (`<= 0.42` ambiente, `<= 0.58` beat/drop) para garantizar contraste óptimo con notas, carriles, barra de progreso y botones.
-- **Costo móvil:** máximo `14 × 4 = 56` arcos simples 2D con `material = null`, 0 texturas nuevas y 0 `WorldEnvironment`, manteniendo 60+ FPS estables en renderizador `mobile`.
+- **Pool acotado sin asignaciones por frame:** máximo `MAX_WAVE_RINGS = 22` ondas activas simultáneas en arreglos paralelos tipados (`PackedVector2Array`, `PackedFloat32Array`, `PackedInt32Array`).
+- **Posiciones independientes y tamaño compacto:** cada onda nace en una coordenada aleatoria `(x, y)` dentro de `[36.0, width - 36.0]` × `[36.0, height - 36.0]` con un radio inicial `2.0 px` y un `max_radius` compacto entre `65.0` y `135.0 px` (`14 %–28 %` del ancho), disolviéndose localmente sin saturar toda la pantalla.
+- **Llovizna ambiental y ráfagas musicales:**
+  - **Sin música / ambiente:** llovizna suave y continua de `~2.5` ondas/segundo (`WAVE_AMBIENT_INTERVAL_SEC = 0.40 s`), presembrando 6 ondas escalonadas al activar `"waves"`.
+  - **Con beat o drop:** `_on_beat_pulsed`, `_on_intensity_changed` (drop) y `_on_spectrum_updated` (transiente de bajos / drop) invocan `trigger_wave_pulse()` (enfriamiento `0.14 s`) emitiendo ráfagas de `1` a `4` ondas simultáneas en distintos puntos según `reactivity` (`Baja` / `Media` / `Alta`), acelerando su expansión radial y aumentando la luminosidad del halo.
+- **Halo difuminado simulado (sin `WorldEnvironment`):** cada onda activa dibuja **4 arcos circulares sin relleno** (`draw_arc(..., 0.0, TAU, 48, col, width, true)`):
+  1. Halo exterior: `width * 6.5`, `alpha * 0.12`
+  2. Halo medio: `width * 3.8`, `alpha * 0.24`
+  3. Halo interior: `width * 2.0`, `alpha * 0.44`
+  4. Núcleo nítido: `width * 1.0`, `alpha * 0.92`
+- **Desvanecimiento local:** *fade-in* breve (`0.0 -> 0.12` de su `max_radius`) y *fade-out* suave (`0.52 -> 1.0` de su `max_radius`), manteniendo opacidad contenida para preservar nitidez de notas, carriles y botones.
+- **Costo móvil:** máximo `22 × 4 = 88` arcos compactos 2D con `material = null`, 0 texturas nuevas y 0 `WorldEnvironment`, manteniendo 60+ FPS estables en renderizador `mobile`.
 
 ---
 
