@@ -3,12 +3,15 @@ extends Node
 
 signal track_changed(p_track_index: int, p_track_name: String)
 signal bgm_enabled_changed(p_enabled: bool)
+signal bgm_fade_out_finished()
 
 const DEFAULT_BGM_DIR: String = "res://assets/bgm"
 const DEFAULT_SETTINGS_PATH: String = "user://user_settings.cfg"
 const SETTINGS_SECTION: String = "menu_bgm"
 const EMPTY_TRACK_LABEL: String = "Sin BGM"
 const SUPPORTED_EXTENSIONS: PackedStringArray = ["ogg", "mp3", "wav"]
+const DEFAULT_FADE_OUT_SEC: float = 0.35
+const FADE_OUT_SILENCE_DB: float = -42.0
 
 @export var bgm_dir_path: String = DEFAULT_BGM_DIR
 @export var settings_file_path: String = DEFAULT_SETTINGS_PATH
@@ -17,6 +20,7 @@ const SUPPORTED_EXTENSIONS: PackedStringArray = ["ogg", "mp3", "wav"]
 @export var auto_start_on_ready: bool = true
 
 var _player: AudioStreamPlayer = null
+var _fade_tween: Tween = null
 var _track_paths: PackedStringArray = PackedStringArray()
 var _current_index: int = -1
 var _preferred_track_name: String = ""
@@ -149,7 +153,9 @@ func select_track(p_index: int, p_persist: bool = true) -> bool:
 	if stream == null:
 		return false
 
+	_kill_fade_tween()
 	_is_stopped_manually = false
+	_player.volume_db = 0.0
 	_player.stream = stream
 	_player.play()
 	track_changed.emit(_current_index, get_current_track_name())
@@ -176,9 +182,66 @@ func set_auto_rotate(p_enabled: bool) -> void:
 
 
 func stop_bgm() -> void:
+	_kill_fade_tween()
 	_is_stopped_manually = true
-	if _player != null and _player.playing:
+	if _player != null:
+		if _player.playing:
+			_player.stop()
+		_player.volume_db = 0.0
+
+
+func resume_bgm() -> void:
+	if not is_bgm_enabled or _track_paths.is_empty():
+		return
+	_kill_fade_tween()
+	_ensure_player()
+	_is_stopped_manually = false
+	_player.volume_db = 0.0
+	if not _player.playing:
+		var target_idx: int = _current_index if _current_index >= 0 else 0
+		select_track(target_idx, false)
+
+
+func fade_out_and_stop(p_duration_sec: float = DEFAULT_FADE_OUT_SEC) -> void:
+	_kill_fade_tween()
+	_is_stopped_manually = true
+	if _player == null or not _player.playing:
+		if _player != null:
+			_player.volume_db = 0.0
+		bgm_fade_out_finished.emit()
+		return
+
+	var safe_duration: float = maxf(0.02, p_duration_sec)
+	if not is_inside_tree():
 		_player.stop()
+		_player.volume_db = 0.0
+		bgm_fade_out_finished.emit()
+		return
+
+	_fade_tween = create_tween()
+	_fade_tween.tween_property(
+		_player,
+		"volume_db",
+		FADE_OUT_SILENCE_DB,
+		safe_duration
+	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await _fade_tween.finished
+	_fade_tween = null
+	if _player != null:
+		if _player.playing:
+			_player.stop()
+		_player.volume_db = 0.0
+	bgm_fade_out_finished.emit()
+
+
+func get_volume_db() -> float:
+	return _player.volume_db if _player != null else 0.0
+
+
+func _kill_fade_tween() -> void:
+	if _fade_tween != null:
+		_fade_tween.kill()
+		_fade_tween = null
 
 
 func get_track_count() -> int:

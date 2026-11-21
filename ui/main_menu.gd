@@ -28,6 +28,8 @@ const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
+const LOADING_OVERLAY_Z_INDEX: int = 90
+const BGM_FADEOUT_DURATION_SEC: float = 0.35
 const USEC_TO_SEC: float = 0.000001
 const BACK_DEBOUNCE_MSEC: int = 300
 const TOUCH_SCROLL_DEADZONE_PX: int = 20
@@ -72,6 +74,7 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 @export var menu_bgm_player: MenuBgmPlayer = null
 @export var ui_sfx_player: UiSfxPlayer = null
 @export var audio_analyzer: AudioAnalyzer = null
+@export var allow_scene_change: bool = true
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _font_registry: UiFontRegistry = null
@@ -142,6 +145,16 @@ var _exit_confirm_title: Label = null
 var _exit_cancel_button: Button = null
 var _exit_confirm_button: Button = null
 
+# Non-blocking Song Processing Loading Overlay
+var _loading_overlay: ColorRect = null
+var _loading_panel: PanelContainer = null
+var _loading_spinner: Control = null
+var _loading_title_label: Label = null
+var _loading_stage_label: Label = null
+var _loading_progress_track: Panel = null
+var _loading_progress_fill: Panel = null
+var _loading_percent_label: Label = null
+
 var _file_dialog: FileDialog = null
 var _transition_fade_rect: ColorRect = null
 var _transition_tween: Tween = null
@@ -157,6 +170,8 @@ var _style_modal_panel: StyleBoxFlat = null
 var _style_play_cta: StyleBoxFlat = null
 var _style_exit_danger: StyleBoxFlat = null
 var _style_floating_play: StyleBoxEmpty = null
+var _style_loading_track: StyleBoxFlat = null
+var _style_loading_fill: StyleBoxFlat = null
 
 var _song_entries: Array[Dictionary] = []
 var _imported_entries: Array[Dictionary] = []
@@ -168,8 +183,15 @@ var _selected_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 var _selected_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
+var _is_processing_song: bool = false
 var _pending_import_after_permission: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
+var _active_worker_task_id: int = -1
+var _active_processing_job_id: int = 0
+var _loading_anim_phase: float = 0.0
+var _loading_target_progress: float = -1.0
+var _loading_display_progress: float = 0.0
+var _loading_indeterminate_phase: float = 0.0
 
 var _touch_scroll_containers: Array[ScrollContainer] = []
 var _active_scroll_touch_index: int = -1
@@ -261,8 +283,14 @@ func _process(p_delta: float) -> void:
 		elif _active_tab == MenuTab.IMPORT:
 			_step_marquee_items(_imported_marquee_items, dt)
 
+	if _loading_overlay != null and _loading_overlay.visible:
+		_step_loading_overlay_animation(dt)
+
 
 func _exit_tree() -> void:
+	if _active_worker_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(_active_worker_task_id)
+		_active_worker_task_id = -1
 	if _transition_tween != null:
 		_transition_tween.kill()
 		_transition_tween = null
@@ -332,7 +360,9 @@ func _reset_touch_scroll_state() -> void:
 
 
 func _find_touch_scroll_container_at(p_pos: Vector2) -> ScrollContainer:
-	if _is_launching:
+	if _is_launching or _is_processing_song:
+		return null
+	if is_loading_overlay_visible():
 		return null
 	if is_exit_confirm_modal_open():
 		return null
@@ -454,7 +484,7 @@ func _consume_back_debounce(p_now_msec: int = -1) -> bool:
 
 
 func handle_back_request(p_now_msec: int = -1) -> void:
-	if _is_launching:
+	if _is_launching or _is_processing_song:
 		return
 	if not _consume_back_debounce(p_now_msec):
 		return
@@ -538,6 +568,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_exit_confirm_backdrop.size = Vector2(safe_w, safe_h)
 
 	_layout_exit_confirm_panel(safe_w, safe_h)
+	_layout_loading_overlay(safe_w, safe_h)
 
 
 func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
@@ -618,7 +649,7 @@ func is_exit_confirm_modal_open() -> bool:
 
 func open_exit_confirm_modal() -> void:
 	_ensure_ui_nodes()
-	if _is_launching:
+	if _is_launching or _is_processing_song:
 		return
 	if _exit_confirm_backdrop != null:
 		_exit_confirm_backdrop.visible = true
@@ -662,7 +693,7 @@ func open_song_setup_modal(p_entry: Dictionary) -> void:
 
 
 func close_song_setup_modal() -> void:
-	if _is_launching:
+	if _is_launching or _is_processing_song:
 		return
 	_reset_touch_scroll_state()
 	if _song_modal_backdrop != null:
@@ -870,6 +901,30 @@ func is_play_button_disabled() -> bool:
 	return _play_button != null and _play_button.disabled
 
 
+func is_processing_song() -> bool:
+	return _is_processing_song
+
+
+func is_loading_overlay_visible() -> bool:
+	return _loading_overlay != null and _loading_overlay.visible
+
+
+func get_loading_title_text() -> String:
+	return _loading_title_label.text if _loading_title_label != null else ""
+
+
+func get_loading_progress() -> float:
+	return _loading_target_progress
+
+
+func get_loading_anim_phase() -> float:
+	return _loading_anim_phase
+
+
+func get_active_processing_job_id() -> int:
+	return _active_processing_job_id
+
+
 func get_transition_fade_rect() -> ColorRect:
 	return _transition_fade_rect
 
@@ -1031,65 +1086,277 @@ func get_last_launch_sequence() -> Array[String]:
 
 
 func _on_play_button_pressed() -> void:
-	if _is_launching:
+	if _is_launching or _is_processing_song:
 		return
 	_is_launching = true
+	_is_processing_song = true
+	_active_processing_job_id += 1
+	var job_id: int = _active_processing_job_id
 	_last_launch_sequence.clear()
+	_last_launch_sequence.append("processing_started")
 
 	if _play_button != null:
 		_play_button.disabled = true
 	if _modal_close_button != null:
 		_modal_close_button.disabled = true
 	if _transition_fade_rect != null:
-		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_STOP
+		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
-	if menu_bgm_player != null:
-		menu_bgm_player.stop_bgm()
-	if audio_analyzer != null:
-		audio_analyzer.set_live_monitoring(false)
+	# Keep menu BGM and live spectrum monitoring active while processing the song
+	_sync_live_audio_monitoring()
 
 	var selected: Dictionary = get_selected_track()
 	var is_demo: bool = selected.get("is_demo", true) as bool
 	var audio_path: String = str(selected.get("audio_path", ""))
-	var needs_analysis_banner: bool = false
+	var title: String = str(selected.get("title", "FeelYourBeats Demo 128 BPM"))
+	var cache_key: String = ""
+	var has_cache: bool = false
 	if not is_demo and not audio_path.is_empty():
-		var key: String = _chart_cache_repo.build_cache_key(
+		cache_key = _chart_cache_repo.build_cache_key(
 			audio_path,
 			_selected_difficulty,
 			_selected_note_type_mode
 		)
-		needs_analysis_banner = not _chart_cache_repo.has_cached_file(key)
+		has_cache = _chart_cache_repo.has_cached_file(cache_key)
+
+	var loading_title: String = "CARGANDO..." if (is_demo or has_cache) else "PROCESANDO CANCIÓN..."
+	var initial_stage: String = "Cargando pista en caché..." if has_cache else ("Preparando demo..." if is_demo else "Leyendo archivo de audio...")
+	_show_loading_overlay(loading_title, initial_stage, -1.0 if (is_demo or has_cache) else 0.05)
 
 	if _status_label != null:
-		_status_label.text = "ANALIZANDO PISTA..." if needs_analysis_banner else "PREPARANDO PISTA..."
+		_status_label.text = ""
 
 	var tree: SceneTree = get_tree()
 	if tree != null:
 		await tree.process_frame
-
-	# Step 1 & 2: Perform analysis/cache load completely BEFORE starting cassette SFX + fade
-	var payload: Dictionary = prepare_session_launch_payload()
-	if payload.has("error"):
-		if _transition_fade_rect != null:
-			_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
-			_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		if _status_label != null:
-			_status_label.text = str(payload["error"])
-		_is_launching = false
-		if _play_button != null:
-			_play_button.disabled = false
-		if _modal_close_button != null:
-			_modal_close_button.disabled = false
+	if job_id != _active_processing_job_id or not is_inside_tree():
 		return
 
-	GameSession.set_pending_session(payload)
+	if is_demo or audio_path.is_empty() or audio_analyzer == null:
+		var demo_payload: Dictionary = {
+			"is_demo": true,
+			"audio_path": "",
+			"title": title,
+			"difficulty": _selected_difficulty,
+			"note_type_mode": _selected_note_type_mode,
+			"speed_multiplier": _selected_speed_multiplier,
+			"preloaded_chart": null,
+			"preloaded_stream": null,
+			"from_cache": false,
+		}
+		_on_song_processing_completed(job_id, demo_payload)
+		return
+
+	if has_cache:
+		var cached_stream: AudioStream = audio_analyzer.load_audio_stream(audio_path)
+		var cached_chart: ChartData = _chart_cache_repo.load_cached_chart(cache_key)
+		if cached_stream != null and cached_chart != null:
+			if not title.is_empty():
+				cached_chart.title = title
+			var cached_payload: Dictionary = {
+				"is_demo": false,
+				"audio_path": audio_path,
+				"title": title,
+				"difficulty": _selected_difficulty,
+				"note_type_mode": _selected_note_type_mode,
+				"speed_multiplier": _selected_speed_multiplier,
+				"preloaded_chart": cached_chart,
+				"preloaded_stream": cached_stream,
+				"from_cache": true,
+				"cache_key": cache_key,
+			}
+			_on_song_processing_progress(job_id, 1.0, "Pista lista")
+			_on_song_processing_completed(job_id, cached_payload)
+			return
+
+	# Resolve res:// bundled AudioStream on main thread (fast ResourceLoader); external files decode on worker thread
+	var res_stream: AudioStream = null
+	if audio_path.begins_with("res://") and ResourceLoader.exists(audio_path):
+		res_stream = audio_analyzer.load_audio_stream(audio_path)
+
+	var mix_rate: float = maxf(8000.0, AudioServer.get_mix_rate())
+	var job_cfg: Dictionary = {
+		"job_id": job_id,
+		"audio_path": audio_path,
+		"title": title,
+		"difficulty": _selected_difficulty,
+		"note_type_mode": _selected_note_type_mode,
+		"speed_multiplier": _selected_speed_multiplier,
+		"cache_key": cache_key,
+		"mix_rate": mix_rate,
+		"bass_max_hz": audio_analyzer.bass_max_hz,
+		"mid_max_hz": audio_analyzer.mid_max_hz,
+		"preloaded_stream": res_stream,
+	}
+	_active_worker_task_id = WorkerThreadPool.add_task(
+		_run_song_processing_worker.bind(job_cfg),
+		true,
+		"FyB_SongProcessing"
+	)
+
+
+func _run_song_processing_worker(p_job: Dictionary) -> void:
+	# Pure data & resource processing only: NEVER touch SceneTree or Control nodes directly here
+	var job_id: int = int(p_job.get("job_id", 0))
+	var audio_path: String = str(p_job.get("audio_path", ""))
+	var title: String = str(p_job.get("title", "Pista"))
+	var difficulty: int = int(p_job.get("difficulty", AutoChartGenerator.Difficulty.NORMAL))
+	var note_type_mode: int = int(p_job.get("note_type_mode", AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD))
+	var speed_multiplier: int = int(p_job.get("speed_multiplier", LaneField.MIN_SPEED_MULTIPLIER))
+	var cache_key: String = str(p_job.get("cache_key", ""))
+	var mix_rate: float = float(p_job.get("mix_rate", 44100.0))
+	var bass_max_hz: float = float(p_job.get("bass_max_hz", 200.0))
+	var mid_max_hz: float = float(p_job.get("mid_max_hz", 2200.0))
+
+	call_deferred(&"_on_song_processing_progress", job_id, 0.10, "Leyendo archivo de audio...")
+
+	var stream: AudioStream = p_job.get("preloaded_stream", null) as AudioStream
+	if stream == null:
+		stream = AudioAnalyzer.load_external_audio_stream_data(audio_path)
+	if stream == null:
+		call_deferred(
+			&"_on_song_processing_completed",
+			job_id,
+			{"error": "No se pudo leer o decodificar el archivo de audio."}
+		)
+		return
+
+	call_deferred(&"_on_song_processing_progress", job_id, 0.15, "Analizando espectro y ritmo...")
+
+	var progress_cb: Callable = func(p_pct: float) -> void:
+		var mapped: float = lerpf(0.15, 0.82, clampf(p_pct, 0.0, 1.0))
+		call_deferred(&"_on_song_processing_progress", job_id, mapped, "Analizando espectro y ritmo...")
+
+	var analysis: Dictionary = AudioAnalyzer.analyze_audio_stream_data(
+		stream,
+		mix_rate,
+		bass_max_hz,
+		mid_max_hz,
+		AudioAnalyzer.DEFAULT_HOP_SEC,
+		progress_cb
+	)
+	var duration_sec: float = analysis.get("duration_sec", 0.0) as float
+	if duration_sec <= 0.0:
+		call_deferred(
+			&"_on_song_processing_completed",
+			job_id,
+			{"error": "El audio no contiene muestras válidas."}
+		)
+		return
+
+	call_deferred(&"_on_song_processing_progress", job_id, 0.86, "Generando mapa de notas...")
+
+	var generator: AutoChartGenerator = AutoChartGenerator.new()
+	var chart: ChartData = generator.generate_from_analysis(
+		audio_path.get_file().get_basename(),
+		title,
+		audio_path,
+		analysis,
+		difficulty,
+		note_type_mode
+	)
+	var validation: Dictionary = chart.validate()
+	if not (validation.get("valid", false) as bool):
+		call_deferred(
+			&"_on_song_processing_completed",
+			job_id,
+			{"error": "No se pudo generar un chart válido para esta pista."}
+		)
+		return
+
+	call_deferred(&"_on_song_processing_progress", job_id, 0.98, "Preparando partida...")
+
+	var payload: Dictionary = {
+		"is_demo": false,
+		"audio_path": audio_path,
+		"title": title,
+		"difficulty": difficulty,
+		"note_type_mode": note_type_mode,
+		"speed_multiplier": speed_multiplier,
+		"preloaded_chart": chart,
+		"preloaded_stream": stream,
+		"from_cache": false,
+		"cache_key": cache_key,
+	}
+	call_deferred(&"_on_song_processing_completed", job_id, payload)
+
+
+func _on_song_processing_progress(p_job_id: int, p_progress: float, p_stage_text: String) -> void:
+	if p_job_id != _active_processing_job_id or not _is_processing_song:
+		return
+	_loading_target_progress = clampf(p_progress, 0.0, 1.0)
+	if _loading_stage_label != null and not p_stage_text.is_empty():
+		_loading_stage_label.text = p_stage_text
+
+
+func _on_song_processing_completed(p_job_id: int, p_payload: Dictionary) -> void:
+	if _active_worker_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(_active_worker_task_id)
+		_active_worker_task_id = -1
+
+	if p_job_id != _active_processing_job_id:
+		return
+
+	if p_payload.has("error"):
+		_abort_song_launch_with_error(str(p_payload["error"]))
+		return
+
+	var from_cache: bool = p_payload.get("from_cache", false) as bool
+	var cache_key: String = str(p_payload.get("cache_key", ""))
+	var chart: ChartData = p_payload.get("preloaded_chart", null) as ChartData
+	if not from_cache and chart != null and not cache_key.is_empty():
+		_chart_cache_repo.save_cached_chart(cache_key, chart)
+
+	GameSession.set_pending_session(p_payload)
+	_finish_song_launch_transition()
+
+
+func _abort_song_launch_with_error(p_error_message: String) -> void:
+	_is_processing_song = false
+	_is_launching = false
+	_hide_loading_overlay()
+
+	if _transition_fade_rect != null:
+		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _status_label != null:
+		_status_label.text = p_error_message
+	if _play_button != null:
+		_play_button.disabled = false
+	if _modal_close_button != null:
+		_modal_close_button.disabled = false
+
+	if menu_bgm_player != null and menu_bgm_player.is_bgm_enabled and not menu_bgm_player.is_playing():
+		menu_bgm_player.resume_bgm()
+	_sync_live_audio_monitoring()
+
+
+func _finish_song_launch_transition() -> void:
+	_is_processing_song = false
+	_hide_loading_overlay()
 	_last_launch_sequence.append("analysis_done")
 
-	# Step 3: Chart is ready (no more CPU stalls) -> trigger cassette SFX + 2.5s fade simultaneously
 	if _status_label != null:
 		_status_label.text = "INICIANDO..."
+	if _transition_fade_rect != null:
+		_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_STOP
+		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
+	# Step 1: Smooth brief BGM fade-out & stop just before cassette SFX
+	_last_launch_sequence.append("bgm_fade_started")
+	if menu_bgm_player != null:
+		await menu_bgm_player.fade_out_and_stop(BGM_FADEOUT_DURATION_SEC)
+	if audio_analyzer != null:
+		audio_analyzer.set_live_monitoring(false)
+	if reactive_background != null:
+		reactive_background.set_menu_bgm_active(false)
+	_last_launch_sequence.append("bgm_stopped")
+
+	if not is_inside_tree():
+		return
+
+	# Step 2: Cassette SFX + 2.5s visual fade-to-black simultaneously
 	var transition_start_usec: int = Time.get_ticks_usec()
 	if ui_sfx_player != null:
 		ui_sfx_player.play_cassette_insert()
@@ -1113,6 +1380,7 @@ func _on_play_button_pressed() -> void:
 		await _transition_tween.finished
 	_transition_tween = null
 
+	var tree: SceneTree = get_tree()
 	if tree != null:
 		var elapsed_sec: float = float(Time.get_ticks_usec() - transition_start_usec) * USEC_TO_SEC
 		var remaining_sec: float = TRANSITION_FADE_DURATION_SEC - elapsed_sec
@@ -1122,8 +1390,143 @@ func _on_play_button_pressed() -> void:
 	if _transition_fade_rect != null:
 		_transition_fade_rect.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
-	if tree != null and ResourceLoader.exists(GAME_SESSION_SCENE_PATH):
+	if allow_scene_change and tree != null and ResourceLoader.exists(GAME_SESSION_SCENE_PATH):
 		tree.change_scene_to_file(GAME_SESSION_SCENE_PATH)
+
+
+func _show_loading_overlay(
+	p_title: String,
+	p_stage: String,
+	p_initial_progress: float = -1.0
+) -> void:
+	_ensure_ui_nodes()
+	_reset_touch_scroll_state()
+	_loading_anim_phase = 0.0
+	_loading_indeterminate_phase = 0.0
+	_loading_target_progress = p_initial_progress
+	_loading_display_progress = maxf(0.0, p_initial_progress)
+	if _loading_title_label != null:
+		_loading_title_label.text = p_title
+	if _loading_stage_label != null:
+		_loading_stage_label.text = p_stage
+	if _loading_percent_label != null:
+		_loading_percent_label.text = "%d%%" % int(round(_loading_display_progress * 100.0)) if p_initial_progress >= 0.0 else "..."
+	if _loading_overlay != null:
+		_loading_overlay.visible = true
+		if _safe_container != null:
+			_layout_loading_overlay(_safe_container.size.x, _safe_container.size.y)
+		_update_loading_progress_bar_visual()
+
+
+func _hide_loading_overlay() -> void:
+	if _loading_overlay != null:
+		_loading_overlay.visible = false
+
+
+func _step_loading_overlay_animation(p_dt: float) -> void:
+	_loading_anim_phase += p_dt * 4.8
+	_loading_indeterminate_phase += p_dt * 1.45
+	if _loading_target_progress >= 0.0:
+		_loading_display_progress = lerpf(
+			_loading_display_progress,
+			_loading_target_progress,
+			clampf(p_dt * 10.0, 0.0, 1.0)
+		)
+	if _loading_spinner != null:
+		_loading_spinner.queue_redraw()
+	_update_loading_progress_bar_visual()
+
+
+func _update_loading_progress_bar_visual() -> void:
+	if _loading_progress_track == null or _loading_progress_fill == null:
+		return
+	var track_w: float = maxf(1.0, _loading_progress_track.size.x)
+	var track_h: float = maxf(8.0, _loading_progress_track.size.y)
+	if _loading_target_progress >= 0.0:
+		var pct: float = clampf(_loading_display_progress, 0.02, 1.0)
+		_loading_progress_fill.position = Vector2.ZERO
+		_loading_progress_fill.size = Vector2(track_w * pct, track_h)
+		if _loading_percent_label != null:
+			_loading_percent_label.text = "%d%%" % int(round(clampf(_loading_target_progress, 0.0, 1.0) * 100.0))
+	else:
+		var bar_w: float = track_w * 0.34
+		var travel: float = maxf(0.0, track_w - bar_w)
+		var wave: float = (sin(_loading_indeterminate_phase * PI) * 0.5) + 0.5
+		_loading_progress_fill.position = Vector2(travel * wave, 0.0)
+		_loading_progress_fill.size = Vector2(bar_w, track_h)
+		if _loading_percent_label != null:
+			_loading_percent_label.text = "..."
+
+
+func _draw_loading_spinner() -> void:
+	if _loading_spinner == null:
+		return
+	var center: Vector2 = _loading_spinner.size * 0.5
+	var radius: float = maxf(18.0, minf(center.x, center.y) - 8.0)
+
+	# Subtle background ring
+	_loading_spinner.draw_arc(
+		center,
+		radius,
+		0.0,
+		TAU,
+		40,
+		Color(0.22, 0.38, 0.54, 0.35),
+		6.0,
+		true
+	)
+	# Outer glowing cyan arc
+	var start_a: float = _loading_anim_phase
+	_loading_spinner.draw_arc(
+		center,
+		radius,
+		start_a,
+		start_a + (TAU * 0.34),
+		32,
+		Color(0.32, 0.96, 1.0, 0.35),
+		13.0,
+		true
+	)
+	_loading_spinner.draw_arc(
+		center,
+		radius,
+		start_a,
+		start_a + (TAU * 0.34),
+		32,
+		Color(0.55, 0.99, 1.0, 0.98),
+		5.5,
+		true
+	)
+	# Counter-rotating inner magenta/violet arc
+	var start_b: float = -_loading_anim_phase * 1.35
+	_loading_spinner.draw_arc(
+		center,
+		radius * 0.66,
+		start_b,
+		start_b + (TAU * 0.28),
+		28,
+		Color(0.86, 0.38, 1.0, 0.85),
+		4.0,
+		true
+	)
+	# Pulsing core dot
+	var pulse: float = 0.72 + (0.28 * (sin(_loading_anim_phase * 1.6) * 0.5 + 0.5))
+	_loading_spinner.draw_circle(center, 7.0 * pulse, Color(0.75, 1.0, 1.0, 0.92))
+
+
+func _layout_loading_overlay(p_safe_w: float, p_safe_h: float) -> void:
+	if _loading_overlay == null or _loading_panel == null:
+		return
+	var safe_w: float = maxf(320.0, p_safe_w)
+	var safe_h: float = maxf(480.0, p_safe_h)
+	_loading_overlay.position = Vector2.ZERO
+	_loading_overlay.size = Vector2(safe_w, safe_h)
+
+	var panel_w: float = minf(760.0, safe_w - 64.0)
+	var panel_h: float = 410.0
+	_loading_panel.custom_minimum_size = Vector2(panel_w, panel_h)
+	_loading_panel.size = Vector2(panel_w, panel_h)
+	_loading_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
 
 
 func _on_browse_button_pressed() -> void:
@@ -1281,7 +1684,7 @@ func _on_menu_spectrum_updated(
 
 
 func _on_modal_backdrop_gui_input(p_event: InputEvent) -> void:
-	if _is_launching:
+	if _is_launching or _is_processing_song:
 		return
 	if p_event is InputEventMouseButton:
 		var mb: InputEventMouseButton = p_event as InputEventMouseButton
@@ -1403,8 +1806,9 @@ func _connect_dependencies() -> void:
 
 
 func _sync_live_audio_monitoring() -> void:
+	var bgm_suppressed_for_transition: bool = _is_launching and not _is_processing_song
 	var should_monitor: bool = (
-		not _is_launching
+		not bgm_suppressed_for_transition
 		and menu_bgm_player != null
 		and menu_bgm_player.is_bgm_enabled
 		and menu_bgm_player.get_track_count() > 0
@@ -2224,6 +2628,18 @@ func _build_theme_styles() -> void:
 
 	_style_floating_play = StyleBoxEmpty.new()
 
+	_style_loading_track = StyleBoxFlat.new()
+	_style_loading_track.bg_color = Color(0.08, 0.12, 0.22, 0.92)
+	_style_loading_track.border_color = Color(0.30, 0.72, 0.92, 0.55)
+	_style_loading_track.set_border_width_all(2)
+	_style_loading_track.set_corner_radius_all(10)
+
+	_style_loading_fill = StyleBoxFlat.new()
+	_style_loading_fill.bg_color = Color(0.28, 0.94, 1.0, 0.95)
+	_style_loading_fill.set_corner_radius_all(8)
+	_style_loading_fill.shadow_color = Color(0.24, 0.92, 1.0, 0.45)
+	_style_loading_fill.shadow_size = 8
+
 
 func _apply_external_fonts() -> void:
 	if _font_registry == null:
@@ -2236,6 +2652,9 @@ func _apply_external_fonts() -> void:
 	_font_registry.apply_global_font_override(_exit_cancel_button, 2)
 	_font_registry.apply_global_font_override(_exit_confirm_button, 2)
 	_font_registry.apply_global_font_override(_import_status_label, 2)
+	_font_registry.apply_global_font_override(_loading_title_label, 3)
+	_font_registry.apply_global_font_override(_loading_stage_label, 2)
+	_font_registry.apply_global_font_override(_loading_percent_label, 2)
 
 
 func _ensure_ui_nodes() -> void:
@@ -2251,6 +2670,7 @@ func _ensure_ui_nodes() -> void:
 	_build_browser_screen_ui()
 	_build_song_setup_modal_ui()
 	_build_exit_confirm_modal_ui()
+	_build_loading_overlay_ui()
 
 	_file_dialog = FileDialog.new()
 	_file_dialog.name = "AudioFileDialog"
@@ -2768,6 +3188,95 @@ func _build_exit_confirm_modal_ui() -> void:
 	_apply_stylebox_to_button(_exit_confirm_button, _style_exit_danger)
 	_exit_confirm_button.pressed.connect(_on_exit_confirm_quit_pressed)
 	buttons_row.add_child(_exit_confirm_button)
+
+
+func _build_loading_overlay_ui() -> void:
+	_loading_overlay = ColorRect.new()
+	_loading_overlay.name = "SongLoadingOverlay"
+	_loading_overlay.color = Color(0.02, 0.03, 0.08, 0.84)
+	_loading_overlay.visible = false
+	_loading_overlay.z_index = LOADING_OVERLAY_Z_INDEX
+	_loading_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_safe_container.add_child(_loading_overlay)
+
+	_loading_panel = PanelContainer.new()
+	_loading_panel.name = "SongLoadingPanel"
+	_loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_loading_panel.add_theme_stylebox_override("panel", _style_modal_panel)
+	_loading_overlay.add_child(_loading_panel)
+
+	var panel_margin: MarginContainer = MarginContainer.new()
+	panel_margin.name = "SongLoadingMargin"
+	panel_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel_margin.add_theme_constant_override("margin_left", 36)
+	panel_margin.add_theme_constant_override("margin_right", 36)
+	panel_margin.add_theme_constant_override("margin_top", 36)
+	panel_margin.add_theme_constant_override("margin_bottom", 34)
+	_loading_panel.add_child(panel_margin)
+
+	var vbox: VBoxContainer = VBoxContainer.new()
+	vbox.name = "SongLoadingVBox"
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 20)
+	panel_margin.add_child(vbox)
+
+	var spinner_center: CenterContainer = CenterContainer.new()
+	spinner_center.name = "LoadingSpinnerCenter"
+	spinner_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(spinner_center)
+
+	_loading_spinner = Control.new()
+	_loading_spinner.name = "LoadingSpinner"
+	_loading_spinner.custom_minimum_size = Vector2(96.0, 96.0)
+	_loading_spinner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loading_spinner.draw.connect(_draw_loading_spinner)
+	spinner_center.add_child(_loading_spinner)
+
+	_loading_title_label = Label.new()
+	_loading_title_label.name = "LoadingTitleLabel"
+	_loading_title_label.text = "PROCESANDO CANCIÓN..."
+	_loading_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_title_label.add_theme_font_size_override("font_size", 40)
+	_loading_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	vbox.add_child(_loading_title_label)
+
+	_loading_stage_label = Label.new()
+	_loading_stage_label.name = "LoadingStageLabel"
+	_loading_stage_label.text = "Analizando espectro y ritmo..."
+	_loading_stage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_stage_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_loading_stage_label.add_theme_font_size_override("font_size", 28)
+	_loading_stage_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	vbox.add_child(_loading_stage_label)
+
+	_loading_progress_track = Panel.new()
+	_loading_progress_track.name = "LoadingProgressTrack"
+	_loading_progress_track.custom_minimum_size = Vector2(0.0, 22.0)
+	_loading_progress_track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_loading_progress_track.clip_contents = true
+	_loading_progress_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loading_progress_track.add_theme_stylebox_override("panel", _style_loading_track)
+	vbox.add_child(_loading_progress_track)
+
+	_loading_progress_fill = Panel.new()
+	_loading_progress_fill.name = "LoadingProgressFill"
+	_loading_progress_fill.position = Vector2.ZERO
+	_loading_progress_fill.size = Vector2(0.0, 22.0)
+	_loading_progress_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loading_progress_fill.add_theme_stylebox_override("panel", _style_loading_fill)
+	_loading_progress_track.add_child(_loading_progress_fill)
+
+	_loading_percent_label = Label.new()
+	_loading_percent_label.name = "LoadingPercentLabel"
+	_loading_percent_label.text = "0%"
+	_loading_percent_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_percent_label.add_theme_font_size_override("font_size", 28)
+	_loading_percent_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	vbox.add_child(_loading_percent_label)
 
 
 func _create_tab_button(p_name: String, p_text: String) -> Button:

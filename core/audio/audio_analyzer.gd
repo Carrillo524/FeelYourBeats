@@ -500,13 +500,72 @@ func load_audio_stream(p_path: String) -> AudioStream:
 	return stream
 
 
+static func load_external_audio_stream_data(p_path: String) -> AudioStream:
+	if p_path.is_empty():
+		return null
+	var raw_bytes: PackedByteArray = FileAccess.get_file_as_bytes(p_path)
+	if raw_bytes.is_empty():
+		return null
+
+	var ext: String = p_path.get_extension().to_lower()
+	if ext != "wav" and ext != "ogg" and ext != "mp3":
+		ext = detect_audio_extension_from_bytes(raw_bytes, p_path)
+	if ext.is_empty():
+		return null
+
+	match ext:
+		"wav":
+			return AudioStreamWAV.load_from_buffer(raw_bytes)
+		"ogg":
+			return AudioStreamOggVorbis.load_from_buffer(raw_bytes)
+		"mp3":
+			var mp3_stream: AudioStreamMP3 = AudioStreamMP3.new()
+			mp3_stream.data = raw_bytes
+			return mp3_stream
+		_:
+			return null
+
+
 func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_SEC) -> Dictionary:
+	var mix_rate: float = maxf(8000.0, AudioServer.get_mix_rate())
+	return analyze_audio_stream_data(
+		p_stream,
+		mix_rate,
+		bass_max_hz,
+		mid_max_hz,
+		p_hop_sec
+	)
+
+
+func analyze_wav_stream(p_wav: AudioStreamWAV, p_hop_sec: float = DEFAULT_HOP_SEC) -> Dictionary:
+	return analyze_wav_stream_data(
+		p_wav,
+		bass_max_hz,
+		mid_max_hz,
+		p_hop_sec
+	)
+
+
+static func analyze_audio_stream_data(
+	p_stream: AudioStream,
+	p_mix_rate: float = 44100.0,
+	p_bass_max_hz: float = 200.0,
+	p_mid_max_hz: float = 2200.0,
+	p_hop_sec: float = DEFAULT_HOP_SEC,
+	p_progress_cb: Callable = Callable()
+) -> Dictionary:
 	var safe_hop_sec: float = maxf(MIN_HOP_SEC, p_hop_sec)
 	if p_stream == null:
 		return _build_empty_analysis(safe_hop_sec)
 
 	if p_stream is AudioStreamWAV:
-		return analyze_wav_stream(p_stream as AudioStreamWAV, safe_hop_sec)
+		return analyze_wav_stream_data(
+			p_stream as AudioStreamWAV,
+			p_bass_max_hz,
+			p_mid_max_hz,
+			safe_hop_sec,
+			p_progress_cb
+		)
 
 	var duration_sec: float = maxf(0.0, p_stream.get_length())
 	if duration_sec <= 0.0:
@@ -516,7 +575,7 @@ func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_
 	if playback == null:
 		return _build_empty_analysis(safe_hop_sec)
 
-	var mix_rate: float = maxf(8000.0, AudioServer.get_mix_rate())
+	var mix_rate: float = maxf(8000.0, p_mix_rate)
 	var samples_per_hop: int = maxi(1, int(round(mix_rate * safe_hop_sec)))
 	var frame_count: int = maxi(1, int(ceil(duration_sec / safe_hop_sec)))
 
@@ -530,10 +589,12 @@ func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_
 	mid_frames.resize(frame_count)
 	high_frames.resize(frame_count)
 
-	var alpha_bass: float = _compute_lpf_alpha(bass_max_hz, mix_rate)
-	var alpha_mid: float = _compute_lpf_alpha(mid_max_hz, mix_rate)
+	var alpha_bass: float = _compute_lpf_alpha(p_bass_max_hz, mix_rate)
+	var alpha_mid: float = _compute_lpf_alpha(p_mid_max_hz, mix_rate)
 	var lp_bass: float = 0.0
 	var lp_mid: float = 0.0
+	var has_progress_cb: bool = p_progress_cb.is_valid()
+	var last_reported_pct: float = -1.0
 
 	playback.start(0.0)
 	var stream_exhausted: bool = false
@@ -588,6 +649,12 @@ func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_
 			mid_frames[frame_idx] = 0.0
 			high_frames[frame_idx] = 0.0
 
+		if has_progress_cb:
+			var pct: float = float(frame_idx + 1) / float(frame_count)
+			if pct - last_reported_pct >= 0.03 or frame_idx == frame_count - 1:
+				last_reported_pct = pct
+				p_progress_cb.call(pct)
+
 	playback.stop()
 	return _finalize_analysis_buffers(
 		duration_sec,
@@ -599,7 +666,13 @@ func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_
 	)
 
 
-func analyze_wav_stream(p_wav: AudioStreamWAV, p_hop_sec: float = DEFAULT_HOP_SEC) -> Dictionary:
+static func analyze_wav_stream_data(
+	p_wav: AudioStreamWAV,
+	p_bass_max_hz: float = 200.0,
+	p_mid_max_hz: float = 2200.0,
+	p_hop_sec: float = DEFAULT_HOP_SEC,
+	p_progress_cb: Callable = Callable()
+) -> Dictionary:
 	var safe_hop_sec: float = maxf(MIN_HOP_SEC, p_hop_sec)
 	if p_wav == null:
 		return _build_empty_analysis(safe_hop_sec)
@@ -633,13 +706,15 @@ func analyze_wav_stream(p_wav: AudioStreamWAV, p_hop_sec: float = DEFAULT_HOP_SE
 	mid_frames.resize(hop_count)
 	high_frames.resize(hop_count)
 
-	var alpha_bass: float = _compute_lpf_alpha(bass_max_hz, float(mix_rate))
-	var alpha_mid: float = _compute_lpf_alpha(mid_max_hz, float(mix_rate))
+	var alpha_bass: float = _compute_lpf_alpha(p_bass_max_hz, float(mix_rate))
+	var alpha_mid: float = _compute_lpf_alpha(p_mid_max_hz, float(mix_rate))
 	var lp_bass: float = 0.0
 	var lp_mid: float = 0.0
 
 	var is_16_bit: bool = format == AudioStreamWAV.FORMAT_16_BITS
 	var is_stereo: bool = p_wav.stereo
+	var has_progress_cb: bool = p_progress_cb.is_valid()
+	var last_reported_pct: float = -1.0
 
 	for hop_idx: int in range(hop_count):
 		var start_sample: int = hop_idx * samples_per_hop
@@ -695,6 +770,12 @@ func analyze_wav_stream(p_wav: AudioStreamWAV, p_hop_sec: float = DEFAULT_HOP_SE
 		mid_frames[hop_idx] = sqrt(sum_sq_mid * inv_count)
 		high_frames[hop_idx] = sqrt(sum_sq_high * inv_count)
 
+		if has_progress_cb:
+			var pct: float = float(hop_idx + 1) / float(hop_count)
+			if pct - last_reported_pct >= 0.03 or hop_idx == hop_count - 1:
+				last_reported_pct = pct
+				p_progress_cb.call(pct)
+
 	return _finalize_analysis_buffers(
 		duration_sec,
 		safe_hop_sec,
@@ -705,7 +786,7 @@ func analyze_wav_stream(p_wav: AudioStreamWAV, p_hop_sec: float = DEFAULT_HOP_SE
 	)
 
 
-func _finalize_analysis_buffers(
+static func _finalize_analysis_buffers(
 	p_duration_sec: float,
 	p_hop_sec: float,
 	p_rms_frames: PackedFloat32Array,
@@ -755,7 +836,7 @@ func _finalize_analysis_buffers(
 	}
 
 
-func _estimate_bpm_from_onsets(p_onset_frames: PackedFloat32Array, p_hop_sec: float) -> float:
+static func _estimate_bpm_from_onsets(p_onset_frames: PackedFloat32Array, p_hop_sec: float) -> float:
 	var count: int = p_onset_frames.size()
 	var min_lag: int = maxi(1, int(round((60.0 / MAX_BPM) / p_hop_sec)))
 	var max_lag: int = maxi(min_lag + 1, int(round((60.0 / MIN_BPM) / p_hop_sec)))
@@ -794,12 +875,12 @@ func _estimate_bpm_from_onsets(p_onset_frames: PackedFloat32Array, p_hop_sec: fl
 	return clampf(round(raw_bpm), MIN_BPM, MAX_BPM)
 
 
-func _compute_lpf_alpha(p_cutoff_hz: float, p_mix_rate: float) -> float:
+static func _compute_lpf_alpha(p_cutoff_hz: float, p_mix_rate: float) -> float:
 	var omega: float = TAU * maxf(1.0, p_cutoff_hz)
 	return clampf(omega / (omega + maxf(1.0, p_mix_rate)), 0.0001, 0.9999)
 
 
-func _normalize_array_in_place(p_array: PackedFloat32Array) -> void:
+static func _normalize_array_in_place(p_array: PackedFloat32Array) -> void:
 	var count: int = p_array.size()
 	var peak: float = 0.0
 	for i: int in range(count):
@@ -845,7 +926,7 @@ func _normalize_spectrum_magnitude(p_linear_mag: float) -> float:
 	return clampf((db + MIN_DB_THRESHOLD) / MIN_DB_THRESHOLD, 0.0, 1.0)
 
 
-func _build_empty_analysis(p_hop_sec: float) -> Dictionary:
+static func _build_empty_analysis(p_hop_sec: float) -> Dictionary:
 	return {
 		"duration_sec": 0.0,
 		"bpm_estimate": DEFAULT_BPM,
