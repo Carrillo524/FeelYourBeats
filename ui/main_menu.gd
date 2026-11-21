@@ -167,6 +167,7 @@ var _diff_normal_button: Button = null
 var _diff_hard_button: Button = null
 var _mode_tap_hold_button: Button = null
 var _mode_tap_only_button: Button = null
+var _mode_double_tap_button: Button = null
 var _speed_1x_button: Button = null
 var _speed_2x_button: Button = null
 var _speed_3x_button: Button = null
@@ -1006,7 +1007,7 @@ func select_note_type_mode(p_mode: int) -> void:
 	_selected_note_type_mode = clampi(
 		p_mode,
 		AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD,
-		AutoChartGenerator.NoteTypeMode.TAP_ONLY
+		AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
 	)
 	_refresh_modal_option_styles()
 	_refresh_modal_record_label()
@@ -1303,6 +1304,7 @@ func get_modal_option_buttons() -> Dictionary:
 		"diff_hard": _diff_hard_button,
 		"mode_tap_hold": _mode_tap_hold_button,
 		"mode_tap_only": _mode_tap_only_button,
+		"mode_double_tap": _mode_double_tap_button,
 		"speed_1x": _speed_1x_button,
 		"speed_2x": _speed_2x_button,
 		"speed_3x": _speed_3x_button,
@@ -3088,6 +3090,7 @@ func _refresh_modal_option_styles() -> void:
 
 	_set_option_highlight(_mode_tap_hold_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD)
 	_set_option_highlight(_mode_tap_only_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_ONLY)
+	_set_option_highlight(_mode_double_tap_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP)
 
 	_set_option_highlight(_speed_1x_button, _selected_speed_multiplier == 1)
 	_set_option_highlight(_speed_2x_button, _selected_speed_multiplier == 2)
@@ -3760,20 +3763,26 @@ func _build_browser_screen_ui() -> void:
 	settings_vbox.add_child(bg_style_label)
 
 	_bg_style_buttons.clear()
-	var bg_row: HBoxContainer = HBoxContainer.new()
-	bg_row.name = "BackgroundStyleRow"
-	bg_row.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(bg_row)
+	var bg_style_rows: Array[PackedStringArray] = [
+		PackedStringArray([ReactiveBackgroundConfig.STYLE_CLASSIC, ReactiveBackgroundConfig.STYLE_NEBULA]),
+		PackedStringArray([ReactiveBackgroundConfig.STYLE_AURORA, ReactiveBackgroundConfig.STYLE_ECLIPSE]),
+	]
+	for bg_row_idx: int in range(bg_style_rows.size()):
+		var bg_row: HBoxContainer = HBoxContainer.new()
+		bg_row.name = "BackgroundStyleRow%d" % (bg_row_idx + 1)
+		bg_row.add_theme_constant_override("separation", 12)
+		settings_vbox.add_child(bg_row)
 
-	for b_idx: int in range(ReactiveBackgroundConfig.SUPPORTED_STYLES.size()):
-		var b_id: String = ReactiveBackgroundConfig.SUPPORTED_STYLES[b_idx]
-		var b_btn: Button = _create_compact_settings_button(
-			"BackgroundStyle_%s" % b_id,
-			ReactiveBackgroundConfig.style_to_label(b_id)
-		)
-		b_btn.pressed.connect(_on_bg_style_selected.bind(b_id))
-		bg_row.add_child(b_btn)
-		_bg_style_buttons[b_id] = b_btn
+		var row_styles: PackedStringArray = bg_style_rows[bg_row_idx]
+		for col_idx: int in range(row_styles.size()):
+			var b_id: String = row_styles[col_idx]
+			var b_btn: Button = _create_compact_settings_button(
+				"BackgroundStyle_%s" % b_id,
+				ReactiveBackgroundConfig.style_to_label(b_id)
+			)
+			b_btn.pressed.connect(_on_bg_style_selected.bind(b_id))
+			bg_row.add_child(b_btn)
+			_bg_style_buttons[b_id] = b_btn
 
 	var bg_react_label: Label = Label.new()
 	bg_react_label.name = "BackgroundReactivityLabel"
@@ -3916,12 +3925,19 @@ func _build_song_setup_modal_ui() -> void:
 	_modal_vbox.add_child(mode_row)
 
 	_mode_tap_hold_button = _create_option_button("ModeTapHoldButton", "TAP + HOLD")
+	_mode_tap_hold_button.add_theme_font_size_override("font_size", 30)
 	_mode_tap_hold_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD))
 	mode_row.add_child(_mode_tap_hold_button)
 
 	_mode_tap_only_button = _create_option_button("ModeTapOnlyButton", "SOLO TAP")
+	_mode_tap_only_button.add_theme_font_size_override("font_size", 30)
 	_mode_tap_only_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_ONLY))
 	mode_row.add_child(_mode_tap_only_button)
+
+	_mode_double_tap_button = _create_option_button("ModeDoubleTapButton", "DOBLE TAP")
+	_mode_double_tap_button.add_theme_font_size_override("font_size", 30)
+	_mode_double_tap_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.DOUBLE_TAP))
+	mode_row.add_child(_mode_double_tap_button)
 
 	var speed_header: Label = Label.new()
 	speed_header.text = "VELOCIDAD"

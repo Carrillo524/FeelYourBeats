@@ -10,6 +10,7 @@ enum Difficulty {
 enum NoteTypeMode {
 	TAP_AND_HOLD = 0,
 	TAP_ONLY = 1,
+	DOUBLE_TAP = 2,
 }
 
 const LANE_COUNT: int = 4
@@ -208,9 +209,13 @@ func generate_from_analysis(
 		intensity_blocks
 	)
 
+	var allow_chords: bool = p_note_type_mode == NoteTypeMode.DOUBLE_TAP
+	var allow_holds: bool = p_note_type_mode != NoteTypeMode.TAP_ONLY
+
 	var notes: Array[NoteData] = _assign_lanes_ergonomically(
 		raw_candidates,
 		p_difficulty,
+		allow_chords,
 		rng
 	)
 
@@ -218,7 +223,7 @@ func generate_from_analysis(
 	var same_thumb_min_gap_sec: float = get_same_thumb_min_gap_for_difficulty(p_difficulty)
 	var sibling_cross_penalty_sec: float = get_sibling_cross_penalty_for_difficulty(p_difficulty)
 
-	if p_note_type_mode == NoteTypeMode.TAP_AND_HOLD:
+	if allow_holds:
 		_apply_hold_durations(
 			notes,
 			rms_frames,
@@ -238,7 +243,8 @@ func generate_from_analysis(
 		notes,
 		release_margin_sec,
 		same_thumb_min_gap_sec,
-		sibling_cross_penalty_sec
+		sibling_cross_penalty_sec,
+		allow_chords
 	)
 
 	var safe_id: String = p_song_id if not p_song_id.is_empty() else "auto_song"
@@ -365,18 +371,20 @@ func _pick_quantized_peaks(
 func _assign_lanes_ergonomically(
 	p_candidates: Array[Dictionary],
 	p_difficulty: int,
+	p_allow_chords: bool,
 	p_rng: RandomNumberGenerator
 ) -> Array[NoteData]:
 	var generated_notes: Array[NoteData] = []
 	var same_thumb_min_gap: float = get_same_thumb_min_gap_for_difficulty(p_difficulty)
 	var sibling_cross_penalty: float = get_sibling_cross_penalty_for_difficulty(p_difficulty)
 
-	var allow_chords: bool = p_difficulty != Difficulty.EASY
 	var chord_strength_threshold: float = _compute_adaptive_chord_threshold(
 		p_candidates,
-		p_difficulty
+		p_difficulty,
+		p_allow_chords
 	)
-	var chord_cooldown_sec: float = 1.20 if p_difficulty == Difficulty.NORMAL else 0.65
+	var base_chord_cooldown_sec: float = _get_chord_cooldown_for_difficulty(p_difficulty, false)
+	var drop_chord_cooldown_sec: float = _get_chord_cooldown_for_difficulty(p_difficulty, true)
 
 	var thumb_last_time: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
 	var thumb_last_lane: PackedInt32Array = PackedInt32Array([-1, -1])
@@ -393,11 +401,15 @@ func _assign_lanes_ergonomically(
 		var high_val: float = item["high"] as float
 		var tier: int = item["tier"] as int
 
+		var active_chord_cooldown: float = drop_chord_cooldown_sec if tier >= 2 else base_chord_cooldown_sec
+		var active_chord_threshold: float = chord_strength_threshold * (0.90 if tier >= 2 else 1.0)
+		var chord_tier_ok: bool = tier >= 1 or chord_strength_threshold <= 0.76
+
 		if (
-			allow_chords
-			and tier >= 2
-			and strength >= chord_strength_threshold
-			and (t_sec - last_chord_time) >= chord_cooldown_sec
+			p_allow_chords
+			and chord_tier_ok
+			and strength >= active_chord_threshold
+			and (t_sec - last_chord_time) >= active_chord_cooldown
 		):
 			var left_lane: int = _choose_lane_within_thumb(
 				THUMB_LEFT,
@@ -640,7 +652,8 @@ func _sanitize_two_thumb_ergonomics(
 	p_notes: Array[NoteData],
 	p_release_margin_sec: float,
 	p_same_thumb_min_gap_sec: float,
-	p_sibling_cross_penalty_sec: float
+	p_sibling_cross_penalty_sec: float,
+	p_allow_chords: bool = true
 ) -> Array[NoteData]:
 	if p_notes.is_empty():
 		return p_notes
@@ -648,6 +661,7 @@ func _sanitize_two_thumb_ergonomics(
 	p_notes.sort_custom(_compare_notes_chronologically)
 
 	var sanitized: Array[NoteData] = []
+	var last_any_note_time: float = -999.0
 	var thumb_last_time: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
 	var thumb_last_lane: PackedInt32Array = PackedInt32Array([-1, -1])
 	var active_hold_idx: PackedInt32Array = PackedInt32Array([-1, -1])
@@ -660,6 +674,9 @@ func _sanitize_two_thumb_ergonomics(
 			continue
 
 		var t_sec: float = note.time_sec
+		if not p_allow_chords and last_any_note_time >= 0.0 and absf(t_sec - last_any_note_time) <= TIME_DEDUP_EPSILON_SEC:
+			continue
+
 		var thumb: int = lane_to_thumb(note.lane)
 		var opp_thumb: int = 1 - thumb
 
@@ -668,6 +685,8 @@ func _sanitize_two_thumb_ergonomics(
 			and (t_sec - thumb_last_time[thumb]) <= TIME_DEDUP_EPSILON_SEC
 		)
 		if same_thumb_chord:
+			if not p_allow_chords:
+				continue
 			var moved_lane: int = _try_find_free_lane_on_thumb(
 				opp_thumb,
 				t_sec,
@@ -756,6 +775,7 @@ func _sanitize_two_thumb_ergonomics(
 					continue
 
 		sanitized.append(note)
+		last_any_note_time = t_sec
 		thumb_last_time[thumb] = t_sec
 		thumb_last_lane[thumb] = note.lane
 
@@ -955,32 +975,66 @@ func _build_intensity_blocks(
 
 func _compute_adaptive_chord_threshold(
 	p_candidates: Array[Dictionary],
-	p_difficulty: int
+	p_difficulty: int,
+	p_allow_chords: bool
 ) -> float:
-	if p_difficulty == Difficulty.EASY:
+	if not p_allow_chords:
 		return 2.0
 
-	var drop_strengths: Array[float] = []
+	var eligible_strengths: Array[float] = []
 	var count: int = p_candidates.size()
 	for i: int in range(count):
 		var cand: Dictionary = p_candidates[i]
-		if (cand["tier"] as int) >= 2:
-			drop_strengths.append(cand["strength"] as float)
+		if (cand["tier"] as int) >= 1:
+			eligible_strengths.append(cand["strength"] as float)
 
-	if drop_strengths.is_empty():
-		return 0.68 if p_difficulty == Difficulty.NORMAL else 0.58
+	if eligible_strengths.is_empty():
+		for i: int in range(count):
+			eligible_strengths.append(p_candidates[i]["strength"] as float)
 
-	drop_strengths.sort()
-	var percentile: float = 0.70 if p_difficulty == Difficulty.NORMAL else 0.55
+	if eligible_strengths.is_empty():
+		match p_difficulty:
+			Difficulty.EASY:
+				return 0.72
+			Difficulty.HARD:
+				return 0.48
+			_:
+				return 0.60
+
+	eligible_strengths.sort()
+	var percentile: float = 0.60
+	var min_clamp: float = 0.34
+	var max_clamp: float = 0.66
+	match p_difficulty:
+		Difficulty.EASY:
+			percentile = 0.78
+			min_clamp = 0.42
+			max_clamp = 0.76
+		Difficulty.HARD:
+			percentile = 0.42
+			min_clamp = 0.26
+			max_clamp = 0.56
+		_:
+			percentile = 0.60
+			min_clamp = 0.34
+			max_clamp = 0.66
+
 	var idx: int = clampi(
-		int(floor(float(drop_strengths.size() - 1) * percentile)),
+		int(floor(float(eligible_strengths.size() - 1) * percentile)),
 		0,
-		drop_strengths.size() - 1
+		eligible_strengths.size() - 1
 	)
-	var adaptive_val: float = drop_strengths[idx]
-	if p_difficulty == Difficulty.NORMAL:
-		return clampf(adaptive_val, 0.36, 0.72)
-	return clampf(adaptive_val, 0.30, 0.62)
+	return clampf(eligible_strengths[idx], min_clamp, max_clamp)
+
+
+func _get_chord_cooldown_for_difficulty(p_difficulty: int, p_is_drop: bool) -> float:
+	match p_difficulty:
+		Difficulty.EASY:
+			return 1.55 if p_is_drop else 1.85
+		Difficulty.HARD:
+			return 0.42 if p_is_drop else 0.55
+		_:
+			return 0.80 if p_is_drop else 1.00
 
 
 func _get_local_mean_weight_for_tier(p_tier: int) -> float:

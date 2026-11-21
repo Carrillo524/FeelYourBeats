@@ -34,24 +34,30 @@ const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
-const TUNNEL_FRAME_COUNT: int = 12
-const TUNNEL_MIN_SCALE: float = 0.04
-const TUNNEL_MAX_SCALE: float = 1.15
-const TUNNEL_BASE_DEPTH_SPEED: float = 0.085
-const TUNNEL_BEAT_DECAY_RATE: float = 4.8
-const TUNNEL_DROP_DECAY_RATE: float = 2.2
-const TUNNEL_SHAKE_MIN_PX: float = 2.0
-const TUNNEL_SHAKE_MAX_PX: float = 5.5
-const TUNNEL_SHAKE_DECAY_RATE: float = 11.5
-const TUNNEL_SHAKE_OSC_SPEED: float = 48.0
-const TUNNEL_CHAMFER_RATIO: float = 0.20
-const WAVE_BASE_TOP_COLOR: Color = Color(0.032, 0.042, 0.105, 1.0)
-const WAVE_BASE_BOTTOM_COLOR: Color = Color(0.068, 0.028, 0.138, 1.0)
-const TUNNEL_FRAME_COLORS: Array[Color] = [
-	Color(0.22, 0.90, 1.0, 1.0),
-	Color(0.66, 0.34, 1.0, 1.0),
-	Color(0.32, 0.68, 1.0, 1.0),
-]
+const NEBULA_CLOUD_COUNT: int = 6
+const NEBULA_BEAT_DECAY_RATE: float = 3.8
+const NEBULA_DROP_DECAY_RATE: float = 2.0
+const NEBULA_MAX_ALPHA: float = 0.26
+const NEBULA_MAX_RGB_CHANNEL: float = 0.91
+const NEBULA_BASE_TOP_COLOR: Color = Color(0.026, 0.022, 0.088, 1.0)
+const NEBULA_BASE_BOTTOM_COLOR: Color = Color(0.068, 0.022, 0.128, 1.0)
+const NEBULA_COLOR_VIOLET: Color = Color(0.42, 0.18, 0.86, 1.0)
+const NEBULA_COLOR_INDIGO: Color = Color(0.22, 0.24, 0.84, 1.0)
+const NEBULA_COLOR_CYAN: Color = Color(0.10, 0.78, 0.91, 1.0)
+const NEBULA_CLOUD_ANCHORS_X: PackedFloat32Array = [0.22, 0.78, 0.48, 0.26, 0.74, 0.50]
+const NEBULA_CLOUD_ANCHORS_Y: PackedFloat32Array = [0.22, 0.28, 0.46, 0.62, 0.66, 0.36]
+const NEBULA_CLOUD_RADII_X: PackedFloat32Array = [0.60, 0.64, 0.72, 0.58, 0.60, 0.54]
+const NEBULA_CLOUD_RADII_Y: PackedFloat32Array = [0.34, 0.38, 0.42, 0.32, 0.34, 0.30]
+const NEBULA_CLOUD_PHASES: PackedFloat32Array = [0.0, 1.15, 2.30, 3.45, 4.60, 5.45]
+
+const ECLIPSE_BEAT_DECAY_RATE: float = 4.2
+const ECLIPSE_DROP_DECAY_RATE: float = 2.2
+const ECLIPSE_MAX_ALPHA: float = 0.34
+const ECLIPSE_MAX_RGB_CHANNEL: float = 0.91
+const ECLIPSE_BASE_TOP_COLOR: Color = Color(0.020, 0.026, 0.072, 1.0)
+const ECLIPSE_BASE_BOTTOM_COLOR: Color = Color(0.044, 0.022, 0.098, 1.0)
+const ECLIPSE_COLOR_CYAN: Color = Color(0.10, 0.82, 0.91, 1.0)
+const ECLIPSE_COLOR_VIOLET: Color = Color(0.54, 0.24, 0.91, 1.0)
 
 const AURORA_CURTAIN_COUNT: int = 7
 const AURORA_RIBBON_SEGMENTS: int = 16
@@ -104,15 +110,20 @@ var _beat_pulse_count: int = 0
 var _intensity_change_count: int = 0
 var _spectrum_update_count: int = 0
 
-# Perspective neon tunnel & aurora procedural state (0 heap allocations per frame)
-var _tunnel_depths: PackedFloat32Array = PackedFloat32Array()
-var _tunnel_beat_boost: float = 0.0
-var _tunnel_drop_boost: float = 0.0
-var _tunnel_shake_intensity: float = 0.0
-var _tunnel_shake_phase: float = 0.0
-var _tunnel_shake_offset_px: Vector2 = Vector2.ZERO
-var _tunnel_frame_pts: PackedVector2Array = PackedVector2Array()
-var _tunnel_pulse_count: int = 0
+# Diffused nebula, aurora & eclipse procedural state (0 heap allocations per frame)
+var _nebula_time: float = 0.0
+var _nebula_beat_boost: float = 0.0
+var _nebula_drop_boost: float = 0.0
+var _nebula_pulse_count: int = 0
+var _nebula_cloud_texture: GradientTexture2D = null
+
+var _eclipse_time: float = 0.0
+var _eclipse_color_phase: float = 0.0
+var _eclipse_beat_boost: float = 0.0
+var _eclipse_drop_boost: float = 0.0
+var _eclipse_pulse_count: int = 0
+var _eclipse_halo_texture: GradientTexture2D = null
+var _eclipse_core_shadow_texture: GradientTexture2D = null
 
 var _aurora_time: float = 0.0
 var _aurora_color_phase: float = 0.0
@@ -139,8 +150,9 @@ func _init() -> void:
 	color = Color(0.05, 0.05, 0.12, 1.0)
 	_quad_pts_buf.resize(4)
 	_quad_cols_buf.resize(4)
-	_tunnel_frame_pts.resize(9)
-	_init_tunnel_depths()
+	_nebula_cloud_texture = _create_nebula_cloud_texture()
+	_eclipse_halo_texture = _create_eclipse_halo_texture()
+	_eclipse_core_shadow_texture = _create_eclipse_core_shadow_texture()
 	_aurora_vertical_texture = _create_aurora_vertical_texture()
 	_aurora_horizontal_texture = _create_aurora_horizontal_texture()
 	_hit_beam_texture = _create_hit_beam_texture()
@@ -225,19 +237,23 @@ func _process(p_delta: float) -> void:
 	_lane_flashes.w = maxf(0.0, _lane_flashes.w - lane_decay)
 
 	_update_edge_halo(dt)
-	if is_waves_style_active():
-		step_tunnel(dt)
+	if is_nebula_style_active():
+		step_nebula(dt)
 	elif is_aurora_style_active():
 		step_aurora(dt)
+	elif is_eclipse_style_active():
+		step_eclipse(dt)
 	else:
 		_sync_shader_parameters()
 
 
 func _draw() -> void:
-	if is_waves_style_active():
-		_draw_tunnel_backdrop()
+	if is_nebula_style_active():
+		_draw_nebula_backdrop()
 	elif is_aurora_style_active():
 		_draw_aurora_backdrop()
+	elif is_eclipse_style_active():
+		_draw_eclipse_backdrop()
 
 
 func apply_background_config(p_config: ReactiveBackgroundConfig) -> void:
@@ -256,53 +272,107 @@ func get_active_style() -> String:
 	return _bg_config.style
 
 
+func is_nebula_style_active() -> bool:
+	return _bg_config.style == ReactiveBackgroundConfig.STYLE_NEBULA
+
+
 func is_waves_style_active() -> bool:
-	return _bg_config.style == ReactiveBackgroundConfig.STYLE_WAVES
+	return is_nebula_style_active()
 
 
 func is_aurora_style_active() -> bool:
 	return _bg_config.style == ReactiveBackgroundConfig.STYLE_AURORA
 
 
-func get_tunnel_frame_count() -> int:
-	return TUNNEL_FRAME_COUNT if is_waves_style_active() else 0
+func is_eclipse_style_active() -> bool:
+	return _bg_config.style == ReactiveBackgroundConfig.STYLE_ECLIPSE
 
 
-func get_tunnel_speed_multiplier() -> float:
+func get_nebula_cloud_count() -> int:
+	return NEBULA_CLOUD_COUNT if is_nebula_style_active() else 0
+
+
+func get_nebula_cloud_texture() -> GradientTexture2D:
+	return _nebula_cloud_texture
+
+
+func _compute_nebula_musical_drive() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var tier_drop: float = 0.55 if _current_tier >= 2 else 0.0
-	var drive: float = clampf(
-		((_tunnel_beat_boost * 0.72) + maxf(_tunnel_drop_boost * 0.65, tier_drop) + (_smoothed_bass * 0.35)) * react_mult,
+	var tier_drop: float = 0.72 if _current_tier >= 3 else (0.46 if _current_tier >= 2 else 0.0)
+	return clampf(
+		((_nebula_beat_boost * 0.85) + maxf(_nebula_drop_boost * 0.80, tier_drop) + (_smoothed_bass * 0.62) + (_smoothed_mid * 0.18)) * react_mult,
 		0.0,
-		1.85
+		2.10
 	)
-	return 1.0 + (drive * 0.88)
 
 
-func get_tunnel_brightness_multiplier() -> float:
+func get_nebula_brightness_multiplier() -> float:
+	var drive: float = _compute_nebula_musical_drive()
+	return 1.0 + (drive * 0.95)
+
+
+func get_nebula_breath_scale() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var tier_drop: float = 0.55 if _current_tier >= 2 else 0.0
-	var drive: float = clampf(
-		((_tunnel_beat_boost * 0.82) + maxf(_tunnel_drop_boost * 0.75, tier_drop) + (_smoothed_bass * 0.38)) * react_mult,
-		0.0,
-		1.95
-	)
-	return 1.0 + (drive * 1.15)
+	var bass_breath: float = clampf(((_smoothed_bass * 0.16) + (_nebula_beat_boost * 0.10)) * react_mult, 0.0, 0.30)
+	return 1.0 + bass_breath
 
 
-func get_tunnel_blur_multiplier() -> float:
+func get_nebula_core_boost() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var tier_drop: float = 0.50 if _current_tier >= 2 else 0.0
-	var drive: float = clampf(
-		((_tunnel_beat_boost * 0.80) + maxf(_tunnel_drop_boost * 0.72, tier_drop) + (_smoothed_bass * 0.35)) * react_mult,
+	var tier_drop: float = 0.82 if _current_tier >= 3 else (0.55 if _current_tier >= 2 else 0.0)
+	return clampf(
+		(maxf(_nebula_drop_boost, tier_drop) + (_nebula_beat_boost * 0.45) + (_smoothed_bass * 0.32)) * react_mult,
 		0.0,
-		1.90
+		1.60
 	)
-	return 1.0 + (drive * 0.55)
 
 
-func get_tunnel_shake_offset() -> Vector2:
-	return _tunnel_shake_offset_px
+func get_nebula_pulse_count() -> int:
+	return _nebula_pulse_count
+
+
+func get_eclipse_halo_texture() -> GradientTexture2D:
+	return _eclipse_halo_texture
+
+
+func get_eclipse_core_shadow_texture() -> GradientTexture2D:
+	return _eclipse_core_shadow_texture
+
+
+func _compute_eclipse_musical_drive() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var tier_drop: float = 0.75 if _current_tier >= 3 else (0.48 if _current_tier >= 2 else 0.0)
+	return clampf(
+		((_eclipse_beat_boost * 0.90) + maxf(_eclipse_drop_boost * 0.82, tier_drop) + (_smoothed_bass * 0.56)) * react_mult,
+		0.0,
+		2.15
+	)
+
+
+func get_eclipse_breath_scale() -> float:
+	var drive: float = _compute_eclipse_musical_drive()
+	var ambient_swell: float = sin(_eclipse_time * 0.90) * 0.03
+	return clampf(1.0 + ambient_swell + (drive * 0.14), 0.94, 1.36)
+
+
+func get_eclipse_color_mix() -> float:
+	var slow_wave: float = (sin(_eclipse_color_phase) * 0.5) + 0.5
+	var beat_push: float = clampf((_eclipse_beat_boost * 0.38) + (_eclipse_drop_boost * 0.48), 0.0, 0.65)
+	return clampf(lerpf(slow_wave, 1.0 - slow_wave, beat_push), 0.0, 1.0)
+
+
+func get_eclipse_current_color() -> Color:
+	var col: Color = ECLIPSE_COLOR_CYAN.lerp(ECLIPSE_COLOR_VIOLET, get_eclipse_color_mix())
+	return Color(
+		minf(col.r, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(col.g, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(col.b, ECLIPSE_MAX_RGB_CHANNEL),
+		1.0
+	)
+
+
+func get_eclipse_pulse_count() -> int:
+	return _eclipse_pulse_count
 
 
 func get_global_hit_flash_energy() -> float:
@@ -310,7 +380,10 @@ func get_global_hit_flash_energy() -> float:
 
 
 func is_custom_hit_flash_rendering() -> bool:
-	return (is_waves_style_active() or is_aurora_style_active()) and get_global_hit_flash_energy() > 0.004
+	return (
+		(is_nebula_style_active() or is_aurora_style_active() or is_eclipse_style_active())
+		and get_global_hit_flash_energy() > 0.004
+	)
 
 
 func get_hit_effect_style() -> String:
@@ -323,20 +396,6 @@ func get_hit_beam_texture() -> GradientTexture2D:
 
 func get_hit_radial_texture() -> GradientTexture2D:
 	return _hit_radial_texture
-
-
-func get_tunnel_scales_snapshot() -> PackedFloat32Array:
-	var result: PackedFloat32Array = PackedFloat32Array()
-	if not is_waves_style_active():
-		return result
-	result.resize(_tunnel_depths.size())
-	for i: int in range(_tunnel_depths.size()):
-		result[i] = _depth_to_tunnel_scale(_tunnel_depths[i])
-	return result
-
-
-func get_tunnel_pulse_count() -> int:
-	return _tunnel_pulse_count
 
 
 func get_aurora_curtain_count() -> int:
@@ -402,15 +461,11 @@ func get_aurora_pulse_count() -> int:
 
 func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_bypass_cooldown: bool = false) -> void:
 	var s: float = clampf(p_strength, 0.20, 1.0)
-	if is_waves_style_active():
-		_tunnel_beat_boost = maxf(_tunnel_beat_boost, s)
+	if is_nebula_style_active():
+		_nebula_beat_boost = maxf(_nebula_beat_boost, s)
 		if p_is_drop:
-			_tunnel_drop_boost = maxf(_tunnel_drop_boost, s)
-		var shake_target: float = clampf(s * (1.15 if p_is_drop else 0.85), 0.35, 1.0)
-		_tunnel_shake_intensity = maxf(_tunnel_shake_intensity, shake_target)
-		_tunnel_shake_phase += 1.37
-		_update_tunnel_shake_offset()
-		_tunnel_pulse_count += 1
+			_nebula_drop_boost = maxf(_nebula_drop_boost, s)
+		_nebula_pulse_count += 1
 		queue_redraw()
 	elif is_aurora_style_active():
 		_aurora_beat_boost = maxf(_aurora_beat_boost, s)
@@ -418,47 +473,49 @@ func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_by
 			_aurora_drop_boost = maxf(_aurora_drop_boost, s)
 		_aurora_pulse_count += 1
 		queue_redraw()
+	elif is_eclipse_style_active():
+		_eclipse_beat_boost = maxf(_eclipse_beat_boost, s)
+		if p_is_drop:
+			_eclipse_drop_boost = maxf(_eclipse_drop_boost, s)
+		_eclipse_color_phase = wrapf(_eclipse_color_phase + (0.62 if p_is_drop else 0.34), 0.0, TAU)
+		_eclipse_pulse_count += 1
+		queue_redraw()
 
 
-func step_tunnel(p_delta: float) -> void:
-	if not is_waves_style_active():
+func step_nebula(p_delta: float) -> void:
+	if not is_nebula_style_active():
 		return
 	var dt: float = clampf(p_delta, 0.0, 0.1)
-	_tunnel_beat_boost *= exp(-TUNNEL_BEAT_DECAY_RATE * dt)
-	if _tunnel_beat_boost < 0.002:
-		_tunnel_beat_boost = 0.0
-	_tunnel_drop_boost *= exp(-TUNNEL_DROP_DECAY_RATE * dt)
-	if _tunnel_drop_boost < 0.002:
-		_tunnel_drop_boost = 0.0
+	_nebula_beat_boost *= exp(-NEBULA_BEAT_DECAY_RATE * dt)
+	if _nebula_beat_boost < 0.002:
+		_nebula_beat_boost = 0.0
+	_nebula_drop_boost *= exp(-NEBULA_DROP_DECAY_RATE * dt)
+	if _nebula_drop_boost < 0.002:
+		_nebula_drop_boost = 0.0
 
-	_tunnel_shake_phase += dt * TUNNEL_SHAKE_OSC_SPEED
-	_tunnel_shake_intensity *= exp(-TUNNEL_SHAKE_DECAY_RATE * dt)
-	if _tunnel_shake_intensity < 0.01:
-		_tunnel_shake_intensity = 0.0
-	_update_tunnel_shake_offset()
-
-	var speed_mult: float = get_tunnel_speed_multiplier()
-	var advance: float = TUNNEL_BASE_DEPTH_SPEED * speed_mult * dt
-	for i: int in range(_tunnel_depths.size()):
-		_tunnel_depths[i] = fposmod(_tunnel_depths[i] + advance, 1.0)
+	var drift_speed: float = 0.48 + (_compute_nebula_musical_drive() * 0.22)
+	_nebula_time += dt * drift_speed
 	queue_redraw()
 
 
-func _update_tunnel_shake_offset() -> void:
-	if _tunnel_shake_intensity <= 0.01:
-		_tunnel_shake_offset_px = Vector2.ZERO
+func step_eclipse(p_delta: float) -> void:
+	if not is_eclipse_style_active():
 		return
-	var react_scale: float = lerpf(0.75, 1.15, (_bg_config.get_reactivity_multiplier() - 0.55) / 0.90)
-	var envelope: float = smoothstep(0.0, 0.25, _tunnel_shake_intensity)
-	var amp_px: float = clampf(
-		lerpf(TUNNEL_SHAKE_MIN_PX, TUNNEL_SHAKE_MAX_PX, _tunnel_shake_intensity) * react_scale,
-		TUNNEL_SHAKE_MIN_PX,
-		TUNNEL_SHAKE_MAX_PX
-	) * envelope
-	_tunnel_shake_offset_px = Vector2(
-		cos(_tunnel_shake_phase * 1.41) * amp_px,
-		sin(_tunnel_shake_phase * 1.93) * amp_px
+	var dt: float = clampf(p_delta, 0.0, 0.1)
+	_eclipse_beat_boost *= exp(-ECLIPSE_BEAT_DECAY_RATE * dt)
+	if _eclipse_beat_boost < 0.002:
+		_eclipse_beat_boost = 0.0
+	_eclipse_drop_boost *= exp(-ECLIPSE_DROP_DECAY_RATE * dt)
+	if _eclipse_drop_boost < 0.002:
+		_eclipse_drop_boost = 0.0
+
+	_eclipse_time += dt * (0.72 + (_eclipse_drop_boost * 0.35))
+	_eclipse_color_phase = wrapf(
+		_eclipse_color_phase + (dt * (0.36 + (_eclipse_drop_boost * 0.55) + (_eclipse_beat_boost * 0.30))),
+		0.0,
+		TAU
 	)
+	queue_redraw()
 
 
 func step_aurora(p_delta: float) -> void:
@@ -660,6 +717,12 @@ func _on_intensity_changed(p_block: IntensityBlock) -> void:
 	elif is_aurora_style_active() and _current_tier >= 2:
 		_aurora_drop_boost = maxf(_aurora_drop_boost, 0.82 if _current_tier >= 3 else 0.62)
 		queue_redraw()
+	elif is_nebula_style_active() and _current_tier >= 2:
+		_nebula_drop_boost = maxf(_nebula_drop_boost, 0.84 if _current_tier >= 3 else 0.62)
+		queue_redraw()
+	elif is_eclipse_style_active() and _current_tier >= 2:
+		_eclipse_drop_boost = maxf(_eclipse_drop_boost, 0.85 if _current_tier >= 3 else 0.64)
+		queue_redraw()
 	_sync_shader_parameters()
 
 
@@ -704,6 +767,18 @@ func _on_spectrum_updated(
 		if clamped_bass >= 0.64 and clamped_total >= 0.62:
 			_aurora_drop_boost = maxf(_aurora_drop_boost, clampf(clamped_total, 0.55, 1.0))
 		queue_redraw()
+	elif is_nebula_style_active() and (bass_jump >= 0.08 or clamped_bass >= 0.38):
+		var nebula_swell: float = clampf((clamped_bass * 0.75) + (maxf(0.0, bass_jump) * 1.05), 0.20, 0.90)
+		_nebula_beat_boost = maxf(_nebula_beat_boost, nebula_swell)
+		if clamped_bass >= 0.66 and clamped_total >= 0.62:
+			_nebula_drop_boost = maxf(_nebula_drop_boost, clampf(clamped_total, 0.55, 1.0))
+		queue_redraw()
+	elif is_eclipse_style_active() and (bass_jump >= 0.08 or clamped_bass >= 0.38):
+		var eclipse_swell: float = clampf((clamped_bass * 0.76) + (maxf(0.0, bass_jump) * 1.08), 0.20, 0.92)
+		_eclipse_beat_boost = maxf(_eclipse_beat_boost, eclipse_swell)
+		if clamped_bass >= 0.65 and clamped_total >= 0.62:
+			_eclipse_drop_boost = maxf(_eclipse_drop_boost, clampf(clamped_total, 0.55, 1.0))
+		queue_redraw()
 
 	_sync_shader_parameters()
 
@@ -735,7 +810,7 @@ func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: in
 		_:
 			pass
 
-	if is_waves_style_active() or is_aurora_style_active():
+	if is_nebula_style_active() or is_aurora_style_active() or is_eclipse_style_active():
 		queue_redraw()
 	else:
 		_sync_shader_parameters()
@@ -874,37 +949,28 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
 
 
-func _init_tunnel_depths() -> void:
-	_tunnel_depths.resize(TUNNEL_FRAME_COUNT)
-	for i: int in range(TUNNEL_FRAME_COUNT):
-		_tunnel_depths[i] = float(i) / float(TUNNEL_FRAME_COUNT)
-
-
-func _depth_to_tunnel_scale(p_depth: float) -> float:
-	var t: float = clampf(p_depth, 0.0, 1.0)
-	return lerpf(TUNNEL_MIN_SCALE, TUNNEL_MAX_SCALE, pow(t, 2.35))
-
-
 func _apply_active_style_mode() -> void:
-	if is_waves_style_active():
+	if is_nebula_style_active():
 		material = null
-		color = WAVE_BASE_TOP_COLOR
-		if _tunnel_depths.size() != TUNNEL_FRAME_COUNT:
-			_init_tunnel_depths()
+		color = NEBULA_BASE_TOP_COLOR
 		queue_redraw()
 	elif is_aurora_style_active():
 		material = null
 		color = AURORA_BASE_TOP_COLOR
 		queue_redraw()
+	elif is_eclipse_style_active():
+		material = null
+		color = ECLIPSE_BASE_TOP_COLOR
+		queue_redraw()
 	else:
 		_setup_shader_material()
 		material = _shader_material
-		_tunnel_beat_boost = 0.0
-		_tunnel_drop_boost = 0.0
-		_tunnel_shake_intensity = 0.0
-		_tunnel_shake_offset_px = Vector2.ZERO
+		_nebula_beat_boost = 0.0
+		_nebula_drop_boost = 0.0
 		_aurora_beat_boost = 0.0
 		_aurora_drop_boost = 0.0
+		_eclipse_beat_boost = 0.0
+		_eclipse_drop_boost = 0.0
 		_sync_shader_parameters()
 		queue_redraw()
 
@@ -921,77 +987,210 @@ func _draw_vertical_dark_gradient(p_w: float, p_h: float, p_top: Color, p_bottom
 	draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 
-func _draw_tunnel_backdrop() -> void:
+func _draw_nebula_backdrop() -> void:
 	var bounds: Vector2 = _resolve_draw_bounds()
 	var w: float = bounds.x
 	var h: float = bounds.y
-	_draw_vertical_dark_gradient(w, h, WAVE_BASE_TOP_COLOR, WAVE_BASE_BOTTOM_COLOR)
+	_draw_vertical_dark_gradient(w, h, NEBULA_BASE_TOP_COLOR, NEBULA_BASE_BOTTOM_COLOR)
 
-	var center: Vector2 = bounds * 0.5
-	var half_w_max: float = w * 0.52
-	var half_h_max: float = h * 0.52
-	var bright_mult: float = get_tunnel_brightness_multiplier()
-	var blur_mult: float = get_tunnel_blur_multiplier()
-	var core_flash_mix: float = clampf((bright_mult - 1.0) * 0.22, 0.0, 0.42)
-	var palette_len: int = TUNNEL_FRAME_COLORS.size()
+	if _nebula_cloud_texture == null:
+		_draw_global_note_hit_flashes(bounds)
+		return
 
-	if _tunnel_frame_pts.size() != 9:
-		_tunnel_frame_pts.resize(9)
+	var bright_mult: float = get_nebula_brightness_multiplier()
+	var breath_scale: float = get_nebula_breath_scale()
+	var core_boost: float = get_nebula_core_boost()
 
-	for i: int in range(_tunnel_depths.size()):
-		var depth_t: float = clampf(_tunnel_depths[i], 0.0, 1.0)
-		var scale_f: float = _depth_to_tunnel_scale(depth_t)
-		var hw: float = half_w_max * scale_f
-		var hh: float = half_h_max * scale_f
-		if hw < 2.0 or hh < 2.0:
-			continue
+	# 6 wide overlapping elliptical radial clouds (deep violet, indigo, subtle cyan accents, zero lines)
+	for i: int in range(NEBULA_CLOUD_COUNT):
+		var phase: float = NEBULA_CLOUD_PHASES[i]
+		var drift_x: float = sin((_nebula_time * 0.42) + phase) * (w * 0.065)
+		var drift_y: float = cos((_nebula_time * 0.34) + (phase * 1.18)) * (h * 0.042)
+		var cx: float = (w * NEBULA_CLOUD_ANCHORS_X[i]) + drift_x
+		var cy: float = (h * NEBULA_CLOUD_ANCHORS_Y[i]) + drift_y
 
-		var fade_in: float = smoothstep(0.0, 0.16, depth_t)
-		var fade_out: float = 1.0 - smoothstep(0.86, 1.0, depth_t)
-		var base_alpha: float = lerpf(0.11, 0.30, depth_t) * fade_in * fade_out
-		var final_alpha: float = clampf(base_alpha * bright_mult, 0.0, 0.48)
-		if final_alpha <= 0.004:
-			continue
+		var local_swell: float = 1.0 + (0.06 * sin((_nebula_time * 0.65) + phase))
+		var rx: float = w * NEBULA_CLOUD_RADII_X[i] * breath_scale * local_swell
+		var ry: float = h * NEBULA_CLOUD_RADII_Y[i] * breath_scale * local_swell
 
-		# Beveled hollow neon octagon / rounded-corner frame in perspective with beat micro-shake
-		var depth_shake: Vector2 = _tunnel_shake_offset_px * lerpf(0.35, 1.0, depth_t)
-		var cx: float = center.x + depth_shake.x
-		var cy: float = center.y + depth_shake.y
-		var ch_x: float = hw * TUNNEL_CHAMFER_RATIO
-		var ch_y: float = hh * TUNNEL_CHAMFER_RATIO
+		var base_col: Color = NEBULA_COLOR_VIOLET
+		var mod_idx: int = i % 3
+		if mod_idx == 1:
+			base_col = NEBULA_COLOR_INDIGO
+		elif mod_idx == 2:
+			base_col = NEBULA_COLOR_INDIGO.lerp(NEBULA_COLOR_CYAN, clampf(0.42 + (core_boost * 0.25), 0.0, 0.85))
 
-		_tunnel_frame_pts[0] = Vector2(cx - hw + ch_x, cy - hh)
-		_tunnel_frame_pts[1] = Vector2(cx + hw - ch_x, cy - hh)
-		_tunnel_frame_pts[2] = Vector2(cx + hw, cy - hh + ch_y)
-		_tunnel_frame_pts[3] = Vector2(cx + hw, cy + hh - ch_y)
-		_tunnel_frame_pts[4] = Vector2(cx + hw - ch_x, cy + hh)
-		_tunnel_frame_pts[5] = Vector2(cx - hw + ch_x, cy + hh)
-		_tunnel_frame_pts[6] = Vector2(cx - hw, cy + hh - ch_y)
-		_tunnel_frame_pts[7] = Vector2(cx - hw, cy - hh + ch_y)
-		_tunnel_frame_pts[8] = _tunnel_frame_pts[0]
-
-		var col: Color = TUNNEL_FRAME_COLORS[i % palette_len]
-		var core_w: float = lerpf(1.2, 2.7, depth_t)
-
-		# 5-layer intense neon blur halo (no WorldEnvironment)
-		var bloom_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.10)
-		var outer_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.19)
-		var mid_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.34)
-		var inner_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.58)
-		var core_col: Color = Color(
-			lerpf(col.r, 1.0, 0.30 + core_flash_mix),
-			lerpf(col.g, 1.0, 0.30 + core_flash_mix),
-			lerpf(col.b, 1.0, 0.30 + core_flash_mix),
-			final_alpha
+		var cloud_alpha: float = clampf((0.115 + (0.02 * float(i % 2))) * bright_mult, 0.0, NEBULA_MAX_ALPHA)
+		var cloud_tint: Color = Color(
+			minf(base_col.r, NEBULA_MAX_RGB_CHANNEL),
+			minf(base_col.g, NEBULA_MAX_RGB_CHANNEL),
+			minf(base_col.b, NEBULA_MAX_RGB_CHANNEL),
+			cloud_alpha
 		)
+		var cloud_rect: Rect2 = Rect2(cx - rx, cy - ry, rx * 2.0, ry * 2.0)
+		draw_texture_rect(_nebula_cloud_texture, cloud_rect, false, cloud_tint)
 
-		draw_polyline(_tunnel_frame_pts, bloom_col, core_w * 11.0 * blur_mult, true)
-		draw_polyline(_tunnel_frame_pts, outer_col, core_w * 6.8 * blur_mult, true)
-		draw_polyline(_tunnel_frame_pts, mid_col, core_w * 3.8 * blur_mult, true)
-		draw_polyline(_tunnel_frame_pts, inner_col, core_w * 2.0, true)
-		draw_polyline(_tunnel_frame_pts, core_col, core_w, true)
+	# Centered cosmic core glow that blooms smoothly during Drops
+	var core_center: Vector2 = Vector2(
+		(w * 0.5) + (sin(_nebula_time * 0.30) * w * 0.025),
+		(h * 0.46) + (cos(_nebula_time * 0.26) * h * 0.02)
+	)
+	var core_rx: float = w * lerpf(0.38, 0.64, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
+	var core_ry: float = h * lerpf(0.22, 0.36, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
+	var core_col: Color = NEBULA_COLOR_VIOLET.lerp(NEBULA_COLOR_CYAN, clampf(0.35 + (core_boost * 0.42), 0.0, 0.88))
+	var core_alpha: float = clampf(0.08 + (core_boost * 0.14), 0.0, NEBULA_MAX_ALPHA)
+	var core_tint: Color = Color(
+		minf(core_col.r, NEBULA_MAX_RGB_CHANNEL),
+		minf(core_col.g, NEBULA_MAX_RGB_CHANNEL),
+		minf(core_col.b, NEBULA_MAX_RGB_CHANNEL),
+		core_alpha
+	)
+	var core_rect: Rect2 = Rect2(
+		core_center.x - core_rx,
+		core_center.y - core_ry,
+		core_rx * 2.0,
+		core_ry * 2.0
+	)
+	draw_texture_rect(_nebula_cloud_texture, core_rect, false, core_tint)
 
 	_draw_global_note_hit_flashes(bounds)
+
+
+func _draw_eclipse_backdrop() -> void:
+	var bounds: Vector2 = _resolve_draw_bounds()
+	var w: float = bounds.x
+	var h: float = bounds.y
+	_draw_vertical_dark_gradient(w, h, ECLIPSE_BASE_TOP_COLOR, ECLIPSE_BASE_BOTTOM_COLOR)
+
+	if _eclipse_halo_texture == null:
+		_draw_global_note_hit_flashes(bounds)
+		return
+
+	var drive: float = _compute_eclipse_musical_drive()
+	var breath_scale: float = get_eclipse_breath_scale()
+	var primary_col: Color = get_eclipse_current_color()
+	var secondary_col: Color = ECLIPSE_COLOR_VIOLET.lerp(ECLIPSE_COLOR_CYAN, get_eclipse_color_mix())
+	var center: Vector2 = Vector2(w * 0.5, h * 0.47)
+	var min_dim: float = minf(w, h)
+
+	# 1. Wide outer atmospheric nebula veil behind the eclipse
+	if _nebula_cloud_texture != null:
+		var outer_r: float = min_dim * 0.72 * breath_scale
+		var outer_alpha: float = clampf(0.11 + (drive * 0.09), 0.0, 0.24)
+		var outer_tint: Color = Color(
+			minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(secondary_col.b, ECLIPSE_MAX_RGB_CHANNEL),
+			outer_alpha
+		)
+		var outer_rect: Rect2 = Rect2(center.x - outer_r, center.y - outer_r, outer_r * 2.0, outer_r * 2.0)
+		draw_texture_rect(_nebula_cloud_texture, outer_rect, false, outer_tint)
+
+	# 2. Secondary counter-hue diffused halo slightly shifted for chromatic depth
+	var shift_vec: Vector2 = Vector2(
+		cos(_eclipse_time * 0.55) * (min_dim * 0.018),
+		sin(_eclipse_time * 0.48) * (min_dim * 0.018)
+	)
+	var sec_r: float = min_dim * 0.56 * breath_scale
+	var sec_alpha: float = clampf(0.10 + (drive * 0.085), 0.0, 0.24)
+	var sec_tint: Color = Color(
+		minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(secondary_col.b, ECLIPSE_MAX_RGB_CHANNEL),
+		sec_alpha
+	)
+	var sec_rect: Rect2 = Rect2(
+		center.x + shift_vec.x - sec_r,
+		center.y + shift_vec.y - sec_r,
+		sec_r * 2.0,
+		sec_r * 2.0
+	)
+	draw_texture_rect(_eclipse_halo_texture, sec_rect, false, sec_tint)
+
+	# 3. Main centered wide diffused circular halo (smooth radial falloff, zero hard ring)
+	var main_r: float = min_dim * 0.50 * breath_scale
+	var main_alpha: float = clampf(0.17 + (drive * 0.11), 0.0, ECLIPSE_MAX_ALPHA)
+	var main_tint: Color = Color(
+		minf(primary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(primary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(primary_col.b, ECLIPSE_MAX_RGB_CHANNEL),
+		main_alpha
+	)
+	var main_rect: Rect2 = Rect2(center.x - main_r, center.y - main_r, main_r * 2.0, main_r * 2.0)
+	draw_texture_rect(_eclipse_halo_texture, main_rect, false, main_tint)
+
+	# 4. Soft dark center umbra giving depth without any hard circle contour
+	if _eclipse_core_shadow_texture != null:
+		var umbra_r: float = min_dim * 0.24 * lerpf(1.0, 1.06, clampf(drive * 0.35, 0.0, 1.0))
+		var umbra_tint: Color = Color(0.025, 0.022, 0.070, 0.72)
+		var umbra_rect: Rect2 = Rect2(center.x - umbra_r, center.y - umbra_r, umbra_r * 2.0, umbra_r * 2.0)
+		draw_texture_rect(_eclipse_core_shadow_texture, umbra_rect, false, umbra_tint)
+
+	_draw_global_note_hit_flashes(bounds)
+
+
+func _create_nebula_cloud_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.54, 0.78, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.56),
+		Color(1.0, 1.0, 1.0, 0.20),
+		Color(1.0, 1.0, 1.0, 0.05),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
+
+
+func _create_eclipse_halo_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.34, 0.46, 0.64, 0.82, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.14),
+		Color(1.0, 1.0, 1.0, 0.88),
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.52),
+		Color(1.0, 1.0, 1.0, 0.16),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 256
+	tex.height = 256
+	tex.use_hdr = false
+	return tex
+
+
+func _create_eclipse_core_shadow_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.32, 0.62, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.82),
+		Color(1.0, 1.0, 1.0, 0.44),
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
 
 
 func _sample_aurora_color(p_phase: float) -> Color:

@@ -269,6 +269,7 @@ func build_demo_chart(
 	var beat_sec: float = 60.0 / DEMO_BPM
 	var notes: Array[NoteData] = []
 	var allow_holds: bool = p_note_type_mode != AutoChartGenerator.NoteTypeMode.TAP_ONLY
+	var allow_double_taps: bool = p_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
 	var lane_pattern: PackedInt32Array = PackedInt32Array([0, 2, 1, 3])
 
 	for step_idx: int in range(28):
@@ -279,6 +280,10 @@ func build_demo_chart(
 		var strength: float = 1.0 if (step_idx % 4) == 0 else 0.75
 		var note: NoteData = NoteData.new(note_time_sec, lane_idx, duration_sec, strength)
 		notes.append(note)
+
+		if allow_double_taps and not is_hold_step and (step_idx == 0 or step_idx == 8 or step_idx == 16 or step_idx == 20):
+			var partner_lane: int = 3 if step_idx == 20 else 2
+			notes.append(NoteData.new(note_time_sec, partner_lane, 0.0, strength))
 
 	var blocks: Array[IntensityBlock] = [
 		IntensityBlock.new(0.0, 3.75, 0.25, 0),

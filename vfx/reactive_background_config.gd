@@ -5,8 +5,10 @@ const DEFAULT_SETTINGS_PATH: String = "user://user_settings.cfg"
 const SETTINGS_SECTION: String = "reactive_background"
 
 const STYLE_CLASSIC: String = "classic"
+const STYLE_NEBULA: String = "nebula"
 const STYLE_WAVES: String = "waves"
 const STYLE_AURORA: String = "aurora"
+const STYLE_ECLIPSE: String = "eclipse"
 
 const LEVEL_LOW: String = "low"
 const LEVEL_MEDIUM: String = "medium"
@@ -18,8 +20,9 @@ const REACTIVITY_MULT_HIGH: float = 1.45
 
 const SUPPORTED_STYLES: PackedStringArray = [
 	STYLE_CLASSIC,
-	STYLE_WAVES,
+	STYLE_NEBULA,
 	STYLE_AURORA,
+	STYLE_ECLIPSE,
 ]
 
 const SUPPORTED_LEVELS: PackedStringArray = [
@@ -125,10 +128,12 @@ static func sanitize_style(p_raw_style: String) -> String:
 	match lowered:
 		STYLE_CLASSIC, "clasico", "clásico":
 			return STYLE_CLASSIC
-		STYLE_WAVES, "ondas", "tunel", "túnel":
-			return STYLE_WAVES
+		STYLE_NEBULA, STYLE_WAVES, "nebulosa", "ondas", "tunel", "túnel":
+			return STYLE_NEBULA
 		STYLE_AURORA:
 			return STYLE_AURORA
+		STYLE_ECLIPSE:
+			return STYLE_ECLIPSE
 		_:
 			# Legacy "shooting_stars" (migrated to particles) and unknown values safely fall back to Classic
 			return STYLE_CLASSIC
@@ -159,10 +164,12 @@ static func reactivity_to_multiplier(p_level: String) -> float:
 
 static func style_to_label(p_style: String) -> String:
 	match sanitize_style(p_style):
-		STYLE_WAVES:
-			return "Túnel"
+		STYLE_NEBULA:
+			return "Nebulosa"
 		STYLE_AURORA:
 			return "Aurora"
+		STYLE_ECLIPSE:
+			return "Eclipse"
 		_:
 			return "Clásico"
 
