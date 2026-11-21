@@ -9,7 +9,7 @@ const AUDIO_ENERGY_LERP_SPEED: float = 8.0
 const AUDIO_TARGET_DECAY_SPEED: float = 3.2
 const MAX_EFFECTIVE_DRIVE: float = 2.20
 
-const CIRCLE_SPEED_BEAT_BOOST: float = 1.15
+const CIRCLE_SPEED_BEAT_BOOST: float = 2.30
 const CIRCLE_MIN_RADIUS_PX: float = 1.2
 const CIRCLE_MAX_RADIUS_PX: float = 3.8
 const CIRCLE_FADE_IN_END: float = 0.14
@@ -17,8 +17,8 @@ const CIRCLE_EDGE_FADE_START: float = 0.72
 const CIRCLE_BASE_HALO_SCALE: float = 2.3
 const CIRCLE_BEAT_HALO_BOOST: float = 2.15
 const SQUARE_SCALE_BEAT_BOOST: float = 0.34
-const SQUARE_MOTION_DROP_BOOST: float = 0.90
-const MIST_SPEED_BEAT_BOOST: float = 1.28
+const SQUARE_MOTION_DROP_BOOST: float = 1.80
+const MIST_SPEED_BEAT_BOOST: float = 2.56
 const MIST_INTENSITY_BEAT_BOOST: float = 0.72
 const STREAK_LENGTH_BEAT_BOOST: float = 0.90
 const STREAK_MIN_WIDTH_PX: float = 1.4
@@ -27,12 +27,12 @@ const STREAK_MIN_LENGTH_PX: float = 22.0
 const STREAK_MAX_LENGTH_PX: float = 48.0
 const STREAK_GRADIENT_SEGMENTS: int = 5
 const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.72
-const SPARKLE_MOTION_DROP_BOOST: float = 0.90
+const SPARKLE_MOTION_DROP_BOOST: float = 1.80
 const SPARKLE_BASE_HALO_SCALE: float = 4.2
 const SPARKLE_HALO_BEAT_BOOST: float = 3.40
 const SHOOTING_STAR_MIN_ANGLE_DEG: float = 28.0
 const SHOOTING_STAR_MAX_ANGLE_DEG: float = 38.0
-const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 1.15
+const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 2.30
 const SHOOTING_STAR_LENGTH_DROP_BOOST: float = 1.02
 const SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST: float = 0.74
 const SHOOTING_STAR_TAIL_SEGMENTS: int = 6
@@ -425,16 +425,16 @@ func _recompute_drive_metrics() -> void:
 		0.0,
 		MAX_EFFECTIVE_DRIVE
 	)
-	_current_speed_mult = clampf(1.0 + (_current_drive * CIRCLE_SPEED_BEAT_BOOST), 1.0, 2.90)
+	_current_speed_mult = clampf(1.0 + (_current_drive * CIRCLE_SPEED_BEAT_BOOST), 1.0, 4.80)
 	_current_scale_mult = clampf(1.0 + (_current_drive * SQUARE_SCALE_BEAT_BOOST), 1.0, 1.68)
-	_current_square_motion_mult = clampf(1.0 + (_current_drive * SQUARE_MOTION_DROP_BOOST), 1.0, 2.55)
-	_current_mist_speed_mult = clampf(1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST), 1.0, 3.10)
+	_current_square_motion_mult = clampf(1.0 + (_current_drive * SQUARE_MOTION_DROP_BOOST), 1.0, 4.10)
+	_current_mist_speed_mult = clampf(1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST), 1.0, 5.20)
 	_current_mist_intensity_mult = clampf(1.0 + (_current_drive * MIST_INTENSITY_BEAT_BOOST), 1.0, 2.35)
 	_current_streak_length_mult = clampf(1.0 + (_current_drive * STREAK_LENGTH_BEAT_BOOST), 1.0, 2.50)
 	_current_sparkle_brightness_mult = clampf(1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST), 1.0, 2.35)
-	_current_sparkle_motion_mult = clampf(1.0 + (_current_drive * SPARKLE_MOTION_DROP_BOOST), 1.0, 2.50)
+	_current_sparkle_motion_mult = clampf(1.0 + (_current_drive * SPARKLE_MOTION_DROP_BOOST), 1.0, 4.00)
 	_current_sparkle_halo_scale = clampf(SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST), SPARKLE_BASE_HALO_SCALE, 11.2)
-	_current_shooting_star_speed_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_SPEED_BEAT_BOOST), 1.0, 2.95)
+	_current_shooting_star_speed_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_SPEED_BEAT_BOOST), 1.0, 4.90)
 	_current_shooting_star_length_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_LENGTH_DROP_BOOST), 1.0, 2.65)
 	_current_shooting_star_brightness_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST), 1.0, 2.40)
 

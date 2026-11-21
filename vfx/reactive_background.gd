@@ -251,7 +251,7 @@ func get_tunnel_speed_multiplier() -> float:
 		0.0,
 		1.85
 	)
-	return 1.0 + (drive * 1.45)
+	return 1.0 + (drive * 2.90)
 
 
 func get_tunnel_brightness_multiplier() -> float:
@@ -306,7 +306,7 @@ func get_aurora_undulation_multiplier() -> float:
 		0.0,
 		2.00
 	)
-	return 1.0 + (drive * 0.72)
+	return 1.0 + (drive * 1.44)
 
 
 func _compute_aurora_musical_drive() -> float:
