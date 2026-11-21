@@ -45,15 +45,15 @@ Al abrir la aplicación actualmente, `MainMenu` aparece de golpe en un solo fram
   - Si `not _has_played_startup_intro`: marca `_has_played_startup_intro = true` y ejecuta `_start_startup_intro()`.
   - En cualquier segunda instanciación de `MainMenu` dentro de la misma ejecución, `_has_played_startup_intro` ya es `true` y la intro se omite por completo.
 
-### 4.2. Línea de Tiempo Exacta (`STARTUP_INTRO_DURATION_SEC = 0.95`)
+### 4.2. Línea de Tiempo Exacta (`STARTUP_INTRO_TOTAL_SEC = 1.50`)
 | Ventana (`s`) | Elemento | Animación (`Tween` / `_draw`) |
 | :--- | :--- | :--- |
-| `0.00 -> 0.25` | **Velo oscuro base** (`_intro_veil_rect`) | `modulate:a` de `1.0` a `0.0` (`TRANS_SINE`, `EASE_OUT`), independiente de audio/disco. |
-| `0.12 -> 0.50` | **Título / Logotipo** (`_hero_title_label` en portada o `_browser_header_label` en navegador) | `modulate:a` `0.0 -> 1.0`, `scale` `0.94 -> 1.0` y ligera elevación vertical (`+22 px -> 0 px`) con `TRANS_CUBIC`, `EASE_OUT`. |
-| `0.18 -> 0.63` (`0.45 s`) | **Onda circular neón / "boom"** (`_intro_wave_fx`) | Dibujada por código (`_draw()` / `queue_redraw()`) centrada en el título/logotipo: anillo exterior cian con halo suave + anillo interior violeta/cian que se expanden de `24 px` a `~340 px` desvaneciéndose suavemente a `alpha = 0.0` sin saturar la pantalla ni mover el layout. |
-| `0.34 -> 0.68` | **Botón principal / Fila de pestañas** (`_hero_play_button` o `_tabs_row`) | `modulate:a` `0.0 -> 1.0` y `scale` `0.94 -> 1.0` (`TRANS_CUBIC`, `EASE_OUT`). |
-| `0.52 -> 0.95` | **Elementos secundarios / Listado inferior** (`_hero_subtitle_label` o `_content_sheet_panel`) | `modulate:a` `0.0 -> 1.0` (`TRANS_CUBIC`, `EASE_OUT`). |
-| `0.95` | **Finalización y limpieza** (`_finish_startup_intro()`) | `_is_playing_startup_intro = false`, garantiza `modulate = Color(1, 1, 1, 1)` y `scale = Vector2.ONE` en todos los nodos revelados, reaplica layout base exacto y libera (`queue_free()`) la capa temporal `_intro_overlay`. |
+| `0.00 -> 0.40` | **Velo oscuro base** (`_intro_veil_rect`) | `modulate:a` de `1.0` a `0.0` (`TRANS_SINE`, `EASE_OUT`), independiente de audio/disco. |
+| `0.18 -> 0.78` | **Título / Logotipo** (`_hero_title_label` en portada o `_browser_header_label` en navegador) | `modulate:a` `0.0 -> 1.0`, `scale` `0.94 -> 1.0` y ligera elevación vertical (`+22 px -> 0 px`) con `TRANS_CUBIC`, `EASE_OUT`. |
+| `0.28 -> 1.00` (`0.72 s`) | **Onda circular neón / "boom"** (`_intro_wave_fx`) | Dibujada por código (`_draw()` / `queue_redraw()`) centrada en el título/logotipo: anillo exterior cian con halo suave + anillo interior violeta/cian que se expanden de `24 px` a `~340 px` desvaneciéndose suavemente a `alpha = 0.0` sin saturar la pantalla ni mover el layout. |
+| `0.54 -> 1.08` | **Botón principal / Fila de pestañas** (`_hero_play_button` o `_tabs_row`) | `modulate:a` `0.0 -> 1.0` y `scale` `0.94 -> 1.0` (`TRANS_CUBIC`, `EASE_OUT`). |
+| `0.82 -> 1.50` | **Elementos secundarios / Listado inferior** (`_hero_subtitle_label` o `_content_sheet_panel`) | `modulate:a` `0.0 -> 1.0` (`TRANS_CUBIC`, `EASE_OUT`). |
+| `1.50` | **Finalización y limpieza** (`_finish_startup_intro()`) | `_is_playing_startup_intro = false`, garantiza `modulate = Color(1, 1, 1, 1)` y `scale = Vector2.ONE` en todos los nodos revelados, reaplica layout base exacto y libera (`queue_free()`) la capa temporal `_intro_overlay`. |
 
 ### 4.3. Bloqueo de Interacción y Convivencia con `_process()`
 - Mientras `_is_playing_startup_intro == true`:

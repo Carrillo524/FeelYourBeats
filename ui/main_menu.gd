@@ -29,9 +29,9 @@ const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
 const STARTUP_INTRO_Z_INDEX: int = 95
-const STARTUP_INTRO_VEIL_SEC: float = 0.25
-const STARTUP_INTRO_WAVE_SEC: float = 0.45
-const STARTUP_INTRO_TOTAL_SEC: float = 0.95
+const STARTUP_INTRO_VEIL_SEC: float = 0.40
+const STARTUP_INTRO_WAVE_SEC: float = 0.72
+const STARTUP_INTRO_TOTAL_SEC: float = 1.50
 const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
 const LOADING_OVERLAY_Z_INDEX: int = 90
 const BGM_FADEOUT_DURATION_SEC: float = 0.35
@@ -1187,69 +1187,88 @@ func _start_startup_intro() -> void:
 	if secondary_node != null:
 		secondary_node.modulate = Color(1.0, 1.0, 1.0, 0.0)
 
+	call_deferred(&"_launch_startup_intro_tween", title_node, title_base_y, primary_node, secondary_node)
+
+
+func _launch_startup_intro_tween(
+	p_title_node: Control,
+	p_title_base_y: float,
+	p_primary_node: Control,
+	p_secondary_node: Control
+) -> void:
+	if not _is_playing_startup_intro or not is_inside_tree():
+		return
+
+	var tree: SceneTree = get_tree()
+	if tree != null:
+		await tree.process_frame
+	if not _is_playing_startup_intro or not is_inside_tree():
+		return
+
 	_intro_tween = create_tween()
 	_intro_tween.set_parallel(true)
 
-	# 1. Rapid dark veil fade-in (0.00s -> 0.25s)
-	_intro_tween.tween_property(
-		_intro_veil_rect,
-		"modulate:a",
-		0.0,
-		STARTUP_INTRO_VEIL_SEC
-	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
-	# 2. Title / logo progressive reveal with subtle scale & lift (0.12s -> 0.50s)
-	if title_node != null:
+	# 1. Dark veil fade-in (0.00s -> 0.40s)
+	if _intro_veil_rect != null:
 		_intro_tween.tween_property(
-			title_node,
+			_intro_veil_rect,
+			"modulate:a",
+			0.0,
+			STARTUP_INTRO_VEIL_SEC
+		).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# 2. Title / logo progressive reveal with subtle scale & lift (0.18s -> 0.78s)
+	if p_title_node != null:
+		_intro_tween.tween_property(
+			p_title_node,
 			"modulate:a",
 			1.0,
-			0.38
-		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			0.60
+		).set_delay(0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		_intro_tween.tween_property(
-			title_node,
+			p_title_node,
 			"scale",
 			Vector2.ONE,
-			0.38
-		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			0.60
+		).set_delay(0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		_intro_tween.tween_property(
-			title_node,
+			p_title_node,
 			"position:y",
-			title_base_y,
-			0.38
-		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			p_title_base_y,
+			0.60
+		).set_delay(0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-	# 3. Subtle expanding circular neon "boom" wave centered on title (0.18s -> 0.63s)
+	# 3. Subtle expanding circular neon "boom" wave centered on title (0.28s -> 1.00s)
 	_intro_tween.tween_method(
 		_set_intro_wave_progress,
 		0.0,
 		1.0,
 		STARTUP_INTRO_WAVE_SEC
-	).set_delay(0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	).set_delay(0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
-	# 4. Primary action / tabs row reveal (0.34s -> 0.68s)
-	if primary_node != null:
+	# 4. Primary action / tabs row reveal (0.54s -> 1.08s)
+	if p_primary_node != null:
 		_intro_tween.tween_property(
-			primary_node,
+			p_primary_node,
 			"modulate:a",
 			1.0,
-			0.34
-		).set_delay(0.34).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			0.54
+		).set_delay(0.54).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		_intro_tween.tween_property(
-			primary_node,
+			p_primary_node,
 			"scale",
 			Vector2.ONE,
-			0.34
-		).set_delay(0.34).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			0.54
+		).set_delay(0.54).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-	# 5. Secondary elements / content sheet reveal (0.52s -> 0.95s)
-	if secondary_node != null:
+	# 5. Secondary elements / content sheet reveal (0.82s -> 1.50s)
+	if p_secondary_node != null:
 		_intro_tween.tween_property(
-			secondary_node,
+			p_secondary_node,
 			"modulate:a",
 			1.0,
-			STARTUP_INTRO_TOTAL_SEC - 0.52
-		).set_delay(0.52).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			STARTUP_INTRO_TOTAL_SEC - 0.82
+		).set_delay(0.82).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 	_intro_tween.chain().tween_callback(_finish_startup_intro)
 
