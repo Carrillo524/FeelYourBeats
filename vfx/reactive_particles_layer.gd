@@ -688,7 +688,7 @@ func _spawn_mist(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:
 	var depth: float = _rng.randf()
 	var width_px: float = lerpf(STREAK_MIN_WIDTH_PX, STREAK_MAX_WIDTH_PX, depth)
 	var base_len_px: float = lerpf(STREAK_MIN_LENGTH_PX, STREAK_MAX_LENGTH_PX, clampf((depth * 0.72) + _rng.randf_range(0.0, 0.28), 0.0, 1.0))
-	var rise_speed: float = lerpf(72.0, 215.0, depth) * _rng.randf_range(0.88, 1.14)
+	var rise_speed: float = lerpf(30.0, 92.0, depth) * _rng.randf_range(0.88, 1.14)
 
 	var start_x: float = _rng.randf_range(12.0, maxf(13.0, p_bounds.x - 12.0))
 	var start_y: float = (
@@ -879,7 +879,7 @@ func _spawn_shooting_star(p_index: int, p_bounds: Vector2, p_initial_fill: bool,
 	var angle_deg: float = _rng.randf_range(SHOOTING_STAR_MIN_ANGLE_DEG, SHOOTING_STAR_MAX_ANGLE_DEG)
 	var angle_rad: float = deg_to_rad(angle_deg)
 	var dir: Vector2 = Vector2(cos(angle_rad), sin(angle_rad))
-	var base_speed: float = _rng.randf_range(500.0, 820.0) * (1.0 + (p_beat_strength * 0.35))
+	var base_speed: float = _rng.randf_range(210.0, 350.0) * (1.0 + (p_beat_strength * 0.35))
 	var tail_len: float = _rng.randf_range(125.0, 235.0) * (1.0 + (p_beat_strength * 0.25))
 	var width_px: float = _rng.randf_range(1.6, 2.6)
 

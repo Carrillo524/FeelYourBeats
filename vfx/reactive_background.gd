@@ -284,15 +284,39 @@ func get_aurora_curtain_count() -> int:
 
 
 func get_aurora_brightness_multiplier() -> float:
-	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var drive: float = clampf(((_aurora_beat_boost * 0.75) + (_aurora_drop_boost * 0.50) + (_smoothed_bass * 0.25)) * react_mult, 0.0, 1.55)
-	return 1.0 + (drive * 0.58)
+	var drive: float = _compute_aurora_musical_drive()
+	return 1.0 + (drive * 0.92)
+
+
+func get_aurora_blur_scale() -> float:
+	var drive: float = _compute_aurora_musical_drive()
+	return 1.0 + (drive * 0.42)
+
+
+func get_aurora_peak_alpha() -> float:
+	var bright_mult: float = get_aurora_brightness_multiplier()
+	return clampf(0.135 * bright_mult, 0.0, 0.36)
 
 
 func get_aurora_undulation_multiplier() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var drive: float = clampf(((_aurora_beat_boost * 0.75) + (_aurora_drop_boost * 0.50) + (_smoothed_mid * 0.25)) * react_mult, 0.0, 1.55)
-	return 1.0 + (drive * 0.48)
+	var tier_drop: float = 0.65 if _current_tier >= 3 else (0.42 if _current_tier >= 2 else 0.0)
+	var drive: float = clampf(
+		((_aurora_beat_boost * 0.90) + maxf(_aurora_drop_boost * 0.72, tier_drop) + (_smoothed_mid * 0.42) + (_smoothed_bass * 0.28)) * react_mult,
+		0.0,
+		2.00
+	)
+	return 1.0 + (drive * 0.72)
+
+
+func _compute_aurora_musical_drive() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var tier_drop: float = 0.72 if _current_tier >= 3 else (0.48 if _current_tier >= 2 else 0.0)
+	return clampf(
+		((_aurora_beat_boost * 0.95) + maxf(_aurora_drop_boost * 0.80, tier_drop) + (_smoothed_bass * 0.52) + (_smoothed_high * 0.18)) * react_mult,
+		0.0,
+		2.15
+	)
 
 
 func get_aurora_primary_color() -> Color:
@@ -533,6 +557,9 @@ func _on_intensity_changed(p_block: IntensityBlock) -> void:
 		_trigger_edge_beat_impulse(0.95)
 		trigger_wave_pulse(0.95, true)
 		bass_kick_pulsed.emit(0.95)
+	elif is_aurora_style_active() and _current_tier >= 2:
+		_aurora_drop_boost = maxf(_aurora_drop_boost, 0.82 if _current_tier >= 3 else 0.62)
+		queue_redraw()
 	_sync_shader_parameters()
 
 
@@ -571,6 +598,12 @@ func _on_spectrum_updated(
 		var drop_strength: float = clampf((clamped_bass * 0.55) + (clamped_total * 0.45), 0.75, 1.0)
 		_trigger_edge_drop_impulse(drop_strength)
 		trigger_wave_pulse(drop_strength, true)
+	elif is_aurora_style_active() and (bass_jump >= 0.075 or clamped_bass >= 0.36):
+		var aurora_swell: float = clampf((clamped_bass * 0.78) + (maxf(0.0, bass_jump) * 1.15), 0.22, 0.92)
+		_aurora_beat_boost = maxf(_aurora_beat_boost, aurora_swell)
+		if clamped_bass >= 0.64 and clamped_total >= 0.62:
+			_aurora_drop_boost = maxf(_aurora_drop_boost, clampf(clamped_total, 0.55, 1.0))
+		queue_redraw()
 
 	_sync_shader_parameters()
 
@@ -863,7 +896,9 @@ func _draw_aurora_backdrop() -> void:
 	_draw_vertical_dark_gradient(w, h, AURORA_BASE_TOP_COLOR, AURORA_BASE_BOTTOM_COLOR)
 
 	var bright_mult: float = get_aurora_brightness_multiplier()
+	var blur_scale: float = get_aurora_blur_scale()
 	var undul_mult: float = get_aurora_undulation_multiplier()
+	var glow_flash_mix: float = clampf((bright_mult - 1.0) * 0.18, 0.0, 0.32)
 
 	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.16, 0.42, 0.66, 0.86])
 	var slants: PackedFloat32Array = PackedFloat32Array([0.14, -0.10, 0.12, -0.13])
@@ -871,21 +906,24 @@ func _draw_aurora_backdrop() -> void:
 	var y_starts: PackedFloat32Array = PackedFloat32Array([0.04, 0.08, 0.05, 0.10])
 	var y_ends: PackedFloat32Array = PackedFloat32Array([0.74, 0.82, 0.78, 0.72])
 	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 1.55, 3.10, 4.65])
+	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.05 * blur_scale, 1.38 * blur_scale, 0.68])
+	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.28, 0.56, 0.95])
 
 	for c_idx: int in range(AURORA_CURTAIN_COUNT):
 		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15))
 		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15) + 1.65)
-		var base_alpha: float = clampf((0.11 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, 0.24)
+		var base_alpha: float = clampf((0.11 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, 0.36)
 		var y_top_px: float = h * y_starts[c_idx]
 		var y_bot_px: float = h * y_ends[c_idx]
 		var span_y: float = maxf(1.0, y_bot_px - y_top_px)
 		var base_hw: float = w * half_widths[c_idx]
 		var sway_amp: float = w * 0.065 * undul_mult
 
-		# Two soft passes per curtain (wide outer veil + inner luminous core) for diffuse blur
-		for pass_idx: int in range(2):
-			var width_scale: float = 1.48 if pass_idx == 0 else 0.72
-			var pass_alpha_scale: float = 0.52 if pass_idx == 0 else 0.92
+		# Three soft concentric curtain passes (wide blur halo + mid veil + luminous silk core)
+		for pass_idx: int in range(3):
+			var width_scale: float = pass_widths[pass_idx]
+			var pass_alpha_scale: float = pass_alphas[pass_idx]
+			var core_flash: float = glow_flash_mix if pass_idx == 2 else (glow_flash_mix * 0.45)
 			for s_idx: int in range(AURORA_RIBBON_SEGMENTS):
 				var t0: float = float(s_idx) / float(AURORA_RIBBON_SEGMENTS)
 				var t1: float = float(s_idx + 1) / float(AURORA_RIBBON_SEGMENTS)
@@ -905,8 +943,8 @@ func _draw_aurora_backdrop() -> void:
 				var env0: float = pow(sin(clampf(t0, 0.0, 1.0) * PI), 1.35)
 				var env1: float = pow(sin(clampf(t1, 0.0, 1.0) * PI), 1.35)
 
-				var c0_rgb: Color = col_top.lerp(col_bot, t0)
-				var c1_rgb: Color = col_top.lerp(col_bot, t1)
+				var c0_rgb: Color = col_top.lerp(col_bot, t0).lerp(Color(0.92, 0.98, 1.0, 1.0), core_flash)
+				var c1_rgb: Color = col_top.lerp(col_bot, t1).lerp(Color(0.92, 0.98, 1.0, 1.0), core_flash)
 				var c0: Color = Color(c0_rgb.r, c0_rgb.g, c0_rgb.b, base_alpha * pass_alpha_scale * env0)
 				var c1: Color = Color(c1_rgb.r, c1_rgb.g, c1_rgb.b, base_alpha * pass_alpha_scale * env1)
 
