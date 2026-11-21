@@ -84,6 +84,10 @@ Incluye exclusivamente:
   - **`Destellos`:** ciclo de parpadeo/deriva hasta `~2.4x` + expansión del halo circular blur (`4.2x -> 11.2x`).
   - **`Estrellas Fugaces`:** cruce diagonal hasta `~2.8x`, **alargamiento de estela `2.2x–2.6x`**, halo/blur reforzado en cabeza y trazo, y reducción de espera entre apariciones.
 
+### 7.3c Destello Difuminado de Acierto de Nota (`HIT_EFFECT_CLASSIC = "classic"`, base para `v1.1.0`)
+- En los fondos no-shader (`Túnel` y `Aurora`), `ReactiveBackground` precrea una única vez en `_init()` dos `GradientTexture2D` procedurales (`_hit_beam_texture` horizontal en campana `0.0 -> 0.28 -> 1.0 -> 0.28 -> 0.0` y `_hit_radial_texture` radial suave) para renderizar un haz vertical continuo y difuminado sin bordes duros más un halo radial sobre la línea de juicio, replicando fielmente el resplandor de `vfx/reactive_backdrop.gdshader`.
+- El renderizado se encapsula bajo la constante `HIT_EFFECT_CLASSIC = "classic"` como estilo base predeterminado del futuro selector de **Efectos de Acierto de Nota** planificado rumbo a la **`v1.1.0`** (sin añadir controles nuevos en `AJUSTES` en esta entrega).
+
 ### 7.2 Fondo `Aurora` Boreal (`style == "aurora"`)
 - **Base:** `material = null` + cielo nocturno profundo (`Color(0.024, 0.036, 0.092)` → `Color(0.052, 0.024, 0.112)`).
 - **4 cortinas amplias verticales/diagonales (`16` bandas por cortina):** mallas de quads translúcidos con opacidad nula en bordes superior e inferior y doble capa de ancho (cortina difusa amplia + núcleo luminoso suave), evitando bordes duros y manteniendo opacidad contenida (`<= 0.24` por cortina) para máxima legibilidad.

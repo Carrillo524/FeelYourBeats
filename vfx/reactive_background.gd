@@ -10,6 +10,7 @@ signal screen_shake_updated(p_offset: Vector2)
 signal bass_kick_pulsed(p_strength: float)
 
 const SHADER_PATH: String = "res://vfx/reactive_backdrop.gdshader"
+const HIT_EFFECT_CLASSIC: String = "classic"
 const BEAT_DECAY_PER_SEC: float = 4.5
 const LANE_FLASH_DECAY_PER_SEC: float = 5.5
 const ENERGY_LERP_SPEED: float = 6.0
@@ -116,8 +117,17 @@ var _aurora_color_phase: float = 0.0
 var _aurora_beat_boost: float = 0.0
 var _aurora_drop_boost: float = 0.0
 var _aurora_pulse_count: int = 0
+var _hit_effect_style: String = HIT_EFFECT_CLASSIC
+var _hit_beam_texture: GradientTexture2D = null
+var _hit_radial_texture: GradientTexture2D = null
 var _quad_pts_buf: PackedVector2Array = PackedVector2Array()
 var _quad_cols_buf: PackedColorArray = PackedColorArray()
+var _quad_uvs_buf: PackedVector2Array = PackedVector2Array([
+	Vector2(0.0, 0.0),
+	Vector2(1.0, 0.0),
+	Vector2(1.0, 1.0),
+	Vector2(0.0, 1.0),
+])
 
 
 func _init() -> void:
@@ -127,6 +137,8 @@ func _init() -> void:
 	_quad_cols_buf.resize(4)
 	_tunnel_frame_pts.resize(9)
 	_init_tunnel_depths()
+	_hit_beam_texture = _create_hit_beam_texture()
+	_hit_radial_texture = _create_hit_radial_texture()
 
 
 func _ready() -> void:
@@ -293,6 +305,18 @@ func get_global_hit_flash_energy() -> float:
 
 func is_custom_hit_flash_rendering() -> bool:
 	return (is_waves_style_active() or is_aurora_style_active()) and get_global_hit_flash_energy() > 0.004
+
+
+func get_hit_effect_style() -> String:
+	return _hit_effect_style
+
+
+func get_hit_beam_texture() -> GradientTexture2D:
+	return _hit_beam_texture
+
+
+func get_hit_radial_texture() -> GradientTexture2D:
+	return _hit_radial_texture
 
 
 func get_tunnel_scales_snapshot() -> PackedFloat32Array:
@@ -1049,18 +1073,26 @@ func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:
 	if get_global_hit_flash_energy() <= 0.004:
 		return
 
+	match _hit_effect_style:
+		HIT_EFFECT_CLASSIC, _:
+			_draw_classic_diffused_hit_flashes(p_bounds)
+
+
+func _draw_classic_diffused_hit_flashes(p_bounds: Vector2) -> void:
+	if _hit_beam_texture == null:
+		return
+
 	var w: float = p_bounds.x
 	var h: float = p_bounds.y
 	var lane_w: float = w * 0.25
-	var top_y: float = h * 0.10
+	var top_y: float = h * 0.08
+	var hit_zone_y: float = h * 0.84
 	var energies: PackedFloat32Array = PackedFloat32Array([
 		_lane_flashes.x,
 		_lane_flashes.y,
 		_lane_flashes.z,
 		_lane_flashes.w,
 	])
-	var beam_widths: PackedFloat32Array = PackedFloat32Array([lane_w * 0.46, lane_w * 0.26, lane_w * 0.11])
-	var beam_alphas: PackedFloat32Array = PackedFloat32Array([0.18, 0.28, 0.42])
 
 	for lane_idx: int in range(4):
 		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
@@ -1068,23 +1100,86 @@ func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:
 			continue
 
 		var perfect_boost: float = smoothstep(0.75, 1.0, e)
-		var col: Color = Color(0.20, 0.85, 1.0, 1.0).lerp(Color(0.58, 1.0, 0.96, 1.0), perfect_boost * 0.68)
+		var accent_col: Color = Color(0.20, 0.85, 1.0, 1.0)
+		var beam_col: Color = accent_col.lerp(Color(0.55, 1.0, 0.96, 1.0), perfect_boost * 0.65)
 		var cx: float = (float(lane_idx) + 0.5) * lane_w
 
-		for pass_idx: int in range(3):
-			var hw: float = beam_widths[pass_idx]
-			var a_bot: float = clampf(e * beam_alphas[pass_idx] * (1.0 + (perfect_boost * 0.25)), 0.0, 0.44)
-			var c_top: Color = Color(col.r, col.g, col.b, 0.0)
-			var c_bot: Color = Color(col.r, col.g, col.b, a_bot)
-			_quad_pts_buf[0] = Vector2(cx - hw, top_y)
-			_quad_pts_buf[1] = Vector2(cx + hw, top_y)
-			_quad_pts_buf[2] = Vector2(cx + hw, h)
-			_quad_pts_buf[3] = Vector2(cx - hw, h)
-			_quad_cols_buf[0] = c_top
-			_quad_cols_buf[1] = c_top
-			_quad_cols_buf[2] = c_bot
-			_quad_cols_buf[3] = c_bot
-			draw_polygon(_quad_pts_buf, _quad_cols_buf)
+		# 1. Wide continuous Gaussian-like diffused vertical glow (wider than lane, zero hard edges)
+		var wide_hw: float = lane_w * 0.98
+		var wide_alpha: float = clampf(e * 0.46, 0.0, 0.48)
+		_quad_pts_buf[0] = Vector2(cx - wide_hw, top_y)
+		_quad_pts_buf[1] = Vector2(cx + wide_hw, top_y)
+		_quad_pts_buf[2] = Vector2(cx + wide_hw, h)
+		_quad_pts_buf[3] = Vector2(cx - wide_hw, h)
+		_quad_cols_buf[0] = Color(beam_col.r, beam_col.g, beam_col.b, 0.0)
+		_quad_cols_buf[1] = Color(beam_col.r, beam_col.g, beam_col.b, 0.0)
+		_quad_cols_buf[2] = Color(beam_col.r, beam_col.g, beam_col.b, wide_alpha)
+		_quad_cols_buf[3] = Color(beam_col.r, beam_col.g, beam_col.b, wide_alpha)
+		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
+
+		# 2. Inner luminous soft core on stronger / PERFECT hits matching reactive_backdrop.gdshader
+		if perfect_boost > 0.01:
+			var core_hw: float = lane_w * 0.46
+			var core_alpha: float = clampf(perfect_boost * 0.38, 0.0, 0.42)
+			_quad_pts_buf[0] = Vector2(cx - core_hw, top_y + (h * 0.14))
+			_quad_pts_buf[1] = Vector2(cx + core_hw, top_y + (h * 0.14))
+			_quad_pts_buf[2] = Vector2(cx + core_hw, h)
+			_quad_pts_buf[3] = Vector2(cx - core_hw, h)
+			_quad_cols_buf[0] = Color(beam_col.r, beam_col.g, beam_col.b, 0.0)
+			_quad_cols_buf[1] = Color(beam_col.r, beam_col.g, beam_col.b, 0.0)
+			_quad_cols_buf[2] = Color(beam_col.r, beam_col.g, beam_col.b, core_alpha)
+			_quad_cols_buf[3] = Color(beam_col.r, beam_col.g, beam_col.b, core_alpha)
+			draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
+
+		# 3. Soft radial halo glow centered on the hit line
+		if _hit_radial_texture != null:
+			var halo_rx: float = lane_w * (0.78 + (perfect_boost * 0.24))
+			var halo_ry: float = halo_rx * 0.72
+			var halo_alpha: float = clampf((e * 0.34) + (perfect_boost * 0.20), 0.0, 0.52)
+			var halo_rect: Rect2 = Rect2(cx - halo_rx, hit_zone_y - halo_ry, halo_rx * 2.0, halo_ry * 2.0)
+			var halo_tint: Color = Color(beam_col.r, beam_col.g, beam_col.b, halo_alpha)
+			draw_texture_rect(_hit_radial_texture, halo_rect, false, halo_tint)
+
+
+func _create_hit_beam_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.50, 0.75, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.28),
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.28),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_LINEAR
+	tex.fill_from = Vector2(0.0, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 128
+	tex.height = 8
+	tex.use_hdr = false
+	return tex
+
+
+func _create_hit_radial_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.30, 0.65, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.58),
+		Color(1.0, 1.0, 1.0, 0.16),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
 
 
 func _resolve_draw_bounds() -> Vector2:
