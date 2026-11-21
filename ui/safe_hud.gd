@@ -62,6 +62,21 @@ const COLOR_JUDGMENT_GREAT: Color = Color(0.35, 1.0, 0.52, 1.0)
 const COLOR_JUDGMENT_GOOD: Color = Color(0.42, 0.78, 1.0, 1.0)
 const COLOR_JUDGMENT_MISS: Color = Color(1.0, 0.34, 0.44, 1.0)
 
+const SONG_PROGRESS_CONTROL_HEIGHT_PX: float = 44.0
+const SONG_PROGRESS_SIDE_INSET_PX: float = 24.0
+const SONG_PROGRESS_BOTTOM_MARGIN_PX: float = 36.0
+const SONG_PROGRESS_RAIL_INSET_PX: float = 14.0
+const SONG_PROGRESS_RAIL_THICKNESS_PX: float = 3.0
+const SONG_PROGRESS_SQUARE_HALF_SIZE_PX: float = 7.0
+const SONG_PROGRESS_GLOW_HALF_SIZE_PX: float = 10.5
+const SONG_PROGRESS_ROTATION_SPEED_RAD: float = 2.4
+const COLOR_PROGRESS_TRACK: Color = Color(0.55, 0.78, 0.96, 0.22)
+const COLOR_PROGRESS_FILL_GLOW: Color = Color(0.22, 0.88, 1.0, 0.26)
+const COLOR_PROGRESS_FILL_CORE: Color = Color(0.45, 0.96, 1.0, 0.88)
+const COLOR_PROGRESS_SQUARE_GLOW: Color = Color(0.28, 0.94, 1.0, 0.34)
+const COLOR_PROGRESS_SQUARE_CORE: Color = Color(0.84, 0.99, 1.0, 0.98)
+const COLOR_PROGRESS_SQUARE_BORDER: Color = Color(0.32, 0.96, 1.0, 1.0)
+
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var hit_judge: HitJudge = null
 @export var dsp_clock: DSPClock = null
@@ -131,7 +146,18 @@ var _banner_alpha: float = 1.0
 var _target_danger_ratio: float = 0.0
 var _displayed_danger_ratio: float = 0.0
 var _danger_pulse_phase: float = 0.0
+var _song_progress_bar: Control = null
+var _song_total_duration_sec: float = 0.0
+var _song_progress: float = 0.0
+var _song_progress_completed: bool = false
+var _progress_square_angle_rad: float = 0.0
 var _font_registry: UiFontRegistry = null
+
+
+static func compute_song_progress(p_current_sec: float, p_total_sec: float) -> float:
+	if p_total_sec <= 0.0:
+		return 0.0
+	return clampf(p_current_sec / maxf(p_total_sec, 0.001), 0.0, 1.0)
 
 
 static func compute_letter_rank(p_accuracy_percent: float) -> String:
@@ -210,6 +236,7 @@ func _process(p_delta: float) -> void:
 
 	_apply_banner_visual_transform()
 	_update_danger_bar_visual(dt)
+	_update_song_progress_visual(dt)
 
 
 func _exit_tree() -> void:
@@ -236,6 +263,12 @@ func connect_dependencies() -> void:
 	if reactive_background != null:
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
 			reactive_background.bass_kick_pulsed.connect(_on_bass_kick_pulsed)
+
+	if dsp_clock != null:
+		if not dsp_clock.dsp_time_updated.is_connected(_on_dsp_time_updated):
+			dsp_clock.dsp_time_updated.connect(_on_dsp_time_updated)
+		if not dsp_clock.playback_finished.is_connected(_on_dsp_playback_finished):
+			dsp_clock.playback_finished.connect(_on_dsp_playback_finished)
 
 
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
@@ -271,6 +304,17 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		(safe_h - countdown_size.y) * 0.42
 	)
 	_countdown_label.pivot_offset = countdown_size * 0.5
+
+	if _song_progress_bar != null:
+		var bar_w: float = maxf(160.0, safe_w - (SONG_PROGRESS_SIDE_INSET_PX * 2.0))
+		var bar_y: float = clampf(
+			safe_h - SONG_PROGRESS_BOTTOM_MARGIN_PX - SONG_PROGRESS_CONTROL_HEIGHT_PX,
+			0.0,
+			maxf(0.0, safe_h - SONG_PROGRESS_CONTROL_HEIGHT_PX)
+		)
+		_song_progress_bar.position = Vector2(SONG_PROGRESS_SIDE_INSET_PX, bar_y)
+		_song_progress_bar.size = Vector2(bar_w, SONG_PROGRESS_CONTROL_HEIGHT_PX)
+		_song_progress_bar.queue_redraw()
 
 	_pause_overlay.position = Vector2.ZERO
 	_pause_overlay.size = p_hud_safe_rect.size
@@ -314,6 +358,11 @@ func reset_hud_display() -> void:
 	_target_danger_ratio = 0.0
 	_displayed_danger_ratio = 0.0
 	_danger_pulse_phase = 0.0
+	_song_progress = 0.0
+	_song_progress_completed = false
+	_progress_square_angle_rad = 0.0
+	if _song_progress_bar != null:
+		_song_progress_bar.queue_redraw()
 	if _pause_overlay != null:
 		_pause_overlay.visible = false
 	if _results_overlay != null:
@@ -535,6 +584,34 @@ func get_displayed_danger_ratio() -> float:
 	return _displayed_danger_ratio
 
 
+func set_song_duration_sec(p_duration_sec: float) -> void:
+	_song_total_duration_sec = maxf(0.0, p_duration_sec)
+	if dsp_clock != null:
+		_song_progress = compute_song_progress(dsp_clock.get_current_dsp_time(), _get_effective_song_duration_sec())
+	else:
+		_song_progress = 0.0
+	if _song_progress_bar != null:
+		_song_progress_bar.queue_redraw()
+
+
+func get_song_progress() -> float:
+	return _song_progress
+
+
+func get_song_progress_angle_rad() -> float:
+	return _progress_square_angle_rad
+
+
+func get_song_progress_bar_rect() -> Rect2:
+	if _song_progress_bar == null:
+		return Rect2()
+	return _song_progress_bar.get_global_rect()
+
+
+func get_song_progress_bar_control() -> Control:
+	return _song_progress_bar
+
+
 func get_top_bar_rects() -> Dictionary:
 	return {
 		"score": _score_label.get_global_rect() if _score_label != null else Rect2(),
@@ -737,6 +814,142 @@ func _on_bass_kick_pulsed(p_strength: float) -> void:
 	_apply_banner_visual_transform()
 
 
+func _get_effective_song_duration_sec() -> float:
+	if dsp_clock != null:
+		var clock_duration: float = dsp_clock.get_total_duration_sec()
+		if clock_duration > 0.0:
+			return clock_duration
+	return _song_total_duration_sec
+
+
+func _is_song_progress_actively_playing() -> bool:
+	return (
+		dsp_clock != null
+		and dsp_clock.is_playing()
+		and not is_pause_menu_open()
+		and not is_resume_countdown_active()
+		and not is_results_overlay_open()
+		and not _song_progress_completed
+	)
+
+
+func _on_dsp_time_updated(p_current_time_sec: float) -> void:
+	if not _is_song_progress_actively_playing():
+		return
+	var next_progress: float = compute_song_progress(p_current_time_sec, _get_effective_song_duration_sec())
+	if absf(next_progress - _song_progress) > 0.0001:
+		_song_progress = next_progress
+		if _song_progress_bar != null:
+			_song_progress_bar.queue_redraw()
+
+
+func _on_dsp_playback_finished() -> void:
+	_song_progress_completed = true
+	_song_progress = 1.0
+	if _song_progress_bar != null:
+		_song_progress_bar.queue_redraw()
+
+
+func _update_song_progress_visual(p_delta: float) -> void:
+	if not _is_song_progress_actively_playing():
+		return
+	var current_sec: float = dsp_clock.get_current_dsp_time()
+	_song_progress = compute_song_progress(current_sec, _get_effective_song_duration_sec())
+	_progress_square_angle_rad = fmod(
+		_progress_square_angle_rad + (SONG_PROGRESS_ROTATION_SPEED_RAD * p_delta),
+		TAU
+	)
+	if _song_progress_bar != null:
+		_song_progress_bar.queue_redraw()
+
+
+func _draw_song_progress_bar() -> void:
+	if _song_progress_bar == null:
+		return
+	var bar_size: Vector2 = _song_progress_bar.size
+	if bar_size.x <= 4.0 or bar_size.y <= 4.0:
+		return
+
+	var rail_left: float = SONG_PROGRESS_RAIL_INSET_PX
+	var rail_right: float = maxf(rail_left + 1.0, bar_size.x - SONG_PROGRESS_RAIL_INSET_PX)
+	var center_y: float = bar_size.y * 0.5
+	var progress: float = clampf(_song_progress, 0.0, 1.0)
+	var marker_x: float = lerpf(rail_left, rail_right, progress)
+
+	# Subtle base track rail
+	_song_progress_bar.draw_line(
+		Vector2(rail_left, center_y),
+		Vector2(rail_right, center_y),
+		COLOR_PROGRESS_TRACK,
+		SONG_PROGRESS_RAIL_THICKNESS_PX,
+		true
+	)
+
+	# Elapsed neon cyan progress fill
+	if marker_x > rail_left + 0.5:
+		_song_progress_bar.draw_line(
+			Vector2(rail_left, center_y),
+			Vector2(marker_x, center_y),
+			COLOR_PROGRESS_FILL_GLOW,
+			SONG_PROGRESS_RAIL_THICKNESS_PX * 2.6,
+			true
+		)
+		_song_progress_bar.draw_line(
+			Vector2(rail_left, center_y),
+			Vector2(marker_x, center_y),
+			COLOR_PROGRESS_FILL_CORE,
+			SONG_PROGRESS_RAIL_THICKNESS_PX,
+			true
+		)
+
+	# Rotating neon square position indicator
+	var marker_center: Vector2 = Vector2(marker_x, center_y)
+	var glow_pts: PackedVector2Array = _build_rotated_square_points(
+		marker_center,
+		SONG_PROGRESS_GLOW_HALF_SIZE_PX,
+		_progress_square_angle_rad
+	)
+	_song_progress_bar.draw_colored_polygon(glow_pts, COLOR_PROGRESS_SQUARE_GLOW)
+
+	var core_pts: PackedVector2Array = _build_rotated_square_points(
+		marker_center,
+		SONG_PROGRESS_SQUARE_HALF_SIZE_PX,
+		_progress_square_angle_rad
+	)
+	_song_progress_bar.draw_colored_polygon(core_pts, COLOR_PROGRESS_SQUARE_CORE)
+
+	var border_pts: PackedVector2Array = PackedVector2Array([
+		core_pts[0],
+		core_pts[1],
+		core_pts[2],
+		core_pts[3],
+		core_pts[0],
+	])
+	_song_progress_bar.draw_polyline(border_pts, COLOR_PROGRESS_SQUARE_BORDER, 1.8, true)
+
+
+static func _build_rotated_square_points(
+	p_center: Vector2,
+	p_half_size: float,
+	p_angle_rad: float
+) -> PackedVector2Array:
+	var c: float = cos(p_angle_rad)
+	var s: float = sin(p_angle_rad)
+	var h: float = p_half_size
+	var corners: Array[Vector2] = [
+		Vector2(-h, -h),
+		Vector2(h, -h),
+		Vector2(h, h),
+		Vector2(-h, h),
+	]
+	var out: PackedVector2Array = PackedVector2Array()
+	out.resize(4)
+	for i: int in range(4):
+		var v: Vector2 = corners[i]
+		out[i] = p_center + Vector2((v.x * c) - (v.y * s), (v.x * s) + (v.y * c))
+	return out
+
+
 func _compute_combo_base_scale(p_combo: int) -> float:
 	if p_combo <= 0:
 		return COMBO_MIN_SCALE
@@ -911,6 +1124,12 @@ func _ensure_ui_nodes() -> void:
 	_countdown_label.add_theme_font_size_override("font_size", COUNTDOWN_FONT_SIZE)
 	_countdown_label.visible = false
 	_safe_container.add_child(_countdown_label)
+
+	_song_progress_bar = Control.new()
+	_song_progress_bar.name = "SongProgressBar"
+	_song_progress_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_song_progress_bar.draw.connect(_draw_song_progress_bar)
+	_safe_container.add_child(_song_progress_bar)
 
 	_pause_overlay = ColorRect.new()
 	_pause_overlay.name = "PauseOverlay"

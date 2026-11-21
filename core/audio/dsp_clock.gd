@@ -181,6 +181,14 @@ func is_playing() -> bool:
 	return _is_running and not _is_paused
 
 
+func is_paused() -> bool:
+	return _is_paused
+
+
+func get_total_duration_sec() -> float:
+	return _chart.duration_sec if _chart != null else 0.0
+
+
 func _process(p_delta: float) -> void:
 	if not _is_running or _is_paused or _chart == null:
 		return

@@ -244,6 +244,7 @@ func start_chart_session(p_chart: ChartData) -> bool:
 
 	if safe_hud != null:
 		safe_hud.reset_hud_display()
+		safe_hud.set_song_duration_sec(p_chart.duration_sec)
 
 	if screen_safe_adapter != null:
 		screen_safe_adapter.recalculate_layout()
