@@ -11,7 +11,9 @@ config_version=5
 [application]
 
 config/name="FeelYourBeats (FyB)"
-config/version="1.0.3"
+config/version="1.0.4"
+config/auto_accept_quit=false
+config/quit_on_go_back=false
 run/main_scene="res://ui/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="uid://b06gsyb3dk40g"

@@ -45,6 +45,7 @@ static func clear_pending_session() -> void:
 func _ready() -> void:
 	var tree: SceneTree = get_tree()
 	if tree != null:
+		tree.set_quit_on_go_back(false)
 		tree.set_auto_accept_quit(false)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
