@@ -269,10 +269,11 @@ func build_demo_chart(
 	var beat_sec: float = 60.0 / DEMO_BPM
 	var notes: Array[NoteData] = []
 	var allow_holds: bool = p_note_type_mode != AutoChartGenerator.NoteTypeMode.TAP_ONLY
+	var lane_pattern: PackedInt32Array = PackedInt32Array([0, 2, 1, 3])
 
 	for step_idx: int in range(28):
 		var note_time_sec: float = float(step_idx + 1) * beat_sec
-		var lane_idx: int = step_idx % 4
+		var lane_idx: int = lane_pattern[step_idx % 4]
 		var is_hold_step: bool = allow_holds and ((step_idx % 7) == 3)
 		var duration_sec: float = beat_sec * 1.5 if is_hold_step else 0.0
 		var strength: float = 1.0 if (step_idx % 4) == 0 else 0.75

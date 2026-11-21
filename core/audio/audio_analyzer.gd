@@ -15,6 +15,13 @@ const MIN_BPM: float = 72.0
 const MAX_BPM: float = 185.0
 const MIN_DB_THRESHOLD: float = 60.0
 const EPSILON: float = 0.00001
+const ONSET_LEAD_COMPENSATION_SEC: float = 0.002
+const PHASE_COARSE_STEP_SEC: float = 0.005
+const PHASE_FINE_STEP_SEC: float = 0.001
+const PHASE_KERNEL_SIGMA_SEC: float = 0.022
+const BPM_PERCEPTUAL_CENTER: float = 126.0
+const BPM_PERCEPTUAL_SIGMA: float = 42.0
+const RAYLEIGH_CHUNK_SEC: float = 20.0
 
 @export var analysis_bus_name: StringName = &"Master"
 @export var bass_min_hz: float = 20.0
@@ -823,10 +830,12 @@ static func _finalize_analysis_buffers(
 
 	_normalize_array_in_place(onset_frames)
 	var bpm_estimate: float = _estimate_bpm_from_onsets(onset_frames, p_hop_sec)
+	var beat_phase_sec: float = estimate_beat_phase_sec(onset_frames, p_hop_sec, bpm_estimate)
 
 	return {
 		"duration_sec": p_duration_sec,
 		"bpm_estimate": bpm_estimate,
+		"beat_phase_sec": beat_phase_sec,
 		"frame_hop_sec": p_hop_sec,
 		"rms_frames": p_rms_frames,
 		"bass_frames": p_bass_frames,
@@ -838,41 +847,294 @@ static func _finalize_analysis_buffers(
 
 static func _estimate_bpm_from_onsets(p_onset_frames: PackedFloat32Array, p_hop_sec: float) -> float:
 	var count: int = p_onset_frames.size()
-	var min_lag: int = maxi(1, int(round((60.0 / MAX_BPM) / p_hop_sec)))
-	var max_lag: int = maxi(min_lag + 1, int(round((60.0 / MIN_BPM) / p_hop_sec)))
+	var min_lag: int = maxi(1, int(floor((60.0 / MAX_BPM) / p_hop_sec)) - 1)
+	var max_lag: int = maxi(min_lag + 2, int(ceil((60.0 / MIN_BPM) / p_hop_sec)) + 1)
 	if count <= max_lag + 2:
 		return DEFAULT_BPM
 
-	var best_lag: int = int(round((60.0 / DEFAULT_BPM) / p_hop_sec))
-	var best_score: float = -1.0
+	# 3-tap smoothing prevents sharp onsets from falling between integer hop bins
+	var smooth_onsets: PackedFloat32Array = PackedFloat32Array()
+	smooth_onsets.resize(count)
+	smooth_onsets[0] = (p_onset_frames[0] * 0.75) + (p_onset_frames[1] * 0.25)
+	for s_idx: int in range(1, count - 1):
+		smooth_onsets[s_idx] = (
+			(p_onset_frames[s_idx - 1] * 0.25)
+			+ (p_onset_frames[s_idx] * 0.50)
+			+ (p_onset_frames[s_idx + 1] * 0.25)
+		)
+	smooth_onsets[count - 1] = (p_onset_frames[count - 2] * 0.25) + (p_onset_frames[count - 1] * 0.75)
 
-	for lag: int in range(min_lag, max_lag + 1):
+	var max_ac_lag: int = mini(count - 2, (max_lag * 3) + 2)
+	var ac_values: PackedFloat32Array = PackedFloat32Array()
+	ac_values.resize(max_ac_lag + 1)
+	for init_idx: int in range(max_ac_lag + 1):
+		ac_values[init_idx] = 0.0
+
+	for lag: int in range(min_lag, max_ac_lag + 1):
 		var limit: int = count - lag
 		if limit <= 0:
 			continue
-
 		var sum_corr: float = 0.0
 		for i: int in range(limit):
-			sum_corr += p_onset_frames[i] * p_onset_frames[i + lag]
-		var avg_corr: float = sum_corr / float(limit)
+			sum_corr += smooth_onsets[i] * smooth_onsets[i + lag]
+		ac_values[lag] = sum_corr / float(limit)
 
-		var double_lag: int = lag * 2
-		if double_lag < count:
-			var limit_2: int = count - double_lag
-			var sum_corr_2: float = 0.0
-			for j: int in range(limit_2):
-				sum_corr_2 += p_onset_frames[j] * p_onset_frames[j + double_lag]
-			avg_corr += 0.35 * (sum_corr_2 / float(limit_2))
+	var best_bpm: float = DEFAULT_BPM
+	var best_weighted_score: float = -1.0
+	var cand_bpm: float = MIN_BPM
+	while cand_bpm <= MAX_BPM + 0.001:
+		var lag_1: float = (60.0 / cand_bpm) / p_hop_sec
+		var lag_2: float = lag_1 * 2.0
+		var lag_3: float = lag_1 * 3.0
 
-		if avg_corr > best_score:
-			best_score = avg_corr
-			best_lag = lag
+		var corr_score: float = _sample_array_linear(ac_values, lag_1)
+		if lag_2 <= float(max_ac_lag):
+			corr_score += 0.40 * _sample_array_linear(ac_values, lag_2)
+		if lag_3 <= float(max_ac_lag):
+			corr_score += 0.20 * _sample_array_linear(ac_values, lag_3)
 
-	if best_score <= EPSILON:
+		var bpm_diff: float = (cand_bpm - BPM_PERCEPTUAL_CENTER) / BPM_PERCEPTUAL_SIGMA
+		var prior_weight: float = 0.86 + (0.14 * exp(-0.5 * bpm_diff * bpm_diff))
+		var weighted_score: float = corr_score * prior_weight
+
+		if weighted_score > best_weighted_score:
+			best_weighted_score = weighted_score
+			best_bpm = cand_bpm
+
+		cand_bpm += 0.5
+
+	if best_weighted_score <= EPSILON:
 		return DEFAULT_BPM
 
-	var raw_bpm: float = 60.0 / (float(best_lag) * p_hop_sec)
-	return clampf(round(raw_bpm), MIN_BPM, MAX_BPM)
+	var fine_bpm: float = _refine_bpm_with_peaks(p_onset_frames, p_hop_sec, best_bpm)
+	return clampf(round(fine_bpm * 10.0) * 0.1, MIN_BPM, MAX_BPM)
+
+
+static func _sample_array_linear(p_arr: PackedFloat32Array, p_index: float) -> float:
+	var count: int = p_arr.size()
+	if count == 0 or p_index < 0.0:
+		return 0.0
+	var idx_lo: int = int(floor(p_index))
+	if idx_lo >= count - 1:
+		return p_arr[count - 1]
+	var frac: float = p_index - float(idx_lo)
+	return lerpf(p_arr[idx_lo], p_arr[idx_lo + 1], frac)
+
+
+static func _refine_bpm_with_peaks(
+	p_onset_frames: PackedFloat32Array,
+	p_hop_sec: float,
+	p_anchor_bpm: float
+) -> float:
+	var peak_data: Dictionary = _extract_onset_peaks(p_onset_frames, p_hop_sec, 0.08)
+	var peak_times: PackedFloat32Array = peak_data["times"] as PackedFloat32Array
+	var peak_weights: PackedFloat32Array = peak_data["weights"] as PackedFloat32Array
+	var peak_count: int = peak_times.size()
+	if peak_count < 4:
+		return p_anchor_bpm
+
+	var best_bpm: float = p_anchor_bpm
+	var best_score: float = -1.0
+	var search_min: float = maxf(MIN_BPM, p_anchor_bpm - 3.0)
+	var search_max: float = minf(MAX_BPM, p_anchor_bpm + 3.0)
+
+	var coarse_bpm: float = search_min
+	while coarse_bpm <= search_max + 0.001:
+		var score: float = _evaluate_windowed_rayleigh(
+			peak_times,
+			peak_weights,
+			coarse_bpm,
+			p_anchor_bpm
+		)
+		if score > best_score:
+			best_score = score
+			best_bpm = coarse_bpm
+		coarse_bpm += 0.2
+
+	var fine_center: float = best_bpm
+	var fine_min: float = maxf(MIN_BPM, fine_center - 0.25)
+	var fine_max: float = minf(MAX_BPM, fine_center + 0.25)
+	var fine_bpm: float = fine_min
+	while fine_bpm <= fine_max + 0.001:
+		var fine_score: float = _evaluate_windowed_rayleigh(
+			peak_times,
+			peak_weights,
+			fine_bpm,
+			p_anchor_bpm
+		)
+		if fine_score > best_score:
+			best_score = fine_score
+			best_bpm = fine_bpm
+		fine_bpm += 0.05
+
+	return best_bpm
+
+
+static func _evaluate_windowed_rayleigh(
+	p_peak_times: PackedFloat32Array,
+	p_peak_weights: PackedFloat32Array,
+	p_candidate_bpm: float,
+	p_anchor_bpm: float
+) -> float:
+	var count: int = p_peak_times.size()
+	if count == 0 or p_candidate_bpm <= EPSILON:
+		return 0.0
+
+	var period_sec: float = 60.0 / p_candidate_bpm
+	var omega: float = TAU / period_sec
+	var total_magnitude: float = 0.0
+	var chunk_start_sec: float = p_peak_times[0]
+	var sum_c1: float = 0.0
+	var sum_s1: float = 0.0
+	var sum_c2: float = 0.0
+	var sum_s2: float = 0.0
+	var sum_c4: float = 0.0
+	var sum_s4: float = 0.0
+
+	for i: int in range(count):
+		var t_sec: float = p_peak_times[i]
+		if t_sec - chunk_start_sec >= RAYLEIGH_CHUNK_SEC:
+			total_magnitude += (
+				sqrt((sum_c1 * sum_c1) + (sum_s1 * sum_s1))
+				+ (0.85 * sqrt((sum_c2 * sum_c2) + (sum_s2 * sum_s2)))
+				+ (0.35 * sqrt((sum_c4 * sum_c4) + (sum_s4 * sum_s4)))
+			)
+			sum_c1 = 0.0
+			sum_s1 = 0.0
+			sum_c2 = 0.0
+			sum_s2 = 0.0
+			sum_c4 = 0.0
+			sum_s4 = 0.0
+			chunk_start_sec = t_sec
+
+		var w: float = p_peak_weights[i]
+		var a1: float = t_sec * omega
+		var a2: float = a1 * 2.0
+		var a4: float = a1 * 4.0
+		sum_c1 += w * cos(a1)
+		sum_s1 += w * sin(a1)
+		sum_c2 += w * cos(a2)
+		sum_s2 += w * sin(a2)
+		sum_c4 += w * cos(a4)
+		sum_s4 += w * sin(a4)
+
+	total_magnitude += (
+		sqrt((sum_c1 * sum_c1) + (sum_s1 * sum_s1))
+		+ (0.85 * sqrt((sum_c2 * sum_c2) + (sum_s2 * sum_s2)))
+		+ (0.35 * sqrt((sum_c4 * sum_c4) + (sum_s4 * sum_s4)))
+	)
+
+	var anchor_diff: float = (p_candidate_bpm - p_anchor_bpm) / 2.4
+	var anchor_bias: float = 1.0 + (0.03 * exp(-0.5 * anchor_diff * anchor_diff))
+	return total_magnitude * anchor_bias
+
+
+static func estimate_beat_phase_sec(
+	p_onset_frames: PackedFloat32Array,
+	p_hop_sec: float,
+	p_bpm: float
+) -> float:
+	if p_onset_frames.size() < 3 or p_hop_sec <= EPSILON or p_bpm <= EPSILON:
+		return 0.0
+
+	var safe_bpm: float = clampf(p_bpm, MIN_BPM, MAX_BPM)
+	var beat_sec: float = 60.0 / safe_bpm
+	var peak_data: Dictionary = _extract_onset_peaks(p_onset_frames, p_hop_sec, 0.08)
+	var peak_times: PackedFloat32Array = peak_data["times"] as PackedFloat32Array
+	var peak_weights: PackedFloat32Array = peak_data["weights"] as PackedFloat32Array
+	if peak_times.is_empty():
+		return 0.0
+
+	var best_phase: float = 0.0
+	var best_score: float = -1.0
+	var step_count: int = maxi(1, int(ceil(beat_sec / PHASE_COARSE_STEP_SEC)))
+
+	for s: int in range(step_count):
+		var cand_phase: float = float(s) * PHASE_COARSE_STEP_SEC
+		if cand_phase >= beat_sec:
+			break
+		var score: float = _evaluate_phase_alignment(peak_times, peak_weights, beat_sec, cand_phase)
+		if score > best_score:
+			best_score = score
+			best_phase = cand_phase
+
+	var fine_center: float = best_phase
+	for offset_idx: int in range(-5, 6):
+		var fine_phase: float = fposmod(
+			fine_center + (float(offset_idx) * PHASE_FINE_STEP_SEC),
+			beat_sec
+		)
+		var fine_score: float = _evaluate_phase_alignment(
+			peak_times,
+			peak_weights,
+			beat_sec,
+			fine_phase
+		)
+		if fine_score > best_score:
+			best_score = fine_score
+			best_phase = fine_phase
+
+	return fposmod(best_phase, beat_sec)
+
+
+static func _extract_onset_peaks(
+	p_onset_frames: PackedFloat32Array,
+	p_hop_sec: float,
+	p_min_height: float
+) -> Dictionary:
+	var times: PackedFloat32Array = PackedFloat32Array()
+	var weights: PackedFloat32Array = PackedFloat32Array()
+	var count: int = p_onset_frames.size()
+	if count < 3:
+		return {"times": times, "weights": weights}
+
+	for i: int in range(1, count - 1):
+		var curr: float = p_onset_frames[i]
+		if curr < p_min_height:
+			continue
+		var prev_v: float = p_onset_frames[i - 1]
+		var next_v: float = p_onset_frames[i + 1]
+		if curr < prev_v or curr < next_v:
+			continue
+
+		var delta: float = 0.0
+		var denom: float = prev_v - (2.0 * curr) + next_v
+		if denom < -EPSILON:
+			delta = clampf((0.5 * (prev_v - next_v)) / denom, -0.5, 0.5)
+
+		var peak_time_sec: float = maxf(
+			0.0,
+			((float(i) + delta) * p_hop_sec) - ONSET_LEAD_COMPENSATION_SEC
+		)
+		times.append(peak_time_sec)
+		weights.append(curr)
+
+	return {"times": times, "weights": weights}
+
+
+static func _evaluate_phase_alignment(
+	p_peak_times: PackedFloat32Array,
+	p_peak_weights: PackedFloat32Array,
+	p_beat_sec: float,
+	p_phase_sec: float
+) -> float:
+	var count: int = p_peak_times.size()
+	var inv_two_sigma_sq: float = 0.5 / (PHASE_KERNEL_SIGMA_SEC * PHASE_KERNEL_SIGMA_SEC)
+	var half_beat_sec: float = p_beat_sec * 0.5
+	var score: float = 0.0
+
+	for i: int in range(count):
+		var rel: float = fposmod(p_peak_times[i] - p_phase_sec, p_beat_sec)
+		var d_beat: float = minf(rel, p_beat_sec - rel)
+		var w: float = p_peak_weights[i]
+		if d_beat <= 0.075:
+			score += w * exp(-(d_beat * d_beat) * inv_two_sigma_sq)
+		else:
+			var d_half: float = absf(rel - half_beat_sec)
+			if d_half <= 0.055:
+				score += 0.30 * w * exp(-(d_half * d_half) * inv_two_sigma_sq)
+
+	return score
 
 
 static func _compute_lpf_alpha(p_cutoff_hz: float, p_mix_rate: float) -> float:
@@ -930,6 +1192,7 @@ static func _build_empty_analysis(p_hop_sec: float) -> Dictionary:
 	return {
 		"duration_sec": 0.0,
 		"bpm_estimate": DEFAULT_BPM,
+		"beat_phase_sec": 0.0,
 		"frame_hop_sec": p_hop_sec,
 		"rms_frames": PackedFloat32Array(),
 		"bass_frames": PackedFloat32Array(),
