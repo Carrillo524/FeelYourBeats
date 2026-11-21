@@ -2253,12 +2253,16 @@ func _on_particles_type_selected(p_type: String) -> void:
 func _on_particles_density_selected(p_density: String) -> void:
 	if _consume_suppressed_scroll_press():
 		return
+	if _particles_config.particle_type == ReactiveParticlesConfig.TYPE_NONE:
+		return
 	_particles_config.density = ReactiveParticlesConfig.sanitize_level(p_density)
 	_apply_and_persist_particle_settings()
 
 
 func _on_particles_reactivity_selected(p_reactivity: String) -> void:
 	if _consume_suppressed_scroll_press():
+		return
+	if _particles_config.particle_type == ReactiveParticlesConfig.TYPE_NONE:
 		return
 	_particles_config.music_reactivity = ReactiveParticlesConfig.sanitize_level(p_reactivity)
 	_apply_and_persist_particle_settings()
@@ -3183,9 +3187,11 @@ func _refresh_particle_controls() -> void:
 		var level_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[j]
 		var density_btn: Button = _particles_density_buttons.get(level_id, null) as Button
 		if density_btn != null:
+			density_btn.disabled = is_none_selected
 			_set_option_highlight(density_btn, _particles_config.density == level_id)
 		var react_btn: Button = _particles_reactivity_buttons.get(level_id, null) as Button
 		if react_btn != null:
+			react_btn.disabled = is_none_selected
 			_set_option_highlight(react_btn, _particles_config.music_reactivity == level_id)
 
 
@@ -3213,6 +3219,7 @@ func _set_option_highlight(p_button: Button, p_is_active: bool) -> void:
 	p_button.add_theme_color_override("font_hover_color", COLOR_TEXT_ACTIVE)
 	p_button.add_theme_color_override("font_pressed_color", COLOR_TEXT_ACTIVE)
 	p_button.add_theme_color_override("font_focus_color", text_col)
+	p_button.add_theme_color_override("font_disabled_color", text_col)
 
 
 func _apply_stylebox_to_button(p_button: Button, p_style: StyleBox) -> void:
@@ -3222,6 +3229,7 @@ func _apply_stylebox_to_button(p_button: Button, p_style: StyleBox) -> void:
 	p_button.add_theme_stylebox_override("hover", p_style)
 	p_button.add_theme_stylebox_override("pressed", p_style)
 	p_button.add_theme_stylebox_override("focus", p_style)
+	p_button.add_theme_stylebox_override("disabled", p_style)
 
 
 func _apply_song_row_style(p_button: Button, p_has_bottom_divider: bool) -> void:

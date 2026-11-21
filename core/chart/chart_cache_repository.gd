@@ -3,7 +3,7 @@ extends RefCounted
 
 const DEFAULT_CACHE_DIR: String = "user://charts_cache"
 const DEFAULT_RECORDS_PATH: String = "user://song_records.cfg"
-const CACHE_SCHEMA_VERSION: String = "v3"
+const CACHE_SCHEMA_VERSION: String = "v4"
 const BUILTIN_DEMO_SONG_KEY: String = "builtin://demo_128bpm"
 const LEGACY_DEMO_SONG_KEY: String = "fyb_demo_128bpm"
 

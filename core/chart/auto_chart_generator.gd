@@ -210,7 +210,7 @@ func generate_from_analysis(
 	)
 
 	var allow_chords: bool = p_note_type_mode == NoteTypeMode.DOUBLE_TAP
-	var allow_holds: bool = p_note_type_mode != NoteTypeMode.TAP_ONLY
+	var allow_holds: bool = p_note_type_mode == NoteTypeMode.TAP_AND_HOLD
 
 	var notes: Array[NoteData] = _assign_lanes_ergonomically(
 		raw_candidates,
