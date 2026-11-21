@@ -89,12 +89,15 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 @export var reactive_background: ReactiveBackground = null
+@export var reactive_particles_layer: ReactiveParticlesLayer = null
 @export var menu_bgm_player: MenuBgmPlayer = null
 @export var ui_sfx_player: UiSfxPlayer = null
 @export var audio_analyzer: AudioAnalyzer = null
+@export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var allow_scene_change: bool = true
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
+var _particles_config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
 var _font_registry: UiFontRegistry = null
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
 var _imported_songs_dir: String = IMPORTED_SONGS_DIR_PATH
@@ -136,6 +139,11 @@ var _bgm_track_label: Label = null
 var _bgm_prev_button: Button = null
 var _bgm_next_button: Button = null
 var _bgm_mode_button: Button = null
+var _particles_toggle_button: Button = null
+var _particles_type_buttons: Dictionary = {}
+var _particles_type_hint_label: Label = null
+var _particles_density_buttons: Dictionary = {}
+var _particles_reactivity_buttons: Dictionary = {}
 
 # Floating Song Setup Modal
 var _song_modal_backdrop: ColorRect = null
@@ -263,6 +271,7 @@ func _ready() -> void:
 	_refresh_tab_visuals()
 	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
+	_refresh_particle_controls()
 	_sync_live_audio_monitoring()
 	var returning_to_selector: bool = open_directly_to_selector
 	if open_directly_to_selector:
@@ -2194,6 +2203,61 @@ func _on_bgm_enabled_changed(_p_enabled: bool) -> void:
 	_sync_live_audio_monitoring()
 
 
+func get_reactive_particles_layer() -> ReactiveParticlesLayer:
+	return reactive_particles_layer
+
+
+func get_particles_config_snapshot() -> ReactiveParticlesConfig:
+	return _particles_config.duplicate_config()
+
+
+func set_particles_settings_path(p_path: String) -> void:
+	particles_settings_path = p_path
+	reload_particle_settings()
+
+
+func reload_particle_settings() -> void:
+	_particles_config.load_from_file(particles_settings_path)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.apply_config(_particles_config)
+	_refresh_particle_controls()
+
+
+func _apply_and_persist_particle_settings() -> void:
+	_particles_config.save_to_file(particles_settings_path)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.apply_config(_particles_config)
+	_refresh_particle_controls()
+
+
+func _on_particles_toggle_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_particles_config.enabled = not _particles_config.enabled
+	_apply_and_persist_particle_settings()
+
+
+func _on_particles_type_selected(p_type: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_particles_config.particle_type = ReactiveParticlesConfig.sanitize_type(p_type)
+	_apply_and_persist_particle_settings()
+
+
+func _on_particles_density_selected(p_density: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_particles_config.density = ReactiveParticlesConfig.sanitize_level(p_density)
+	_apply_and_persist_particle_settings()
+
+
+func _on_particles_reactivity_selected(p_reactivity: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_particles_config.music_reactivity = ReactiveParticlesConfig.sanitize_level(p_reactivity)
+	_apply_and_persist_particle_settings()
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	_title_bass_boost = maxf(_title_bass_boost, clampf(p_strength, 0.0, 1.0))
 
@@ -2260,6 +2324,8 @@ func _resolve_scene_nodes() -> void:
 		screen_safe_adapter = get_node_or_null("ScreenSafeAdapter") as ScreenSafeAdapter
 	if reactive_background == null:
 		reactive_background = get_node_or_null("ReactiveBackground") as ReactiveBackground
+	if reactive_particles_layer == null:
+		reactive_particles_layer = get_node_or_null("ReactiveParticlesLayer") as ReactiveParticlesLayer
 	if menu_bgm_player == null:
 		menu_bgm_player = get_node_or_null("MenuBgmPlayer") as MenuBgmPlayer
 	if ui_sfx_player == null:
@@ -2277,6 +2343,16 @@ func _resolve_scene_nodes() -> void:
 		reactive_background.name = "ReactiveBackground"
 		add_child(reactive_background)
 		move_child(reactive_background, 0)
+
+	if reactive_particles_layer == null:
+		reactive_particles_layer = ReactiveParticlesLayer.new()
+		reactive_particles_layer.name = "ReactiveParticlesLayer"
+		add_child(reactive_particles_layer)
+
+	if reactive_background != null and reactive_particles_layer.get_parent() == self:
+		var bg_idx: int = reactive_background.get_index()
+		if reactive_particles_layer.get_index() != bg_idx + 1:
+			move_child(reactive_particles_layer, bg_idx + 1)
 
 	if menu_bgm_player == null:
 		menu_bgm_player = MenuBgmPlayer.new()
@@ -2308,6 +2384,12 @@ func _connect_dependencies() -> void:
 			reactive_background.bass_kick_pulsed.connect(_on_bass_kick_pulsed)
 		if not audio_analyzer.spectrum_updated.is_connected(_on_menu_spectrum_updated):
 			audio_analyzer.spectrum_updated.connect(_on_menu_spectrum_updated)
+
+	if reactive_particles_layer != null:
+		reactive_particles_layer.reactive_background = reactive_background
+		reactive_particles_layer.audio_analyzer = audio_analyzer
+		reactive_particles_layer.connect_dependencies()
+		reload_particle_settings()
 
 	if menu_bgm_player != null:
 		if not menu_bgm_player.track_changed.is_connected(_on_bgm_track_changed):
@@ -2341,6 +2423,8 @@ func _sync_live_audio_monitoring() -> void:
 		audio_analyzer.set_live_monitoring(should_monitor)
 	if reactive_background != null:
 		reactive_background.set_menu_bgm_active(should_monitor)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.set_audio_active(should_monitor)
 
 
 func _format_song_display_title(p_raw_path: String) -> String:
@@ -3032,6 +3116,37 @@ func _refresh_bgm_controls() -> void:
 		_set_option_highlight(_bgm_mode_button, auto_rotate)
 
 
+func _refresh_particle_controls() -> void:
+	if _particles_toggle_button != null:
+		_particles_toggle_button.text = (
+			"PARTÍCULAS: ACTIVADAS"
+			if _particles_config.enabled
+			else "PARTÍCULAS: DESACTIVADAS"
+		)
+		_set_option_highlight(_particles_toggle_button, _particles_config.enabled)
+
+	for i: int in range(ReactiveParticlesConfig.SUPPORTED_TYPES.size()):
+		var type_id: String = ReactiveParticlesConfig.SUPPORTED_TYPES[i]
+		var btn: Button = _particles_type_buttons.get(type_id, null) as Button
+		if btn != null:
+			_set_option_highlight(btn, _particles_config.particle_type == type_id)
+
+	if _particles_type_hint_label != null:
+		var show_reserved_hint: bool = _particles_config.is_reserved_for_phase7b()
+		_particles_type_hint_label.visible = show_reserved_hint
+		if show_reserved_hint:
+			_particles_type_hint_label.text = "%s: reservado para Fase 7B (sin partículas activas aún)." % ReactiveParticlesConfig.type_to_label(_particles_config.particle_type)
+
+	for j: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
+		var level_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[j]
+		var density_btn: Button = _particles_density_buttons.get(level_id, null) as Button
+		if density_btn != null:
+			_set_option_highlight(density_btn, _particles_config.density == level_id)
+		var react_btn: Button = _particles_reactivity_buttons.get(level_id, null) as Button
+		if react_btn != null:
+			_set_option_highlight(react_btn, _particles_config.music_reactivity == level_id)
+
+
 func _set_option_highlight(p_button: Button, p_is_active: bool) -> void:
 	if p_button == null:
 		return
@@ -3490,6 +3605,125 @@ func _build_browser_screen_ui() -> void:
 	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
 	settings_vbox.add_child(_bgm_mode_button)
 
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_2", 0))
+
+	var particles_header: Label = Label.new()
+	particles_header.name = "SettingsParticlesHeader"
+	particles_header.text = "PARTÍCULAS REACTIVAS"
+	particles_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	particles_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	settings_vbox.add_child(particles_header)
+
+	_particles_toggle_button = Button.new()
+	_particles_toggle_button.name = "ParticlesToggleButton"
+	_particles_toggle_button.text = "PARTÍCULAS: ACTIVADAS"
+	_particles_toggle_button.custom_minimum_size = Vector2(0.0, 82.0)
+	_particles_toggle_button.add_theme_font_size_override("font_size", 34)
+	_particles_toggle_button.pressed.connect(_on_particles_toggle_pressed)
+	settings_vbox.add_child(_particles_toggle_button)
+
+	var particles_type_label: Label = Label.new()
+	particles_type_label.name = "ParticlesTypeLabel"
+	particles_type_label.text = "TIPO DE PARTÍCULAS"
+	particles_type_label.add_theme_font_size_override("font_size", 30)
+	particles_type_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(particles_type_label)
+
+	_particles_type_buttons.clear()
+	var type_row_1: HBoxContainer = HBoxContainer.new()
+	type_row_1.name = "ParticlesTypeRow1"
+	type_row_1.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(type_row_1)
+
+	var row1_types: PackedStringArray = PackedStringArray([
+		ReactiveParticlesConfig.TYPE_NONE,
+		ReactiveParticlesConfig.TYPE_CIRCLES,
+		ReactiveParticlesConfig.TYPE_SQUARES,
+	])
+	for t1_idx: int in range(row1_types.size()):
+		var t1_id: String = row1_types[t1_idx]
+		var t1_btn: Button = _create_compact_settings_button(
+			"ParticlesType_%s" % t1_id,
+			ReactiveParticlesConfig.type_to_label(t1_id)
+		)
+		t1_btn.pressed.connect(_on_particles_type_selected.bind(t1_id))
+		type_row_1.add_child(t1_btn)
+		_particles_type_buttons[t1_id] = t1_btn
+
+	var type_row_2: HBoxContainer = HBoxContainer.new()
+	type_row_2.name = "ParticlesTypeRow2"
+	type_row_2.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(type_row_2)
+
+	var row2_types: PackedStringArray = PackedStringArray([
+		ReactiveParticlesConfig.TYPE_MIST,
+		ReactiveParticlesConfig.TYPE_SPARKLES,
+	])
+	for t2_idx: int in range(row2_types.size()):
+		var t2_id: String = row2_types[t2_idx]
+		var t2_btn: Button = _create_compact_settings_button(
+			"ParticlesType_%s" % t2_id,
+			ReactiveParticlesConfig.type_to_label(t2_id)
+		)
+		t2_btn.pressed.connect(_on_particles_type_selected.bind(t2_id))
+		type_row_2.add_child(t2_btn)
+		_particles_type_buttons[t2_id] = t2_btn
+
+	_particles_type_hint_label = Label.new()
+	_particles_type_hint_label.name = "ParticlesTypeHintLabel"
+	_particles_type_hint_label.text = ""
+	_particles_type_hint_label.visible = false
+	_particles_type_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_particles_type_hint_label.add_theme_font_size_override("font_size", 24)
+	_particles_type_hint_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+	settings_vbox.add_child(_particles_type_hint_label)
+
+	var particles_density_label: Label = Label.new()
+	particles_density_label.name = "ParticlesDensityLabel"
+	particles_density_label.text = "DENSIDAD"
+	particles_density_label.add_theme_font_size_override("font_size", 30)
+	particles_density_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(particles_density_label)
+
+	_particles_density_buttons.clear()
+	var density_row: HBoxContainer = HBoxContainer.new()
+	density_row.name = "ParticlesDensityRow"
+	density_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(density_row)
+
+	for d_idx: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
+		var d_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[d_idx]
+		var d_btn: Button = _create_compact_settings_button(
+			"ParticlesDensity_%s" % d_id,
+			ReactiveParticlesConfig.level_to_label(d_id)
+		)
+		d_btn.pressed.connect(_on_particles_density_selected.bind(d_id))
+		density_row.add_child(d_btn)
+		_particles_density_buttons[d_id] = d_btn
+
+	var particles_react_label: Label = Label.new()
+	particles_react_label.name = "ParticlesReactivityLabel"
+	particles_react_label.text = "REACCIÓN MUSICAL"
+	particles_react_label.add_theme_font_size_override("font_size", 30)
+	particles_react_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(particles_react_label)
+
+	_particles_reactivity_buttons.clear()
+	var reactivity_row: HBoxContainer = HBoxContainer.new()
+	reactivity_row.name = "ParticlesReactivityRow"
+	reactivity_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(reactivity_row)
+
+	for r_idx: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
+		var r_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[r_idx]
+		var r_btn: Button = _create_compact_settings_button(
+			"ParticlesReactivity_%s" % r_id,
+			ReactiveParticlesConfig.level_to_label(r_id)
+		)
+		r_btn.pressed.connect(_on_particles_reactivity_selected.bind(r_id))
+		reactivity_row.add_child(r_btn)
+		_particles_reactivity_buttons[r_id] = r_btn
+
 	_configure_touch_scroll_container(_settings_scroll)
 
 
@@ -3849,4 +4083,14 @@ func _create_option_button(p_name: String, p_text: String) -> Button:
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.custom_minimum_size = Vector2(0.0, MODAL_OPTION_HEIGHT_PX)
 	btn.add_theme_font_size_override("font_size", MODAL_OPTION_FONT_SIZE)
+	return btn
+
+
+func _create_compact_settings_button(p_name: String, p_text: String) -> Button:
+	var btn: Button = Button.new()
+	btn.name = p_name
+	btn.text = p_text
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.custom_minimum_size = Vector2(0.0, 72.0)
+	btn.add_theme_font_size_override("font_size", 32)
 	return btn

@@ -17,7 +17,9 @@ static var pending_session_config: Dictionary = {}
 @export var hit_judge: HitJudge = null
 @export var lane_field: LaneField = null
 @export var reactive_background: ReactiveBackground = null
+@export var reactive_particles_layer: ReactiveParticlesLayer = null
 @export var safe_hud: SafeHud = null
+@export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var custom_audio_path: String = ""
 @export var default_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 @export var default_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
@@ -30,6 +32,7 @@ var _active_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 var _active_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _active_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
+var _particles_config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
 var _last_chart_loaded_from_cache: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 
@@ -315,6 +318,16 @@ func get_active_speed_multiplier() -> int:
 	return _active_speed_multiplier
 
 
+func get_reactive_particles_layer() -> ReactiveParticlesLayer:
+	return reactive_particles_layer
+
+
+func reload_particle_settings() -> void:
+	_particles_config.load_from_file(particles_settings_path)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.apply_config(_particles_config)
+
+
 func _start_from_pending_config(p_cfg: Dictionary) -> void:
 	var is_demo: bool = p_cfg.get("is_demo", false) as bool
 	var difficulty: int = int(p_cfg.get("difficulty", default_difficulty))
@@ -368,10 +381,26 @@ func _resolve_and_wire_nodes() -> void:
 		hit_judge = get_node_or_null("HitJudge") as HitJudge
 	if reactive_background == null:
 		reactive_background = get_node_or_null("ReactiveBackground") as ReactiveBackground
+	if reactive_particles_layer == null:
+		reactive_particles_layer = get_node_or_null("ReactiveParticlesLayer") as ReactiveParticlesLayer
 	if lane_field == null:
 		lane_field = get_node_or_null("LaneField") as LaneField
 	if safe_hud == null:
 		safe_hud = get_node_or_null("SafeHud") as SafeHud
+
+	if reactive_particles_layer == null:
+		reactive_particles_layer = ReactiveParticlesLayer.new()
+		reactive_particles_layer.name = "ReactiveParticlesLayer"
+		add_child(reactive_particles_layer)
+
+	if reactive_background != null and reactive_particles_layer.get_parent() == self:
+		var bg_idx: int = reactive_background.get_index()
+		if reactive_particles_layer.get_index() != bg_idx + 1:
+			move_child(reactive_particles_layer, bg_idx + 1)
+	elif lane_field != null and reactive_particles_layer.get_parent() == self:
+		var lane_idx: int = lane_field.get_index()
+		if reactive_particles_layer.get_index() > lane_idx:
+			move_child(reactive_particles_layer, lane_idx)
 
 	if dsp_clock != null:
 		if not dsp_clock.playback_finished.is_connected(_on_playback_finished):
@@ -390,6 +419,13 @@ func _resolve_and_wire_nodes() -> void:
 		reactive_background.connect_dependencies()
 		if not reactive_background.screen_shake_updated.is_connected(_on_screen_shake_updated):
 			reactive_background.screen_shake_updated.connect(_on_screen_shake_updated)
+
+	if reactive_particles_layer != null:
+		reactive_particles_layer.dsp_clock = dsp_clock
+		reactive_particles_layer.reactive_background = reactive_background
+		reactive_particles_layer.audio_analyzer = audio_analyzer
+		reactive_particles_layer.connect_dependencies()
+		reload_particle_settings()
 
 	if lane_field != null:
 		lane_field.dsp_clock = dsp_clock
