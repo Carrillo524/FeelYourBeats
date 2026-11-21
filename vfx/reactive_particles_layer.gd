@@ -15,6 +15,15 @@ const CIRCLE_EDGE_FADE_START: float = 0.72
 const CIRCLE_BASE_HALO_SCALE: float = 2.3
 const CIRCLE_BEAT_HALO_BOOST: float = 1.75
 const SQUARE_SCALE_BEAT_BOOST: float = 0.28
+const MIST_SPEED_BEAT_BOOST: float = 0.85
+const MIST_INTENSITY_BEAT_BOOST: float = 0.55
+const MIST_MIN_Y_RATIO: float = 0.62
+const MIST_MAX_Y_RATIO: float = 1.02
+const MIST_SAFE_TOP_RATIO: float = 0.56
+const MIST_MAX_ALPHA: float = 0.28
+const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.65
+const SPARKLE_BASE_HALO_SCALE: float = 4.2
+const SPARKLE_HALO_BEAT_BOOST: float = 2.6
 const DEFAULT_VIEWPORT_SIZE: Vector2 = Vector2(1080.0, 1920.0)
 
 const CIRCLE_PALETTE: Array[Color] = [
@@ -31,12 +40,27 @@ const SQUARE_PALETTE: Array[Color] = [
 	Color(0.34, 1.0, 0.84, 1.0),
 ]
 
+const MIST_PALETTE: Array[Color] = [
+	Color(0.24, 0.72, 0.96, 1.0),
+	Color(0.32, 0.52, 0.95, 1.0),
+	Color(0.56, 0.36, 0.92, 1.0),
+	Color(0.24, 0.86, 0.88, 1.0),
+]
+
+const SPARKLE_PALETTE: Array[Color] = [
+	Color(0.88, 0.98, 1.0, 1.0),
+	Color(0.52, 0.96, 1.0, 1.0),
+	Color(0.86, 0.68, 1.0, 1.0),
+	Color(1.0, 0.94, 0.78, 1.0),
+]
+
 @export var dsp_clock: DSPClock = null
 @export var reactive_background: ReactiveBackground = null
 @export var audio_analyzer: AudioAnalyzer = null
 
 var _config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _soft_radial_texture: GradientTexture2D = null
 
 var _elapsed_time: float = 0.0
 var _beat_impulse: float = 0.0
@@ -45,6 +69,10 @@ var _smoothed_audio_energy: float = 0.0
 var _current_drive: float = 0.0
 var _current_speed_mult: float = 1.0
 var _current_scale_mult: float = 1.0
+var _current_mist_speed_mult: float = 1.0
+var _current_mist_intensity_mult: float = 1.0
+var _current_sparkle_brightness_mult: float = 1.0
+var _current_sparkle_halo_scale: float = SPARKLE_BASE_HALO_SCALE
 var _audio_active: bool = true
 var _beat_trigger_count: int = 0
 var _needs_clear_draw: bool = false
@@ -68,6 +96,7 @@ var _color_idx: PackedInt32Array = PackedInt32Array()
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rng.randomize()
+	_soft_radial_texture = _create_soft_radial_texture()
 
 
 func _ready() -> void:
@@ -110,7 +139,7 @@ func set_audio_active(p_active: bool) -> void:
 
 
 func is_effectively_active() -> bool:
-	return _config.is_rendered_in_phase7a()
+	return _config.is_rendered_type()
 
 
 func get_active_particle_count() -> int:
@@ -186,6 +215,26 @@ func get_circle_effective_alpha(p_index: int) -> float:
 	return clampf((_alpha_base[p_index] + alpha_boost) * in_fade * edge_fade, 0.0, 0.72)
 
 
+func get_soft_radial_texture() -> GradientTexture2D:
+	return _soft_radial_texture
+
+
+func get_mist_speed_multiplier() -> float:
+	return _current_mist_speed_mult
+
+
+func get_mist_intensity_multiplier() -> float:
+	return _current_mist_intensity_mult
+
+
+func get_sparkle_brightness_multiplier() -> float:
+	return _current_sparkle_brightness_mult
+
+
+func get_sparkle_halo_scale() -> float:
+	return _current_sparkle_halo_scale
+
+
 func trigger_beat_impulse(p_strength: float = 0.85) -> void:
 	var clamped: float = clampf(p_strength, 0.0, 1.0)
 	if clamped <= 0.0:
@@ -234,6 +283,10 @@ func step_simulation(p_delta: float) -> void:
 		_step_circles(dt, bounds)
 	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SQUARES:
 		_step_squares(dt, bounds)
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_MIST:
+		_step_mist(dt, bounds)
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
+		_step_sparkles(dt, bounds)
 
 	queue_redraw()
 
@@ -246,6 +299,10 @@ func _draw() -> void:
 		_draw_circles()
 	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SQUARES:
 		_draw_squares()
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_MIST:
+		_draw_mist()
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
+		_draw_sparkles()
 
 
 func _recompute_drive_metrics() -> void:
@@ -257,6 +314,10 @@ func _recompute_drive_metrics() -> void:
 	)
 	_current_speed_mult = 1.0 + (_current_drive * CIRCLE_SPEED_BEAT_BOOST)
 	_current_scale_mult = 1.0 + (_current_drive * SQUARE_SCALE_BEAT_BOOST)
+	_current_mist_speed_mult = 1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST)
+	_current_mist_intensity_mult = 1.0 + (_current_drive * MIST_INTENSITY_BEAT_BOOST)
+	_current_sparkle_brightness_mult = 1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST)
+	_current_sparkle_halo_scale = SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST)
 
 
 func _rebuild_pool() -> void:
@@ -267,7 +328,7 @@ func _rebuild_pool() -> void:
 		queue_redraw()
 		return
 
-	var target_count: int = _config.get_max_particle_count()
+	var target_count: int = _config.get_effective_particle_count()
 	_active_count = target_count
 	_resize_arrays(target_count)
 
@@ -277,6 +338,10 @@ func _rebuild_pool() -> void:
 			_spawn_circle(i, bounds, true)
 		elif _config.particle_type == ReactiveParticlesConfig.TYPE_SQUARES:
 			_spawn_square(i, bounds, true)
+		elif _config.particle_type == ReactiveParticlesConfig.TYPE_MIST:
+			_spawn_mist(i, bounds, true)
+		elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
+			_spawn_sparkle(i, bounds, true)
 
 	_needs_clear_draw = false
 	queue_redraw()
@@ -492,6 +557,187 @@ func _draw_squares() -> void:
 		draw_rect(sq_rect, edge_col, false, 2.0)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+func _spawn_mist(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:
+	var rx: float = p_bounds.x * _rng.randf_range(0.24, 0.44)
+	var ry: float = p_bounds.y * _rng.randf_range(0.065, 0.125)
+	var dir_sign: float = -1.0 if _rng.randf() < 0.35 else 1.0
+	var drift_speed: float = _rng.randf_range(12.0, 28.0) * dir_sign
+
+	var base_y: float = p_bounds.y * _rng.randf_range(MIST_MIN_Y_RATIO, MIST_MAX_Y_RATIO)
+	var start_x: float = (
+		_rng.randf_range(-rx * 0.5, p_bounds.x + (rx * 0.5))
+		if p_initial_fill
+		else (-rx if dir_sign > 0.0 else p_bounds.x + rx)
+	)
+	var sway_amp: float = minf(p_bounds.y * 0.025, maxf(6.0, base_y - (p_bounds.y * MIST_SAFE_TOP_RATIO)))
+
+	_pos[p_index] = Vector2(start_x, base_y)
+	_vel[p_index] = Vector2(drift_speed, base_y)
+	_size_param[p_index] = rx
+	_angle[p_index] = ry
+	_ang_vel[p_index] = _rng.randf_range(0.35, 0.75)
+	_alpha_base[p_index] = _rng.randf_range(0.075, 0.155)
+	_life_phase[p_index] = _rng.randf_range(0.0, TAU)
+	_life_speed[p_index] = _rng.randf_range(0.25, 0.60)
+	_sway_phase[p_index] = _rng.randf_range(0.0, TAU)
+	_sway_freq[p_index] = _rng.randf_range(0.40, 0.95)
+	_sway_amp[p_index] = sway_amp
+	_color_idx[p_index] = _rng.randi_range(0, MIST_PALETTE.size() - 1)
+
+
+func _step_mist(p_dt: float, p_bounds: Vector2) -> void:
+	var speed_mult: float = _current_mist_speed_mult
+	var min_y: float = p_bounds.y * MIST_SAFE_TOP_RATIO
+	var max_y: float = p_bounds.y * (MIST_MAX_Y_RATIO + 0.04)
+
+	for i: int in range(_active_count):
+		var pos: Vector2 = _pos[i]
+		var vx: float = _vel[i].x
+		var base_y: float = clampf(_vel[i].y, p_bounds.y * MIST_MIN_Y_RATIO, p_bounds.y * MIST_MAX_Y_RATIO)
+		var rx: float = maxf(64.0, _size_param[i])
+
+		pos.x += vx * speed_mult * p_dt
+		var wave_y: float = sin((_elapsed_time * _sway_freq[i]) + _sway_phase[i]) * _sway_amp[i]
+		pos.y = clampf(base_y + wave_y, min_y, max_y)
+
+		if pos.x > p_bounds.x + rx:
+			pos.x = -rx
+		elif pos.x < -rx:
+			pos.x = p_bounds.x + rx
+
+		_pos[i] = pos
+		_vel[i].y = base_y
+
+
+func _draw_mist() -> void:
+	if _soft_radial_texture == null:
+		return
+
+	var intensity_mult: float = _current_mist_intensity_mult
+	var scale_pulse: float = 1.0 + (_current_drive * 0.09)
+	var palette_len: int = MIST_PALETTE.size()
+
+	for i: int in range(_active_count):
+		var breath: float = 0.88 + (0.12 * sin((_elapsed_time * _life_speed[i]) + _life_phase[i]))
+		var alpha: float = clampf(_alpha_base[i] * breath * intensity_mult, 0.0, MIST_MAX_ALPHA)
+		if alpha <= 0.004:
+			continue
+
+		var rx: float = _size_param[i] * (0.94 + (0.06 * breath)) * scale_pulse
+		var ry: float = _angle[i] * scale_pulse
+		var pos: Vector2 = _pos[i]
+		var base_col: Color = MIST_PALETTE[_color_idx[i] % palette_len]
+		var tint: Color = Color(base_col.r, base_col.g, base_col.b, alpha)
+		var dest_rect: Rect2 = Rect2(pos.x - rx, pos.y - ry, rx * 2.0, ry * 2.0)
+		draw_texture_rect(_soft_radial_texture, dest_rect, false, tint)
+
+
+func _spawn_sparkle(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> void:
+	var pad: float = 24.0
+	var max_x: float = maxf(pad + 1.0, p_bounds.x - pad)
+	var max_y: float = maxf(pad + 1.0, p_bounds.y - pad)
+
+	_pos[p_index] = Vector2(
+		_rng.randf_range(pad, max_x),
+		_rng.randf_range(pad, max_y)
+	)
+	_vel[p_index] = Vector2(
+		_rng.randf_range(-8.0, 8.0),
+		_rng.randf_range(-8.0, 8.0)
+	)
+	_size_param[p_index] = _rng.randf_range(1.4, 4.2)
+	_angle[p_index] = 0.0
+	_ang_vel[p_index] = 0.0
+	_alpha_base[p_index] = _rng.randf_range(0.28, 0.78)
+	_life_phase[p_index] = _rng.randf() if p_initial_fill else 0.0
+	_life_speed[p_index] = _rng.randf_range(0.22, 0.58)
+	_sway_phase[p_index] = _rng.randf_range(0.0, TAU)
+	_sway_freq[p_index] = _rng.randf_range(0.5, 1.3)
+	_sway_amp[p_index] = _rng.randf_range(3.0, 8.0)
+	_color_idx[p_index] = _rng.randi_range(0, SPARKLE_PALETTE.size() - 1)
+
+
+func _step_sparkles(p_dt: float, p_bounds: Vector2) -> void:
+	for i: int in range(_active_count):
+		var phase: float = _life_phase[i] + (_life_speed[i] * p_dt)
+		if phase >= 1.0:
+			_spawn_sparkle(i, p_bounds, false)
+			continue
+		_life_phase[i] = phase
+
+		var pos: Vector2 = _pos[i]
+		var vel: Vector2 = _vel[i]
+		pos.x += vel.x * p_dt
+		pos.y += vel.y * p_dt
+
+		var margin: float = 28.0
+		if pos.x < -margin:
+			pos.x = p_bounds.x + margin
+		elif pos.x > p_bounds.x + margin:
+			pos.x = -margin
+
+		if pos.y < -margin:
+			pos.y = p_bounds.y + margin
+		elif pos.y > p_bounds.y + margin:
+			pos.y = -margin
+
+		_pos[i] = pos
+
+
+func _draw_sparkles() -> void:
+	var brightness_mult: float = _current_sparkle_brightness_mult
+	var halo_scale: float = _current_sparkle_halo_scale
+	var palette_len: int = SPARKLE_PALETTE.size()
+
+	for i: int in range(_active_count):
+		var life_t: float = clampf(_life_phase[i], 0.0, 1.0)
+		var fade_raw: float = sin(life_t * PI)
+		if fade_raw <= 0.006:
+			continue
+
+		var fade: float = pow(fade_raw, 1.45)
+		var core_r: float = _size_param[i]
+		var pos: Vector2 = _pos[i]
+		var base_col: Color = SPARKLE_PALETTE[_color_idx[i] % palette_len]
+
+		var core_alpha: float = clampf(_alpha_base[i] * fade * brightness_mult, 0.0, 0.92)
+		var halo_alpha: float = clampf(core_alpha * (0.48 + minf(0.18, _current_drive * 0.14)), 0.0, 0.56)
+		var halo_r: float = core_r * halo_scale
+
+		if _soft_radial_texture != null:
+			var halo_rect: Rect2 = Rect2(pos.x - halo_r, pos.y - halo_r, halo_r * 2.0, halo_r * 2.0)
+			var halo_tint: Color = Color(base_col.r, base_col.g, base_col.b, halo_alpha)
+			draw_texture_rect(_soft_radial_texture, halo_rect, false, halo_tint)
+
+		var core_col: Color = Color(
+			lerpf(base_col.r, 1.0, 0.55),
+			lerpf(base_col.g, 1.0, 0.55),
+			lerpf(base_col.b, 1.0, 0.55),
+			core_alpha
+		)
+		draw_circle(pos, core_r, core_col)
+
+
+func _create_soft_radial_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.62, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.72),
+		Color(1.0, 1.0, 1.0, 0.24),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
 
 
 func _resolve_bounds() -> Vector2:

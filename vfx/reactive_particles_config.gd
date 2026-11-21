@@ -18,6 +18,10 @@ const MAX_PARTICLES_LOW: int = 28
 const MAX_PARTICLES_MEDIUM: int = 48
 const MAX_PARTICLES_HIGH: int = 72
 
+const MAX_MIST_LOW: int = 8
+const MAX_MIST_MEDIUM: int = 14
+const MAX_MIST_HIGH: int = 20
+
 const REACTIVITY_MULT_LOW: float = 0.45
 const REACTIVITY_MULT_MEDIUM: float = 1.00
 const REACTIVITY_MULT_HIGH: float = 1.55
@@ -117,16 +121,28 @@ func get_max_particle_count() -> int:
 	return density_to_max_count(density)
 
 
+func get_effective_particle_count() -> int:
+	if not is_rendered_type():
+		return 0
+	if particle_type == TYPE_MIST:
+		return density_to_mist_count(density)
+	return density_to_max_count(density)
+
+
 func get_reactivity_multiplier() -> float:
 	return reactivity_to_multiplier(music_reactivity)
 
 
+func is_rendered_type() -> bool:
+	return enabled and particle_type != TYPE_NONE and SUPPORTED_TYPES.has(particle_type)
+
+
 func is_rendered_in_phase7a() -> bool:
-	return enabled and (particle_type == TYPE_CIRCLES or particle_type == TYPE_SQUARES)
+	return is_rendered_type()
 
 
 func is_reserved_for_phase7b() -> bool:
-	return particle_type == TYPE_MIST or particle_type == TYPE_SPARKLES
+	return false
 
 
 func to_dict() -> Dictionary:
@@ -183,6 +199,16 @@ static func density_to_max_count(p_density: String) -> int:
 			return MAX_PARTICLES_HIGH
 		_:
 			return MAX_PARTICLES_MEDIUM
+
+
+static func density_to_mist_count(p_density: String) -> int:
+	match sanitize_level(p_density):
+		LEVEL_LOW:
+			return MAX_MIST_LOW
+		LEVEL_HIGH:
+			return MAX_MIST_HIGH
+		_:
+			return MAX_MIST_MEDIUM
 
 
 static func reactivity_to_multiplier(p_level: String) -> float:

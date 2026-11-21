@@ -141,7 +141,6 @@ var _bgm_next_button: Button = null
 var _bgm_mode_button: Button = null
 var _particles_toggle_button: Button = null
 var _particles_type_buttons: Dictionary = {}
-var _particles_type_hint_label: Label = null
 var _particles_density_buttons: Dictionary = {}
 var _particles_reactivity_buttons: Dictionary = {}
 
@@ -3131,12 +3130,6 @@ func _refresh_particle_controls() -> void:
 		if btn != null:
 			_set_option_highlight(btn, _particles_config.particle_type == type_id)
 
-	if _particles_type_hint_label != null:
-		var show_reserved_hint: bool = _particles_config.is_reserved_for_phase7b()
-		_particles_type_hint_label.visible = show_reserved_hint
-		if show_reserved_hint:
-			_particles_type_hint_label.text = "%s: reservado para Fase 7B (sin partículas activas aún)." % ReactiveParticlesConfig.type_to_label(_particles_config.particle_type)
-
 	for j: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
 		var level_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[j]
 		var density_btn: Button = _particles_density_buttons.get(level_id, null) as Button
@@ -3668,15 +3661,6 @@ func _build_browser_screen_ui() -> void:
 		t2_btn.pressed.connect(_on_particles_type_selected.bind(t2_id))
 		type_row_2.add_child(t2_btn)
 		_particles_type_buttons[t2_id] = t2_btn
-
-	_particles_type_hint_label = Label.new()
-	_particles_type_hint_label.name = "ParticlesTypeHintLabel"
-	_particles_type_hint_label.text = ""
-	_particles_type_hint_label.visible = false
-	_particles_type_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_particles_type_hint_label.add_theme_font_size_override("font_size", 24)
-	_particles_type_hint_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
-	settings_vbox.add_child(_particles_type_hint_label)
 
 	var particles_density_label: Label = Label.new()
 	particles_density_label.name = "ParticlesDensityLabel"
