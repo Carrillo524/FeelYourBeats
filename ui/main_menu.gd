@@ -146,7 +146,6 @@ var _particles_type_buttons: Dictionary = {}
 var _particles_density_buttons: Dictionary = {}
 var _particles_reactivity_buttons: Dictionary = {}
 var _bg_style_buttons: Dictionary = {}
-var _bg_style_hint_label: Label = null
 var _bg_reactivity_buttons: Dictionary = {}
 
 # Floating Song Setup Modal
@@ -3191,12 +3190,6 @@ func _refresh_background_controls() -> void:
 		if style_btn != null:
 			_set_option_highlight(style_btn, _bg_config.style == style_id)
 
-	if _bg_style_hint_label != null:
-		var show_hint: bool = _bg_config.is_reserved_for_phase8b()
-		_bg_style_hint_label.visible = show_hint
-		if show_hint:
-			_bg_style_hint_label.text = "%s: reservado para Fase 8B (usando fondo Clásico temporalmente)." % ReactiveBackgroundConfig.style_to_label(_bg_config.style)
-
 	for j: int in range(ReactiveBackgroundConfig.SUPPORTED_LEVELS.size()):
 		var level_id: String = ReactiveBackgroundConfig.SUPPORTED_LEVELS[j]
 		var level_btn: Button = _bg_reactivity_buttons.get(level_id, null) as Button
@@ -3687,44 +3680,27 @@ func _build_browser_screen_ui() -> void:
 	settings_vbox.add_child(particles_type_label)
 
 	_particles_type_buttons.clear()
-	var type_row_1: HBoxContainer = HBoxContainer.new()
-	type_row_1.name = "ParticlesTypeRow1"
-	type_row_1.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(type_row_1)
+	var particle_type_rows: Array[PackedStringArray] = [
+		PackedStringArray([ReactiveParticlesConfig.TYPE_NONE, ReactiveParticlesConfig.TYPE_CIRCLES]),
+		PackedStringArray([ReactiveParticlesConfig.TYPE_SQUARES, ReactiveParticlesConfig.TYPE_MIST]),
+		PackedStringArray([ReactiveParticlesConfig.TYPE_SPARKLES, ReactiveParticlesConfig.TYPE_SHOOTING_STARS]),
+	]
+	for row_idx: int in range(particle_type_rows.size()):
+		var type_row: HBoxContainer = HBoxContainer.new()
+		type_row.name = "ParticlesTypeRow%d" % (row_idx + 1)
+		type_row.add_theme_constant_override("separation", 12)
+		settings_vbox.add_child(type_row)
 
-	var row1_types: PackedStringArray = PackedStringArray([
-		ReactiveParticlesConfig.TYPE_NONE,
-		ReactiveParticlesConfig.TYPE_CIRCLES,
-		ReactiveParticlesConfig.TYPE_SQUARES,
-	])
-	for t1_idx: int in range(row1_types.size()):
-		var t1_id: String = row1_types[t1_idx]
-		var t1_btn: Button = _create_compact_settings_button(
-			"ParticlesType_%s" % t1_id,
-			ReactiveParticlesConfig.type_to_label(t1_id)
-		)
-		t1_btn.pressed.connect(_on_particles_type_selected.bind(t1_id))
-		type_row_1.add_child(t1_btn)
-		_particles_type_buttons[t1_id] = t1_btn
-
-	var type_row_2: HBoxContainer = HBoxContainer.new()
-	type_row_2.name = "ParticlesTypeRow2"
-	type_row_2.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(type_row_2)
-
-	var row2_types: PackedStringArray = PackedStringArray([
-		ReactiveParticlesConfig.TYPE_MIST,
-		ReactiveParticlesConfig.TYPE_SPARKLES,
-	])
-	for t2_idx: int in range(row2_types.size()):
-		var t2_id: String = row2_types[t2_idx]
-		var t2_btn: Button = _create_compact_settings_button(
-			"ParticlesType_%s" % t2_id,
-			ReactiveParticlesConfig.type_to_label(t2_id)
-		)
-		t2_btn.pressed.connect(_on_particles_type_selected.bind(t2_id))
-		type_row_2.add_child(t2_btn)
-		_particles_type_buttons[t2_id] = t2_btn
+		var row_ids: PackedStringArray = particle_type_rows[row_idx]
+		for col_idx: int in range(row_ids.size()):
+			var type_id: String = row_ids[col_idx]
+			var type_btn: Button = _create_compact_settings_button(
+				"ParticlesType_%s" % type_id,
+				ReactiveParticlesConfig.type_to_label(type_id)
+			)
+			type_btn.pressed.connect(_on_particles_type_selected.bind(type_id))
+			type_row.add_child(type_btn)
+			_particles_type_buttons[type_id] = type_btn
 
 	var particles_density_label: Label = Label.new()
 	particles_density_label.name = "ParticlesDensityLabel"
@@ -3789,52 +3765,20 @@ func _build_browser_screen_ui() -> void:
 	settings_vbox.add_child(bg_style_label)
 
 	_bg_style_buttons.clear()
-	var bg_row_1: HBoxContainer = HBoxContainer.new()
-	bg_row_1.name = "BackgroundStyleRow1"
-	bg_row_1.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(bg_row_1)
+	var bg_row: HBoxContainer = HBoxContainer.new()
+	bg_row.name = "BackgroundStyleRow"
+	bg_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(bg_row)
 
-	var bg_row1_styles: PackedStringArray = PackedStringArray([
-		ReactiveBackgroundConfig.STYLE_CLASSIC,
-		ReactiveBackgroundConfig.STYLE_WAVES,
-	])
-	for b1_idx: int in range(bg_row1_styles.size()):
-		var b1_id: String = bg_row1_styles[b1_idx]
-		var b1_btn: Button = _create_compact_settings_button(
-			"BackgroundStyle_%s" % b1_id,
-			ReactiveBackgroundConfig.style_to_label(b1_id)
+	for b_idx: int in range(ReactiveBackgroundConfig.SUPPORTED_STYLES.size()):
+		var b_id: String = ReactiveBackgroundConfig.SUPPORTED_STYLES[b_idx]
+		var b_btn: Button = _create_compact_settings_button(
+			"BackgroundStyle_%s" % b_id,
+			ReactiveBackgroundConfig.style_to_label(b_id)
 		)
-		b1_btn.pressed.connect(_on_bg_style_selected.bind(b1_id))
-		bg_row_1.add_child(b1_btn)
-		_bg_style_buttons[b1_id] = b1_btn
-
-	var bg_row_2: HBoxContainer = HBoxContainer.new()
-	bg_row_2.name = "BackgroundStyleRow2"
-	bg_row_2.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(bg_row_2)
-
-	var bg_row2_styles: PackedStringArray = PackedStringArray([
-		ReactiveBackgroundConfig.STYLE_AURORA,
-		ReactiveBackgroundConfig.STYLE_SHOOTING_STARS,
-	])
-	for b2_idx: int in range(bg_row2_styles.size()):
-		var b2_id: String = bg_row2_styles[b2_idx]
-		var b2_btn: Button = _create_compact_settings_button(
-			"BackgroundStyle_%s" % b2_id,
-			ReactiveBackgroundConfig.style_to_label(b2_id)
-		)
-		b2_btn.pressed.connect(_on_bg_style_selected.bind(b2_id))
-		bg_row_2.add_child(b2_btn)
-		_bg_style_buttons[b2_id] = b2_btn
-
-	_bg_style_hint_label = Label.new()
-	_bg_style_hint_label.name = "BackgroundStyleHintLabel"
-	_bg_style_hint_label.text = ""
-	_bg_style_hint_label.visible = false
-	_bg_style_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_bg_style_hint_label.add_theme_font_size_override("font_size", 24)
-	_bg_style_hint_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
-	settings_vbox.add_child(_bg_style_hint_label)
+		b_btn.pressed.connect(_on_bg_style_selected.bind(b_id))
+		bg_row.add_child(b_btn)
+		_bg_style_buttons[b_id] = b_btn
 
 	var bg_react_label: Label = Label.new()
 	bg_react_label.name = "BackgroundReactivityLabel"

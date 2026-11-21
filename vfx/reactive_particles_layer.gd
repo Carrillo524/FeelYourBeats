@@ -26,6 +26,11 @@ const STREAK_GRADIENT_SEGMENTS: int = 5
 const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.65
 const SPARKLE_BASE_HALO_SCALE: float = 4.2
 const SPARKLE_HALO_BEAT_BOOST: float = 2.6
+const SHOOTING_STAR_MIN_ANGLE_DEG: float = 28.0
+const SHOOTING_STAR_MAX_ANGLE_DEG: float = 38.0
+const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 0.70
+const SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST: float = 0.62
+const SHOOTING_STAR_TAIL_SEGMENTS: int = 6
 const DEFAULT_VIEWPORT_SIZE: Vector2 = Vector2(1080.0, 1920.0)
 
 const CIRCLE_PALETTE: Array[Color] = [
@@ -56,6 +61,12 @@ const SPARKLE_PALETTE: Array[Color] = [
 	Color(1.0, 0.94, 0.78, 1.0),
 ]
 
+const SHOOTING_STAR_PALETTE: Array[Color] = [
+	Color(0.92, 0.99, 1.0, 1.0),
+	Color(0.42, 0.95, 1.0, 1.0),
+	Color(0.76, 0.56, 1.0, 1.0),
+]
+
 @export var dsp_clock: DSPClock = null
 @export var reactive_background: ReactiveBackground = null
 @export var audio_analyzer: AudioAnalyzer = null
@@ -76,6 +87,8 @@ var _current_mist_intensity_mult: float = 1.0
 var _current_streak_length_mult: float = 1.0
 var _current_sparkle_brightness_mult: float = 1.0
 var _current_sparkle_halo_scale: float = SPARKLE_BASE_HALO_SCALE
+var _current_shooting_star_speed_mult: float = 1.0
+var _current_shooting_star_brightness_mult: float = 1.0
 var _audio_active: bool = true
 var _beat_trigger_count: int = 0
 var _needs_clear_draw: bool = false
@@ -242,6 +255,34 @@ func get_sparkle_halo_scale() -> float:
 	return _current_sparkle_halo_scale
 
 
+func get_shooting_star_speed_multiplier() -> float:
+	return _current_shooting_star_speed_mult
+
+
+func get_shooting_star_brightness_multiplier() -> float:
+	return _current_shooting_star_brightness_mult
+
+
+func get_shooting_star_active_flight_count() -> int:
+	if _config.particle_type != ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+		return 0
+	var flying: int = 0
+	for i: int in range(_active_count):
+		if _life_phase[i] >= 0.0:
+			flying += 1
+	return flying
+
+
+func get_shooting_star_angles_deg_snapshot() -> PackedFloat32Array:
+	var result: PackedFloat32Array = PackedFloat32Array()
+	if _config.particle_type != ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+		return result
+	result.resize(_active_count)
+	for i: int in range(_active_count):
+		result[i] = rad_to_deg(_angle[i])
+	return result
+
+
 func trigger_beat_impulse(p_strength: float = 0.85) -> void:
 	var clamped: float = clampf(p_strength, 0.0, 1.0)
 	if clamped <= 0.0:
@@ -249,6 +290,8 @@ func trigger_beat_impulse(p_strength: float = 0.85) -> void:
 	_beat_impulse = maxf(_beat_impulse, clamped)
 	_beat_trigger_count += 1
 	_recompute_drive_metrics()
+	if is_effectively_active() and _config.particle_type == ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+		_wake_dormant_shooting_stars(clamped)
 
 
 func inject_audio_energy(p_energy: float) -> void:
@@ -294,6 +337,8 @@ func step_simulation(p_delta: float) -> void:
 		_step_mist(dt, bounds)
 	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
 		_step_sparkles(dt, bounds)
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+		_step_shooting_stars(dt, bounds)
 
 	queue_redraw()
 
@@ -310,6 +355,8 @@ func _draw() -> void:
 		_draw_mist()
 	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
 		_draw_sparkles()
+	elif _config.particle_type == ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+		_draw_shooting_stars()
 
 
 func _recompute_drive_metrics() -> void:
@@ -326,6 +373,8 @@ func _recompute_drive_metrics() -> void:
 	_current_streak_length_mult = 1.0 + (_current_drive * STREAK_LENGTH_BEAT_BOOST)
 	_current_sparkle_brightness_mult = 1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST)
 	_current_sparkle_halo_scale = SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST)
+	_current_shooting_star_speed_mult = 1.0 + (_current_drive * SHOOTING_STAR_SPEED_BEAT_BOOST)
+	_current_shooting_star_brightness_mult = 1.0 + (_current_drive * SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST)
 
 
 func _rebuild_pool() -> void:
@@ -350,6 +399,8 @@ func _rebuild_pool() -> void:
 			_spawn_mist(i, bounds, true)
 		elif _config.particle_type == ReactiveParticlesConfig.TYPE_SPARKLES:
 			_spawn_sparkle(i, bounds, true)
+		elif _config.particle_type == ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
+			_spawn_shooting_star(i, bounds, true)
 
 	_needs_clear_draw = false
 	queue_redraw()
@@ -756,6 +807,140 @@ func _draw_sparkles() -> void:
 			core_alpha
 		)
 		draw_circle(pos, core_r, core_col)
+
+
+func _spawn_shooting_star(p_index: int, p_bounds: Vector2, p_initial_fill: bool, p_force_active: bool = false, p_beat_strength: float = 0.0) -> void:
+	var angle_deg: float = _rng.randf_range(SHOOTING_STAR_MIN_ANGLE_DEG, SHOOTING_STAR_MAX_ANGLE_DEG)
+	var angle_rad: float = deg_to_rad(angle_deg)
+	var dir: Vector2 = Vector2(cos(angle_rad), sin(angle_rad))
+	var base_speed: float = _rng.randf_range(500.0, 820.0) * (1.0 + (p_beat_strength * 0.35))
+	var tail_len: float = _rng.randf_range(125.0, 235.0) * (1.0 + (p_beat_strength * 0.25))
+	var width_px: float = _rng.randf_range(1.6, 2.6)
+
+	var start_pos: Vector2 = Vector2.ZERO
+	if p_initial_fill and p_index < 2:
+		# Pre-seed 1-2 active streaks inside viewport for immediate live preview
+		start_pos = Vector2(
+			_rng.randf_range(p_bounds.x * 0.12, p_bounds.x * 0.58),
+			_rng.randf_range(p_bounds.y * 0.08, p_bounds.y * 0.45)
+		)
+	elif _rng.randf() < 0.65:
+		# Enter along top edge
+		start_pos = Vector2(_rng.randf_range(-p_bounds.x * 0.15, p_bounds.x * 0.72), -24.0)
+	else:
+		# Enter along left edge
+		start_pos = Vector2(-24.0, _rng.randf_range(p_bounds.y * 0.04, p_bounds.y * 0.46))
+
+	var is_active_now: bool = p_force_active or (p_initial_fill and p_index < 2)
+	var dormant_delay: float = -_rng.randf_range(0.55, 2.60)
+
+	_pos[p_index] = start_pos
+	_vel[p_index] = dir * base_speed
+	_size_param[p_index] = tail_len
+	_angle[p_index] = angle_rad
+	_ang_vel[p_index] = width_px
+	_alpha_base[p_index] = clampf(_rng.randf_range(0.58, 0.86) + (p_beat_strength * 0.14), 0.45, 0.96)
+	_life_phase[p_index] = 0.0 if is_active_now else dormant_delay
+	_life_speed[p_index] = 1.0
+	_sway_phase[p_index] = 0.0
+	_sway_freq[p_index] = 0.0
+	_sway_amp[p_index] = 0.0
+	_color_idx[p_index] = _rng.randi_range(0, SHOOTING_STAR_PALETTE.size() - 1)
+
+
+func _wake_dormant_shooting_stars(p_strength: float) -> void:
+	var bounds: Vector2 = _resolve_bounds()
+	var react_mult: float = _config.get_reactivity_multiplier()
+	var wake_limit: int = 2 if react_mult >= 1.3 else 1
+	var woken: int = 0
+	for i: int in range(_active_count):
+		if _life_phase[i] < 0.0:
+			_spawn_shooting_star(i, bounds, false, true, p_strength)
+			woken += 1
+			if woken >= wake_limit:
+				break
+
+
+func _step_shooting_stars(p_dt: float, p_bounds: Vector2) -> void:
+	var speed_mult: float = _current_shooting_star_speed_mult
+	for i: int in range(_active_count):
+		if _life_phase[i] < 0.0:
+			_life_phase[i] += p_dt
+			if _life_phase[i] >= 0.0:
+				_spawn_shooting_star(i, p_bounds, false, true, 0.0)
+			continue
+
+		_life_phase[i] += p_dt * 1.4
+		var pos: Vector2 = _pos[i] + (_vel[i] * speed_mult * p_dt)
+		var tail_len: float = _size_param[i]
+		var exit_margin: float = tail_len + 48.0
+		if pos.x > p_bounds.x + exit_margin or pos.y > p_bounds.y + exit_margin:
+			_spawn_shooting_star(i, p_bounds, false, false, 0.0)
+		else:
+			_pos[i] = pos
+
+
+func _draw_shooting_stars() -> void:
+	var bright_mult: float = _current_shooting_star_brightness_mult
+	var bounds: Vector2 = _resolve_bounds()
+	var palette_len: int = SHOOTING_STAR_PALETTE.size()
+	var seg_count: int = SHOOTING_STAR_TAIL_SEGMENTS
+
+	for i: int in range(_active_count):
+		if _life_phase[i] < 0.0:
+			continue
+
+		var head: Vector2 = _pos[i]
+		var angle_rad: float = _angle[i]
+		var dir: Vector2 = Vector2(cos(angle_rad), sin(angle_rad))
+		var tail_len: float = _size_param[i] * (1.0 + (_current_drive * 0.28))
+		var width_px: float = _ang_vel[i]
+
+		var fade_in: float = smoothstep(0.0, 0.18, _life_phase[i])
+		var edge_x: float = 1.0 - smoothstep(bounds.x * 0.80, bounds.x + (tail_len * 0.65), head.x)
+		var edge_y: float = 1.0 - smoothstep(bounds.y * 0.80, bounds.y + (tail_len * 0.65), head.y)
+		var edge_fade: float = minf(edge_x, edge_y)
+		var head_alpha: float = clampf(_alpha_base[i] * fade_in * edge_fade * bright_mult, 0.0, 0.94)
+		if head_alpha <= 0.01:
+			continue
+
+		var base_col: Color = SHOOTING_STAR_PALETTE[_color_idx[i] % palette_len]
+
+		# Tapered multi-segment diagonal tail from transparent back (t=0) to glowing head (t=1)
+		for seg_idx: int in range(seg_count):
+			var t0: float = float(seg_idx) / float(seg_count)
+			var t1: float = float(seg_idx + 1) / float(seg_count)
+			var t_mid: float = (t0 + t1) * 0.5
+			var seg_alpha: float = head_alpha * pow(t_mid, 1.9)
+			if seg_alpha <= 0.004:
+				continue
+
+			var p0: Vector2 = head - (dir * ((1.0 - t0) * tail_len))
+			var p1: Vector2 = head - (dir * ((1.0 - t1) * tail_len))
+			var seg_w: float = lerpf(0.75, width_px, t_mid)
+			var seg_col: Color = Color(
+				lerpf(base_col.r, 1.0, t_mid * 0.35),
+				lerpf(base_col.g, 1.0, t_mid * 0.35),
+				lerpf(base_col.b, 1.0, t_mid * 0.35),
+				seg_alpha
+			)
+			draw_line(p0, p1, seg_col, seg_w, true)
+
+		# Glowing circular head flare using shared _soft_radial_texture
+		if _soft_radial_texture != null:
+			var flare_r: float = width_px * (4.6 + (_current_drive * 2.2))
+			var flare_alpha: float = clampf(head_alpha * (0.64 + minf(0.24, _current_drive * 0.16)), 0.0, 0.82)
+			var flare_rect: Rect2 = Rect2(head.x - flare_r, head.y - flare_r, flare_r * 2.0, flare_r * 2.0)
+			var flare_tint: Color = Color(base_col.r, base_col.g, base_col.b, flare_alpha)
+			draw_texture_rect(_soft_radial_texture, flare_rect, false, flare_tint)
+
+		var core_col: Color = Color(
+			lerpf(base_col.r, 1.0, 0.72),
+			lerpf(base_col.g, 1.0, 0.72),
+			lerpf(base_col.b, 1.0, 0.72),
+			minf(0.98, head_alpha * 1.1)
+		)
+		draw_circle(head, width_px * 0.78, core_col)
 
 
 func _create_soft_radial_texture() -> GradientTexture2D:

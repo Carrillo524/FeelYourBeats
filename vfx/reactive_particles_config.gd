@@ -9,6 +9,7 @@ const TYPE_CIRCLES: String = "circles"
 const TYPE_SQUARES: String = "squares"
 const TYPE_MIST: String = "mist"
 const TYPE_SPARKLES: String = "sparkles"
+const TYPE_SHOOTING_STARS: String = "shooting_stars"
 
 const LEVEL_LOW: String = "low"
 const LEVEL_MEDIUM: String = "medium"
@@ -22,6 +23,10 @@ const MAX_MIST_LOW: int = 8
 const MAX_MIST_MEDIUM: int = 14
 const MAX_MIST_HIGH: int = 20
 
+const MAX_SHOOTING_STARS_LOW: int = 3
+const MAX_SHOOTING_STARS_MEDIUM: int = 6
+const MAX_SHOOTING_STARS_HIGH: int = 10
+
 const REACTIVITY_MULT_LOW: float = 0.45
 const REACTIVITY_MULT_MEDIUM: float = 1.00
 const REACTIVITY_MULT_HIGH: float = 1.55
@@ -32,6 +37,7 @@ const SUPPORTED_TYPES: PackedStringArray = [
 	TYPE_SQUARES,
 	TYPE_MIST,
 	TYPE_SPARKLES,
+	TYPE_SHOOTING_STARS,
 ]
 
 const SUPPORTED_LEVELS: PackedStringArray = [
@@ -124,6 +130,8 @@ func get_max_particle_count() -> int:
 func get_effective_particle_count() -> int:
 	if not is_rendered_type():
 		return 0
+	if particle_type == TYPE_SHOOTING_STARS:
+		return density_to_shooting_stars_count(density)
 	return density_to_max_count(density)
 
 
@@ -172,6 +180,8 @@ static func sanitize_type(p_raw_type: String) -> String:
 			return TYPE_MIST
 		TYPE_SPARKLES, "destellos":
 			return TYPE_SPARKLES
+		TYPE_SHOOTING_STARS, "estrellas fugaces", "estrellas_fugaces":
+			return TYPE_SHOOTING_STARS
 		_:
 			return TYPE_NONE
 
@@ -203,6 +213,16 @@ static func density_to_mist_count(p_density: String) -> int:
 	return density_to_max_count(p_density)
 
 
+static func density_to_shooting_stars_count(p_density: String) -> int:
+	match sanitize_level(p_density):
+		LEVEL_LOW:
+			return MAX_SHOOTING_STARS_LOW
+		LEVEL_HIGH:
+			return MAX_SHOOTING_STARS_HIGH
+		_:
+			return MAX_SHOOTING_STARS_MEDIUM
+
+
 static func reactivity_to_multiplier(p_level: String) -> float:
 	match sanitize_level(p_level):
 		LEVEL_LOW:
@@ -223,6 +243,8 @@ static func type_to_label(p_type: String) -> String:
 			return "Estelas"
 		TYPE_SPARKLES:
 			return "Destellos"
+		TYPE_SHOOTING_STARS:
+			return "Estrellas Fugaces"
 		_:
 			return "Ninguna"
 

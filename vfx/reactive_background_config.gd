@@ -7,7 +7,6 @@ const SETTINGS_SECTION: String = "reactive_background"
 const STYLE_CLASSIC: String = "classic"
 const STYLE_WAVES: String = "waves"
 const STYLE_AURORA: String = "aurora"
-const STYLE_SHOOTING_STARS: String = "shooting_stars"
 
 const LEVEL_LOW: String = "low"
 const LEVEL_MEDIUM: String = "medium"
@@ -21,7 +20,6 @@ const SUPPORTED_STYLES: PackedStringArray = [
 	STYLE_CLASSIC,
 	STYLE_WAVES,
 	STYLE_AURORA,
-	STYLE_SHOOTING_STARS,
 ]
 
 const SUPPORTED_LEVELS: PackedStringArray = [
@@ -98,12 +96,16 @@ func get_reactivity_multiplier() -> float:
 	return reactivity_to_multiplier(reactivity)
 
 
+func is_rendered_style() -> bool:
+	return SUPPORTED_STYLES.has(style)
+
+
 func is_rendered_in_phase8a() -> bool:
-	return style == STYLE_CLASSIC or style == STYLE_WAVES
+	return is_rendered_style()
 
 
 func is_reserved_for_phase8b() -> bool:
-	return style == STYLE_AURORA or style == STYLE_SHOOTING_STARS
+	return false
 
 
 func to_dict() -> Dictionary:
@@ -127,9 +129,8 @@ static func sanitize_style(p_raw_style: String) -> String:
 			return STYLE_WAVES
 		STYLE_AURORA:
 			return STYLE_AURORA
-		STYLE_SHOOTING_STARS, "estrellas fugaces", "estrellas_fugaces":
-			return STYLE_SHOOTING_STARS
 		_:
+			# Legacy "shooting_stars" (migrated to particles) and unknown values safely fall back to Classic
 			return STYLE_CLASSIC
 
 
@@ -162,8 +163,6 @@ static func style_to_label(p_style: String) -> String:
 			return "Ondas"
 		STYLE_AURORA:
 			return "Aurora"
-		STYLE_SHOOTING_STARS:
-			return "Estrellas Fugaces"
 		_:
 			return "Clásico"
 

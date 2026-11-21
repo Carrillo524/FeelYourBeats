@@ -33,22 +33,26 @@ const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
-const MAX_WAVE_RINGS: int = 22
-const WAVE_ARC_POINTS: int = 48
-const WAVE_AMBIENT_INTERVAL_SEC: float = 0.40
-const WAVE_PULSE_COOLDOWN_SEC: float = 0.14
-const WAVE_SPAWN_MARGIN_PX: float = 36.0
-const WAVE_MIN_MAX_RADIUS_PX: float = 65.0
-const WAVE_MAX_MAX_RADIUS_PX: float = 135.0
-const WAVE_FADE_IN_END: float = 0.12
-const WAVE_EDGE_FADE_START: float = 0.52
+const LIQUID_WAVE_COUNT: int = 3
+const LIQUID_WAVE_SEGMENTS: int = 32
+const LIQUID_WAVE_MIN_CREST_Y_RATIO: float = 0.50
+const LIQUID_WAVE_BEAT_DECAY_RATE: float = 5.0
 const WAVE_BASE_TOP_COLOR: Color = Color(0.035, 0.045, 0.11, 1.0)
 const WAVE_BASE_BOTTOM_COLOR: Color = Color(0.075, 0.03, 0.145, 1.0)
-const WAVE_RING_PALETTE: Array[Color] = [
-	Color(0.24, 0.90, 1.0, 1.0),
-	Color(0.68, 0.36, 1.0, 1.0),
-	Color(0.36, 0.72, 1.0, 1.0),
+const LIQUID_WAVE_COLORS: Array[Color] = [
+	Color(0.58, 0.30, 0.96, 1.0),
+	Color(0.24, 0.68, 1.0, 1.0),
+	Color(0.22, 0.92, 1.0, 1.0),
 ]
+
+const AURORA_CURTAIN_COUNT: int = 4
+const AURORA_RIBBON_SEGMENTS: int = 16
+const AURORA_BEAT_DECAY_RATE: float = 4.2
+const AURORA_BASE_TOP_COLOR: Color = Color(0.024, 0.036, 0.092, 1.0)
+const AURORA_BASE_BOTTOM_COLOR: Color = Color(0.052, 0.024, 0.112, 1.0)
+const AURORA_COLOR_CYAN: Color = Color(0.18, 0.90, 0.96, 1.0)
+const AURORA_COLOR_VIOLET: Color = Color(0.64, 0.30, 0.98, 1.0)
+const AURORA_COLOR_BLUE: Color = Color(0.24, 0.56, 1.0, 1.0)
 
 @export var dsp_clock: DSPClock = null
 @export var hit_judge: HitJudge = null
@@ -90,33 +94,35 @@ var _beat_pulse_count: int = 0
 var _intensity_change_count: int = 0
 var _spectrum_update_count: int = 0
 
-# Fixed-capacity raindrop wave ring pool (0 heap allocations per frame)
-var _wave_rng: RandomNumberGenerator = RandomNumberGenerator.new()
-var _wave_active_count: int = 0
-var _wave_centers: PackedVector2Array = PackedVector2Array()
-var _wave_radii: PackedFloat32Array = PackedFloat32Array()
-var _wave_max_radii: PackedFloat32Array = PackedFloat32Array()
-var _wave_speeds: PackedFloat32Array = PackedFloat32Array()
-var _wave_widths: PackedFloat32Array = PackedFloat32Array()
-var _wave_strengths: PackedFloat32Array = PackedFloat32Array()
-var _wave_color_indices: PackedInt32Array = PackedInt32Array()
-var _wave_ambient_timer: float = 0.0
-var _wave_pulse_cooldown: float = 0.0
-var _wave_color_cursor: int = 0
-var _wave_pulse_emit_count: int = 0
+# Continuous liquid waves & aurora procedural state (0 heap allocations per frame)
+var _liquid_wave_phases: PackedFloat32Array = PackedFloat32Array([0.0, 1.9, 3.8])
+var _liquid_wave_beat_boost: float = 0.0
+var _liquid_wave_drop_boost: float = 0.0
+var _liquid_wave_crest_pts: PackedVector2Array = PackedVector2Array()
+var _liquid_wave_last_min_y_ratio: float = 0.62
+var _liquid_wave_pulse_count: int = 0
+
+var _aurora_time: float = 0.0
+var _aurora_color_phase: float = 0.0
+var _aurora_beat_boost: float = 0.0
+var _aurora_drop_boost: float = 0.0
+var _aurora_pulse_count: int = 0
+var _quad_pts_buf: PackedVector2Array = PackedVector2Array()
+var _quad_cols_buf: PackedColorArray = PackedColorArray()
 
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	color = Color(0.05, 0.05, 0.12, 1.0)
-	_wave_rng.randomize()
+	_quad_pts_buf.resize(4)
+	_quad_cols_buf.resize(4)
+	_liquid_wave_crest_pts.resize(LIQUID_WAVE_SEGMENTS + 1)
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_setup_shader_material()
-	_allocate_wave_pool()
 	_apply_active_style_mode()
 	connect_dependencies()
 	_sync_shader_parameters()
@@ -192,15 +198,18 @@ func _process(p_delta: float) -> void:
 
 	_update_edge_halo(dt)
 	if is_waves_style_active():
-		step_wave_rings(dt)
+		step_liquid_waves(dt)
+	elif is_aurora_style_active():
+		step_aurora(dt)
 	else:
 		_sync_shader_parameters()
 
 
 func _draw() -> void:
-	if not is_waves_style_active():
-		return
-	_draw_waves_backdrop()
+	if is_waves_style_active():
+		_draw_liquid_waves_backdrop()
+	elif is_aurora_style_active():
+		_draw_aurora_backdrop()
 
 
 func apply_background_config(p_config: ReactiveBackgroundConfig) -> void:
@@ -223,118 +232,112 @@ func is_waves_style_active() -> bool:
 	return _bg_config.style == ReactiveBackgroundConfig.STYLE_WAVES
 
 
-func get_active_wave_ring_count() -> int:
-	return _wave_active_count
+func is_aurora_style_active() -> bool:
+	return _bg_config.style == ReactiveBackgroundConfig.STYLE_AURORA
 
 
-func get_wave_pulse_emit_count() -> int:
-	return _wave_pulse_emit_count
+func get_liquid_wave_count() -> int:
+	return LIQUID_WAVE_COUNT if is_waves_style_active() else 0
 
 
-func get_wave_ring_radii_snapshot() -> PackedFloat32Array:
-	var result: PackedFloat32Array = PackedFloat32Array()
-	result.resize(_wave_active_count)
-	for i: int in range(_wave_active_count):
-		result[i] = _wave_radii[i]
-	return result
-
-
-func get_wave_ring_centers_snapshot() -> PackedVector2Array:
-	var result: PackedVector2Array = PackedVector2Array()
-	result.resize(_wave_active_count)
-	for i: int in range(_wave_active_count):
-		result[i] = _wave_centers[i]
-	return result
-
-
-func get_wave_ring_max_radii_snapshot() -> PackedFloat32Array:
-	var result: PackedFloat32Array = PackedFloat32Array()
-	result.resize(_wave_active_count)
-	for i: int in range(_wave_active_count):
-		result[i] = _wave_max_radii[i]
-	return result
-
-
-func get_wave_ring_alphas_snapshot() -> PackedFloat32Array:
-	var result: PackedFloat32Array = PackedFloat32Array()
-	result.resize(_wave_active_count)
-	var beat_alpha_boost: float = 1.0 + (_beat_pulse * 0.35 * _bg_config.get_reactivity_multiplier())
-	for i: int in range(_wave_active_count):
-		result[i] = _compute_wave_ring_alpha(
-			_wave_radii[i],
-			_wave_strengths[i] * beat_alpha_boost,
-			_wave_max_radii[i]
-		)
-	return result
-
-
-func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, p_bypass_cooldown: bool = false) -> void:
-	if not is_waves_style_active():
-		return
-	if not p_bypass_cooldown and _wave_pulse_cooldown > 0.0:
-		return
-
-	var bounds: Vector2 = _resolve_draw_bounds()
+func get_liquid_wave_amplitude_multiplier() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var react_norm: float = clampf((react_mult - 0.55) / 0.90, 0.0, 1.0)
-	var s: float = clampf(p_strength, 0.25, 1.0)
-
-	var burst_count: int = 2
-	if react_mult <= 0.65:
-		burst_count = 2 if p_is_drop else 1
-	elif react_mult >= 1.35:
-		burst_count = 4 if p_is_drop else 3
-	else:
-		burst_count = 3 if p_is_drop else 2
-
-	for b_idx: int in range(burst_count):
-		var pos: Vector2 = _pick_random_wave_center(bounds)
-		var max_r: float = _pick_compact_wave_max_radius(bounds, true, p_is_drop)
-		var speed: float = lerpf(108.0, 178.0, s) * (1.16 if p_is_drop else 1.0) * lerpf(0.82, 1.24, react_norm) * _wave_rng.randf_range(0.90, 1.12)
-		var width_px: float = lerpf(1.9, 3.1, s) * (1.18 if p_is_drop else 1.0)
-		var strength: float = clampf((0.36 + (0.20 * s) + (0.08 if p_is_drop else 0.0)) * lerpf(0.76, 1.16, react_norm), 0.26, 0.60)
-		var col_idx: int = (1 if (p_is_drop and (b_idx % 2 == 0)) else (_wave_color_cursor % WAVE_RING_PALETTE.size()))
-		_wave_color_cursor += 1
-		_spawn_wave_ring(pos, 2.0, max_r, speed, width_px, strength, col_idx)
-
-	_wave_pulse_cooldown = WAVE_PULSE_COOLDOWN_SEC
-	_wave_pulse_emit_count += burst_count
-	queue_redraw()
+	var drive: float = clampf(((_liquid_wave_beat_boost * 0.78) + (_liquid_wave_drop_boost * 0.45) + (_smoothed_bass * 0.30)) * react_mult, 0.0, 1.55)
+	return 1.0 + (drive * 0.65)
 
 
-func step_wave_rings(p_delta: float) -> void:
+func get_liquid_wave_brightness_multiplier() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var drive: float = clampf(((_liquid_wave_beat_boost * 0.78) + (_liquid_wave_drop_boost * 0.45) + (_smoothed_bass * 0.30)) * react_mult, 0.0, 1.55)
+	return 1.0 + (drive * 0.48)
+
+
+func get_liquid_wave_min_crest_y_ratio() -> float:
+	return _liquid_wave_last_min_y_ratio
+
+
+func get_liquid_wave_phases_snapshot() -> PackedFloat32Array:
+	return _liquid_wave_phases.duplicate()
+
+
+func get_liquid_wave_pulse_count() -> int:
+	return _liquid_wave_pulse_count
+
+
+func get_aurora_curtain_count() -> int:
+	return AURORA_CURTAIN_COUNT if is_aurora_style_active() else 0
+
+
+func get_aurora_brightness_multiplier() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var drive: float = clampf(((_aurora_beat_boost * 0.75) + (_aurora_drop_boost * 0.50) + (_smoothed_bass * 0.25)) * react_mult, 0.0, 1.55)
+	return 1.0 + (drive * 0.58)
+
+
+func get_aurora_undulation_multiplier() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var drive: float = clampf(((_aurora_beat_boost * 0.75) + (_aurora_drop_boost * 0.50) + (_smoothed_mid * 0.25)) * react_mult, 0.0, 1.55)
+	return 1.0 + (drive * 0.48)
+
+
+func get_aurora_primary_color() -> Color:
+	return _sample_aurora_color(_aurora_color_phase)
+
+
+func get_aurora_pulse_count() -> int:
+	return _aurora_pulse_count
+
+
+func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_bypass_cooldown: bool = false) -> void:
+	var s: float = clampf(p_strength, 0.20, 1.0)
+	if is_waves_style_active():
+		_liquid_wave_beat_boost = maxf(_liquid_wave_beat_boost, s)
+		if p_is_drop:
+			_liquid_wave_drop_boost = maxf(_liquid_wave_drop_boost, s)
+		_liquid_wave_pulse_count += 1
+		queue_redraw()
+	elif is_aurora_style_active():
+		_aurora_beat_boost = maxf(_aurora_beat_boost, s)
+		if p_is_drop:
+			_aurora_drop_boost = maxf(_aurora_drop_boost, s)
+		_aurora_pulse_count += 1
+		queue_redraw()
+
+
+func step_liquid_waves(p_delta: float) -> void:
 	if not is_waves_style_active():
 		return
 	var dt: float = clampf(p_delta, 0.0, 0.1)
-	var bounds: Vector2 = _resolve_draw_bounds()
+	_liquid_wave_beat_boost *= exp(-LIQUID_WAVE_BEAT_DECAY_RATE * dt)
+	if _liquid_wave_beat_boost < 0.002:
+		_liquid_wave_beat_boost = 0.0
+	_liquid_wave_drop_boost *= exp(-3.4 * dt)
+	if _liquid_wave_drop_boost < 0.002:
+		_liquid_wave_drop_boost = 0.0
+
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var flow_boost: float = 1.0 + (((_liquid_wave_beat_boost * 0.45) + (_smoothed_bass * 0.25)) * react_mult)
+	_liquid_wave_phases[0] = wrapf(_liquid_wave_phases[0] + (0.62 * flow_boost * dt), 0.0, TAU * 4.0)
+	_liquid_wave_phases[1] = wrapf(_liquid_wave_phases[1] - (0.88 * flow_boost * dt), 0.0, TAU * 4.0)
+	_liquid_wave_phases[2] = wrapf(_liquid_wave_phases[2] + (1.18 * flow_boost * dt), 0.0, TAU * 4.0)
+	_update_liquid_wave_min_crest_ratio()
+	queue_redraw()
 
-	_wave_pulse_cooldown = maxf(0.0, _wave_pulse_cooldown - dt)
-	_wave_ambient_timer += dt
-	while _wave_ambient_timer >= WAVE_AMBIENT_INTERVAL_SEC:
-		_wave_ambient_timer -= WAVE_AMBIENT_INTERVAL_SEC
-		var pos: Vector2 = _pick_random_wave_center(bounds)
-		var max_r: float = _pick_compact_wave_max_radius(bounds, false, false)
-		var speed: float = _wave_rng.randf_range(66.0, 110.0)
-		var col_idx: int = _wave_color_cursor % WAVE_RING_PALETTE.size()
-		_wave_color_cursor += 1
-		_spawn_wave_ring(pos, 2.0, max_r, speed, 1.8, _wave_rng.randf_range(0.28, 0.40), col_idx)
 
-	var dynamic_boost: float = 1.0 + (((_beat_pulse * 0.55) + (_smoothed_bass * 0.35)) * react_mult)
-	var write_idx: int = 0
-	for read_idx: int in range(_wave_active_count):
-		var ring_max_r: float = _wave_max_radii[read_idx]
-		var next_r: float = _wave_radii[read_idx] + (_wave_speeds[read_idx] * dynamic_boost * dt)
-		if next_r < ring_max_r:
-			_wave_centers[write_idx] = _wave_centers[read_idx]
-			_wave_radii[write_idx] = next_r
-			_wave_max_radii[write_idx] = ring_max_r
-			_wave_speeds[write_idx] = _wave_speeds[read_idx]
-			_wave_widths[write_idx] = _wave_widths[read_idx]
-			_wave_strengths[write_idx] = _wave_strengths[read_idx]
-			_wave_color_indices[write_idx] = _wave_color_indices[read_idx]
-			write_idx += 1
-	_wave_active_count = write_idx
+func step_aurora(p_delta: float) -> void:
+	if not is_aurora_style_active():
+		return
+	var dt: float = clampf(p_delta, 0.0, 0.1)
+	_aurora_beat_boost *= exp(-AURORA_BEAT_DECAY_RATE * dt)
+	if _aurora_beat_boost < 0.002:
+		_aurora_beat_boost = 0.0
+	_aurora_drop_boost *= exp(-3.0 * dt)
+	if _aurora_drop_boost < 0.002:
+		_aurora_drop_boost = 0.0
+
+	var undul_mult: float = get_aurora_undulation_multiplier()
+	_aurora_time += dt * (0.65 + (0.35 * undul_mult))
+	_aurora_color_phase = wrapf(_aurora_color_phase + (dt * 0.28 * (1.0 + (_aurora_drop_boost * 0.5))), 0.0, TAU)
 	queue_redraw()
 
 
@@ -722,180 +725,193 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
 
 
-func _allocate_wave_pool() -> void:
-	if _wave_radii.size() == MAX_WAVE_RINGS:
-		return
-	_wave_centers.resize(MAX_WAVE_RINGS)
-	_wave_radii.resize(MAX_WAVE_RINGS)
-	_wave_max_radii.resize(MAX_WAVE_RINGS)
-	_wave_speeds.resize(MAX_WAVE_RINGS)
-	_wave_widths.resize(MAX_WAVE_RINGS)
-	_wave_strengths.resize(MAX_WAVE_RINGS)
-	_wave_color_indices.resize(MAX_WAVE_RINGS)
-
-
 func _apply_active_style_mode() -> void:
-	_allocate_wave_pool()
 	if is_waves_style_active():
 		material = null
 		color = WAVE_BASE_TOP_COLOR
-		if _wave_active_count <= 0:
-			_seed_ambient_wave_rings()
+		_update_liquid_wave_min_crest_ratio()
+		queue_redraw()
+	elif is_aurora_style_active():
+		material = null
+		color = AURORA_BASE_TOP_COLOR
 		queue_redraw()
 	else:
 		_setup_shader_material()
 		material = _shader_material
-		_wave_active_count = 0
-		_wave_ambient_timer = 0.0
-		_wave_pulse_cooldown = 0.0
+		_liquid_wave_beat_boost = 0.0
+		_liquid_wave_drop_boost = 0.0
+		_aurora_beat_boost = 0.0
+		_aurora_drop_boost = 0.0
 		_sync_shader_parameters()
 		queue_redraw()
 
 
-func _seed_ambient_wave_rings() -> void:
+func _draw_vertical_dark_gradient(p_w: float, p_h: float, p_top: Color, p_bottom: Color) -> void:
+	_quad_pts_buf[0] = Vector2(0.0, 0.0)
+	_quad_pts_buf[1] = Vector2(p_w, 0.0)
+	_quad_pts_buf[2] = Vector2(p_w, p_h)
+	_quad_pts_buf[3] = Vector2(0.0, p_h)
+	_quad_cols_buf[0] = p_top
+	_quad_cols_buf[1] = p_top
+	_quad_cols_buf[2] = p_bottom
+	_quad_cols_buf[3] = p_bottom
+	draw_polygon(_quad_pts_buf, _quad_cols_buf)
+
+
+func _sample_liquid_wave_y(p_layer_idx: int, p_nx: float, p_h: float, p_amp_mult: float) -> float:
+	var base_ratios: PackedFloat32Array = PackedFloat32Array([0.62, 0.73, 0.84])
+	var freqs: PackedFloat32Array = PackedFloat32Array([1.50, 2.10, 2.65])
+	var base_amps: PackedFloat32Array = PackedFloat32Array([0.032, 0.028, 0.024])
+	var phase: float = _liquid_wave_phases[p_layer_idx]
+	var freq: float = freqs[p_layer_idx] * TAU
+	var amp_px: float = p_h * base_amps[p_layer_idx] * p_amp_mult
+	var harmonic: float = (sin((p_nx * freq) + phase) * 0.65) + (sin((p_nx * freq * 1.73) - (phase * 0.62)) * 0.35)
+	var raw_y: float = (p_h * base_ratios[p_layer_idx]) - (harmonic * amp_px)
+	return maxf(p_h * LIQUID_WAVE_MIN_CREST_Y_RATIO, raw_y)
+
+
+func _update_liquid_wave_min_crest_ratio() -> void:
 	var bounds: Vector2 = _resolve_draw_bounds()
-	_wave_active_count = 0
-	_wave_ambient_timer = 0.0
-	_wave_pulse_cooldown = 0.0
-	var seed_fractions: PackedFloat32Array = PackedFloat32Array([0.10, 0.24, 0.40, 0.56, 0.70, 0.82])
-	for i: int in range(seed_fractions.size()):
-		var pos: Vector2 = _pick_random_wave_center(bounds)
-		var max_r: float = _pick_compact_wave_max_radius(bounds, false, false)
-		_spawn_wave_ring(
-			pos,
-			maxf(2.0, max_r * seed_fractions[i]),
-			max_r,
-			_wave_rng.randf_range(68.0, 108.0),
-			1.8,
-			_wave_rng.randf_range(0.28, 0.40),
-			i % WAVE_RING_PALETTE.size()
-		)
-	_wave_color_cursor = seed_fractions.size()
+	var h: float = maxf(1.0, bounds.y)
+	var amp_mult: float = get_liquid_wave_amplitude_multiplier()
+	var min_y: float = h
+	for layer_idx: int in range(LIQUID_WAVE_COUNT):
+		for s_idx: int in range(LIQUID_WAVE_SEGMENTS + 1):
+			var nx: float = float(s_idx) / float(LIQUID_WAVE_SEGMENTS)
+			var y_val: float = _sample_liquid_wave_y(layer_idx, nx, h, amp_mult)
+			if y_val < min_y:
+				min_y = y_val
+	_liquid_wave_last_min_y_ratio = min_y / h
 
 
-func _pick_random_wave_center(p_bounds: Vector2) -> Vector2:
-	var margin_x: float = minf(WAVE_SPAWN_MARGIN_PX, p_bounds.x * 0.25)
-	var margin_y: float = minf(WAVE_SPAWN_MARGIN_PX, p_bounds.y * 0.25)
-	var max_x: float = maxf(margin_x + 1.0, p_bounds.x - margin_x)
-	var max_y: float = maxf(margin_y + 1.0, p_bounds.y - margin_y)
-	return Vector2(
-		_wave_rng.randf_range(margin_x, max_x),
-		_wave_rng.randf_range(margin_y, max_y)
-	)
-
-
-func _pick_compact_wave_max_radius(p_bounds: Vector2, p_is_beat: bool, p_is_drop: bool) -> float:
-	var rel_low: float = clampf(p_bounds.x * 0.14, WAVE_MIN_MAX_RADIUS_PX, WAVE_MAX_MAX_RADIUS_PX)
-	var rel_high: float = clampf(p_bounds.x * 0.28, WAVE_MIN_MAX_RADIUS_PX, WAVE_MAX_MAX_RADIUS_PX)
-	var lo: float = minf(WAVE_MIN_MAX_RADIUS_PX, rel_low)
-	var hi: float = minf(WAVE_MAX_MAX_RADIUS_PX, maxf(WAVE_MIN_MAX_RADIUS_PX + 20.0, rel_high))
-	if p_is_drop:
-		lo = clampf(lerpf(lo, hi, 0.45), WAVE_MIN_MAX_RADIUS_PX, hi)
-	elif p_is_beat:
-		lo = clampf(lerpf(lo, hi, 0.25), WAVE_MIN_MAX_RADIUS_PX, hi)
-	return clampf(_wave_rng.randf_range(lo, hi), WAVE_MIN_MAX_RADIUS_PX, WAVE_MAX_MAX_RADIUS_PX)
-
-
-func _spawn_wave_ring(
-	p_center: Vector2,
-	p_radius: float,
-	p_max_radius: float,
-	p_speed: float,
-	p_width: float,
-	p_strength: float,
-	p_color_index: int
-) -> void:
-	_allocate_wave_pool()
-	var slot: int = _wave_active_count
-	if slot >= MAX_WAVE_RINGS:
-		# Replace the ring closest to completion (highest progress ratio) to stay within budget
-		var oldest_idx: int = 0
-		var max_progress: float = _wave_radii[0] / maxf(1.0, _wave_max_radii[0])
-		for i: int in range(1, MAX_WAVE_RINGS):
-			var progress: float = _wave_radii[i] / maxf(1.0, _wave_max_radii[i])
-			if progress > max_progress:
-				max_progress = progress
-				oldest_idx = i
-		slot = oldest_idx
-	else:
-		_wave_active_count += 1
-
-	_wave_centers[slot] = p_center
-	_wave_radii[slot] = maxf(2.0, p_radius)
-	_wave_max_radii[slot] = clampf(p_max_radius, WAVE_MIN_MAX_RADIUS_PX, WAVE_MAX_MAX_RADIUS_PX)
-	_wave_speeds[slot] = maxf(32.0, p_speed)
-	_wave_widths[slot] = clampf(p_width, 1.2, 4.2)
-	_wave_strengths[slot] = clampf(p_strength, 0.14, 0.62)
-	_wave_color_indices[slot] = posmod(p_color_index, WAVE_RING_PALETTE.size())
-
-
-func _draw_waves_backdrop() -> void:
+func _draw_liquid_waves_backdrop() -> void:
 	var bounds: Vector2 = _resolve_draw_bounds()
 	var w: float = bounds.x
 	var h: float = bounds.y
+	_draw_vertical_dark_gradient(w, h, WAVE_BASE_TOP_COLOR, WAVE_BASE_BOTTOM_COLOR)
 
-	# Dark base vertical gradient matching the classic palette without glare
-	var quad_pts: PackedVector2Array = PackedVector2Array([
-		Vector2(0.0, 0.0),
-		Vector2(w, 0.0),
-		Vector2(w, h),
-		Vector2(0.0, h),
-	])
-	var quad_cols: PackedColorArray = PackedColorArray([
-		WAVE_BASE_TOP_COLOR,
-		WAVE_BASE_TOP_COLOR,
-		WAVE_BASE_BOTTOM_COLOR,
-		WAVE_BASE_BOTTOM_COLOR,
-	])
-	draw_polygon(quad_pts, quad_cols)
+	var amp_mult: float = get_liquid_wave_amplitude_multiplier()
+	var bright_mult: float = get_liquid_wave_brightness_multiplier()
+	var fill_alphas: PackedFloat32Array = PackedFloat32Array([0.16, 0.20, 0.24])
+	var crest_alphas: PackedFloat32Array = PackedFloat32Array([0.44, 0.56, 0.68])
 
-	var palette_len: int = WAVE_RING_PALETTE.size()
-	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var beat_glow_lift: float = 1.0 + (_beat_pulse * 0.22 * react_mult)
-	var beat_alpha_lift: float = 1.0 + (_beat_pulse * 0.35 * react_mult)
+	if _liquid_wave_crest_pts.size() != LIQUID_WAVE_SEGMENTS + 1:
+		_liquid_wave_crest_pts.resize(LIQUID_WAVE_SEGMENTS + 1)
 
-	# 4-layer translucent soft halo per raindrop ring using unfilled draw_arc (no WorldEnvironment)
-	for i: int in range(_wave_active_count):
-		var radius: float = _wave_radii[i]
-		var ring_max_r: float = _wave_max_radii[i]
-		if radius <= 1.5 or radius >= ring_max_r:
-			continue
+	for layer_idx: int in range(LIQUID_WAVE_COUNT):
+		var col: Color = LIQUID_WAVE_COLORS[layer_idx]
+		var top_fill_alpha: float = clampf(fill_alphas[layer_idx] * bright_mult, 0.0, 0.34)
+		var fill_top_col: Color = Color(col.r, col.g, col.b, top_fill_alpha)
+		var fill_bot_col: Color = Color(col.r * 0.45, col.g * 0.45, col.b * 0.60, 0.0)
 
-		var base_alpha: float = _compute_wave_ring_alpha(
-			radius,
-			_wave_strengths[i] * beat_alpha_lift,
-			ring_max_r
-		)
-		if base_alpha <= 0.004:
-			continue
+		for s_idx: int in range(LIQUID_WAVE_SEGMENTS + 1):
+			var nx: float = float(s_idx) / float(LIQUID_WAVE_SEGMENTS)
+			var x_pos: float = nx * w
+			var y_pos: float = _sample_liquid_wave_y(layer_idx, nx, h, amp_mult)
+			_liquid_wave_crest_pts[s_idx] = Vector2(x_pos, y_pos)
 
-		var ring_center: Vector2 = _wave_centers[i]
-		var col: Color = WAVE_RING_PALETTE[_wave_color_indices[i] % palette_len]
-		var width_px: float = _wave_widths[i] * beat_glow_lift
+		# Translucent downward gradient fill per wave segment
+		for q_idx: int in range(LIQUID_WAVE_SEGMENTS):
+			var p0: Vector2 = _liquid_wave_crest_pts[q_idx]
+			var p1: Vector2 = _liquid_wave_crest_pts[q_idx + 1]
+			var fill_depth: float = minf(h, maxf(p0.y, p1.y) + (h * 0.36))
+			_quad_pts_buf[0] = p0
+			_quad_pts_buf[1] = p1
+			_quad_pts_buf[2] = Vector2(p1.x, fill_depth)
+			_quad_pts_buf[3] = Vector2(p0.x, fill_depth)
+			_quad_cols_buf[0] = fill_top_col
+			_quad_cols_buf[1] = fill_top_col
+			_quad_cols_buf[2] = fill_bot_col
+			_quad_cols_buf[3] = fill_bot_col
+			draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
-		var outer_halo_col: Color = Color(col.r, col.g, col.b, base_alpha * 0.12)
-		var mid_halo_col: Color = Color(col.r, col.g, col.b, base_alpha * 0.24)
-		var inner_halo_col: Color = Color(col.r, col.g, col.b, base_alpha * 0.44)
+		# Soft 3-layer blurred neon upper crest (no WorldEnvironment)
+		var crest_alpha: float = clampf(crest_alphas[layer_idx] * bright_mult, 0.0, 0.80)
+		var outer_col: Color = Color(col.r, col.g, col.b, crest_alpha * 0.16)
+		var mid_col: Color = Color(col.r, col.g, col.b, crest_alpha * 0.34)
 		var core_col: Color = Color(
-			lerpf(col.r, 1.0, 0.32),
-			lerpf(col.g, 1.0, 0.32),
-			lerpf(col.b, 1.0, 0.32),
-			minf(0.68, base_alpha * 0.92)
+			lerpf(col.r, 1.0, 0.38),
+			lerpf(col.g, 1.0, 0.38),
+			lerpf(col.b, 1.0, 0.38),
+			crest_alpha
 		)
-
-		draw_arc(ring_center, radius, 0.0, TAU, WAVE_ARC_POINTS, outer_halo_col, width_px * 6.5, true)
-		draw_arc(ring_center, radius, 0.0, TAU, WAVE_ARC_POINTS, mid_halo_col, width_px * 3.8, true)
-		draw_arc(ring_center, radius, 0.0, TAU, WAVE_ARC_POINTS, inner_halo_col, width_px * 2.0, true)
-		draw_arc(ring_center, radius, 0.0, TAU, WAVE_ARC_POINTS, core_col, width_px, true)
+		draw_polyline(_liquid_wave_crest_pts, outer_col, 15.0, true)
+		draw_polyline(_liquid_wave_crest_pts, mid_col, 6.5, true)
+		draw_polyline(_liquid_wave_crest_pts, core_col, 2.2, true)
 
 
-func _compute_wave_ring_alpha(p_radius: float, p_strength: float, p_max_radius: float) -> float:
-	if p_max_radius <= 1.0:
-		return 0.0
-	var norm_r: float = clampf(p_radius / p_max_radius, 0.0, 1.0)
-	var fade_in: float = smoothstep(0.0, WAVE_FADE_IN_END, norm_r)
-	var edge_fade: float = pow(1.0 - smoothstep(WAVE_EDGE_FADE_START, 1.0, norm_r), 1.35)
-	return clampf(p_strength * fade_in * edge_fade, 0.0, 0.66)
+func _sample_aurora_color(p_phase: float) -> Color:
+	var norm: float = fposmod(p_phase / TAU, 1.0)
+	if norm < 0.3333:
+		return AURORA_COLOR_CYAN.lerp(AURORA_COLOR_VIOLET, smoothstep(0.0, 0.3333, norm))
+	elif norm < 0.6666:
+		return AURORA_COLOR_VIOLET.lerp(AURORA_COLOR_BLUE, smoothstep(0.3333, 0.6666, norm))
+	return AURORA_COLOR_BLUE.lerp(AURORA_COLOR_CYAN, smoothstep(0.6666, 1.0, norm))
+
+
+func _draw_aurora_backdrop() -> void:
+	var bounds: Vector2 = _resolve_draw_bounds()
+	var w: float = bounds.x
+	var h: float = bounds.y
+	_draw_vertical_dark_gradient(w, h, AURORA_BASE_TOP_COLOR, AURORA_BASE_BOTTOM_COLOR)
+
+	var bright_mult: float = get_aurora_brightness_multiplier()
+	var undul_mult: float = get_aurora_undulation_multiplier()
+
+	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.16, 0.42, 0.66, 0.86])
+	var slants: PackedFloat32Array = PackedFloat32Array([0.14, -0.10, 0.12, -0.13])
+	var half_widths: PackedFloat32Array = PackedFloat32Array([0.24, 0.28, 0.25, 0.22])
+	var y_starts: PackedFloat32Array = PackedFloat32Array([0.04, 0.08, 0.05, 0.10])
+	var y_ends: PackedFloat32Array = PackedFloat32Array([0.74, 0.82, 0.78, 0.72])
+	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 1.55, 3.10, 4.65])
+
+	for c_idx: int in range(AURORA_CURTAIN_COUNT):
+		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15))
+		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15) + 1.65)
+		var base_alpha: float = clampf((0.11 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, 0.24)
+		var y_top_px: float = h * y_starts[c_idx]
+		var y_bot_px: float = h * y_ends[c_idx]
+		var span_y: float = maxf(1.0, y_bot_px - y_top_px)
+		var base_hw: float = w * half_widths[c_idx]
+		var sway_amp: float = w * 0.065 * undul_mult
+
+		# Two soft passes per curtain (wide outer veil + inner luminous core) for diffuse blur
+		for pass_idx: int in range(2):
+			var width_scale: float = 1.48 if pass_idx == 0 else 0.72
+			var pass_alpha_scale: float = 0.52 if pass_idx == 0 else 0.92
+			for s_idx: int in range(AURORA_RIBBON_SEGMENTS):
+				var t0: float = float(s_idx) / float(AURORA_RIBBON_SEGMENTS)
+				var t1: float = float(s_idx + 1) / float(AURORA_RIBBON_SEGMENTS)
+
+				var y0: float = y_top_px + (t0 * span_y)
+				var y1: float = y_top_px + (t1 * span_y)
+
+				var sway0: float = sin((_aurora_time * 0.75) + (t0 * 3.4) + phase_offsets[c_idx]) * sway_amp
+				var sway1: float = sin((_aurora_time * 0.75) + (t1 * 3.4) + phase_offsets[c_idx]) * sway_amp
+
+				var cx0: float = (w * (x_anchors[c_idx] + (slants[c_idx] * (t0 - 0.5)))) + sway0
+				var cx1: float = (w * (x_anchors[c_idx] + (slants[c_idx] * (t1 - 0.5)))) + sway1
+
+				var hw0: float = base_hw * width_scale * (0.78 + (0.28 * sin(t0 * PI)))
+				var hw1: float = base_hw * width_scale * (0.78 + (0.28 * sin(t1 * PI)))
+
+				var env0: float = pow(sin(clampf(t0, 0.0, 1.0) * PI), 1.35)
+				var env1: float = pow(sin(clampf(t1, 0.0, 1.0) * PI), 1.35)
+
+				var c0_rgb: Color = col_top.lerp(col_bot, t0)
+				var c1_rgb: Color = col_top.lerp(col_bot, t1)
+				var c0: Color = Color(c0_rgb.r, c0_rgb.g, c0_rgb.b, base_alpha * pass_alpha_scale * env0)
+				var c1: Color = Color(c1_rgb.r, c1_rgb.g, c1_rgb.b, base_alpha * pass_alpha_scale * env1)
+
+				_quad_pts_buf[0] = Vector2(cx0 - hw0, y0)
+				_quad_pts_buf[1] = Vector2(cx0 + hw0, y0)
+				_quad_pts_buf[2] = Vector2(cx1 + hw1, y1)
+				_quad_pts_buf[3] = Vector2(cx1 - hw1, y1)
+				_quad_cols_buf[0] = c0
+				_quad_cols_buf[1] = c0
+				_quad_cols_buf[2] = c1
+				_quad_cols_buf[3] = c1
+				draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 
 func _resolve_draw_bounds() -> Vector2:
