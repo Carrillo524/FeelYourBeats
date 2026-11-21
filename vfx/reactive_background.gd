@@ -33,16 +33,19 @@ const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
-const LIQUID_WAVE_COUNT: int = 3
-const LIQUID_WAVE_SEGMENTS: int = 32
-const LIQUID_WAVE_MIN_CREST_Y_RATIO: float = 0.50
-const LIQUID_WAVE_BEAT_DECAY_RATE: float = 5.0
-const WAVE_BASE_TOP_COLOR: Color = Color(0.035, 0.045, 0.11, 1.0)
-const WAVE_BASE_BOTTOM_COLOR: Color = Color(0.075, 0.03, 0.145, 1.0)
-const LIQUID_WAVE_COLORS: Array[Color] = [
-	Color(0.58, 0.30, 0.96, 1.0),
-	Color(0.24, 0.68, 1.0, 1.0),
-	Color(0.22, 0.92, 1.0, 1.0),
+const TUNNEL_FRAME_COUNT: int = 12
+const TUNNEL_MIN_SCALE: float = 0.04
+const TUNNEL_MAX_SCALE: float = 1.15
+const TUNNEL_BASE_DEPTH_SPEED: float = 0.28
+const TUNNEL_BEAT_DECAY_RATE: float = 4.8
+const TUNNEL_DROP_DECAY_RATE: float = 2.2
+const TUNNEL_CHAMFER_RATIO: float = 0.20
+const WAVE_BASE_TOP_COLOR: Color = Color(0.032, 0.042, 0.105, 1.0)
+const WAVE_BASE_BOTTOM_COLOR: Color = Color(0.068, 0.028, 0.138, 1.0)
+const TUNNEL_FRAME_COLORS: Array[Color] = [
+	Color(0.22, 0.90, 1.0, 1.0),
+	Color(0.66, 0.34, 1.0, 1.0),
+	Color(0.32, 0.68, 1.0, 1.0),
 ]
 
 const AURORA_CURTAIN_COUNT: int = 4
@@ -94,13 +97,12 @@ var _beat_pulse_count: int = 0
 var _intensity_change_count: int = 0
 var _spectrum_update_count: int = 0
 
-# Continuous liquid waves & aurora procedural state (0 heap allocations per frame)
-var _liquid_wave_phases: PackedFloat32Array = PackedFloat32Array([0.0, 1.9, 3.8])
-var _liquid_wave_beat_boost: float = 0.0
-var _liquid_wave_drop_boost: float = 0.0
-var _liquid_wave_crest_pts: PackedVector2Array = PackedVector2Array()
-var _liquid_wave_last_min_y_ratio: float = 0.62
-var _liquid_wave_pulse_count: int = 0
+# Perspective neon tunnel & aurora procedural state (0 heap allocations per frame)
+var _tunnel_depths: PackedFloat32Array = PackedFloat32Array()
+var _tunnel_beat_boost: float = 0.0
+var _tunnel_drop_boost: float = 0.0
+var _tunnel_frame_pts: PackedVector2Array = PackedVector2Array()
+var _tunnel_pulse_count: int = 0
 
 var _aurora_time: float = 0.0
 var _aurora_color_phase: float = 0.0
@@ -116,7 +118,8 @@ func _init() -> void:
 	color = Color(0.05, 0.05, 0.12, 1.0)
 	_quad_pts_buf.resize(4)
 	_quad_cols_buf.resize(4)
-	_liquid_wave_crest_pts.resize(LIQUID_WAVE_SEGMENTS + 1)
+	_tunnel_frame_pts.resize(9)
+	_init_tunnel_depths()
 
 
 func _ready() -> void:
@@ -198,7 +201,7 @@ func _process(p_delta: float) -> void:
 
 	_update_edge_halo(dt)
 	if is_waves_style_active():
-		step_liquid_waves(dt)
+		step_tunnel(dt)
 	elif is_aurora_style_active():
 		step_aurora(dt)
 	else:
@@ -207,7 +210,7 @@ func _process(p_delta: float) -> void:
 
 func _draw() -> void:
 	if is_waves_style_active():
-		_draw_liquid_waves_backdrop()
+		_draw_tunnel_backdrop()
 	elif is_aurora_style_active():
 		_draw_aurora_backdrop()
 
@@ -236,32 +239,44 @@ func is_aurora_style_active() -> bool:
 	return _bg_config.style == ReactiveBackgroundConfig.STYLE_AURORA
 
 
-func get_liquid_wave_count() -> int:
-	return LIQUID_WAVE_COUNT if is_waves_style_active() else 0
+func get_tunnel_frame_count() -> int:
+	return TUNNEL_FRAME_COUNT if is_waves_style_active() else 0
 
 
-func get_liquid_wave_amplitude_multiplier() -> float:
+func get_tunnel_speed_multiplier() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var drive: float = clampf(((_liquid_wave_beat_boost * 0.78) + (_liquid_wave_drop_boost * 0.45) + (_smoothed_bass * 0.30)) * react_mult, 0.0, 1.55)
+	var tier_drop: float = 0.55 if _current_tier >= 2 else 0.0
+	var drive: float = clampf(
+		((_tunnel_beat_boost * 0.72) + maxf(_tunnel_drop_boost * 0.65, tier_drop) + (_smoothed_bass * 0.35)) * react_mult,
+		0.0,
+		1.85
+	)
+	return 1.0 + (drive * 1.45)
+
+
+func get_tunnel_brightness_multiplier() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var tier_drop: float = 0.45 if _current_tier >= 2 else 0.0
+	var drive: float = clampf(
+		((_tunnel_beat_boost * 0.72) + maxf(_tunnel_drop_boost * 0.65, tier_drop) + (_smoothed_bass * 0.30)) * react_mult,
+		0.0,
+		1.75
+	)
 	return 1.0 + (drive * 0.65)
 
 
-func get_liquid_wave_brightness_multiplier() -> float:
-	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var drive: float = clampf(((_liquid_wave_beat_boost * 0.78) + (_liquid_wave_drop_boost * 0.45) + (_smoothed_bass * 0.30)) * react_mult, 0.0, 1.55)
-	return 1.0 + (drive * 0.48)
+func get_tunnel_scales_snapshot() -> PackedFloat32Array:
+	var result: PackedFloat32Array = PackedFloat32Array()
+	if not is_waves_style_active():
+		return result
+	result.resize(_tunnel_depths.size())
+	for i: int in range(_tunnel_depths.size()):
+		result[i] = _depth_to_tunnel_scale(_tunnel_depths[i])
+	return result
 
 
-func get_liquid_wave_min_crest_y_ratio() -> float:
-	return _liquid_wave_last_min_y_ratio
-
-
-func get_liquid_wave_phases_snapshot() -> PackedFloat32Array:
-	return _liquid_wave_phases.duplicate()
-
-
-func get_liquid_wave_pulse_count() -> int:
-	return _liquid_wave_pulse_count
+func get_tunnel_pulse_count() -> int:
+	return _tunnel_pulse_count
 
 
 func get_aurora_curtain_count() -> int:
@@ -291,10 +306,10 @@ func get_aurora_pulse_count() -> int:
 func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_bypass_cooldown: bool = false) -> void:
 	var s: float = clampf(p_strength, 0.20, 1.0)
 	if is_waves_style_active():
-		_liquid_wave_beat_boost = maxf(_liquid_wave_beat_boost, s)
+		_tunnel_beat_boost = maxf(_tunnel_beat_boost, s)
 		if p_is_drop:
-			_liquid_wave_drop_boost = maxf(_liquid_wave_drop_boost, s)
-		_liquid_wave_pulse_count += 1
+			_tunnel_drop_boost = maxf(_tunnel_drop_boost, s)
+		_tunnel_pulse_count += 1
 		queue_redraw()
 	elif is_aurora_style_active():
 		_aurora_beat_boost = maxf(_aurora_beat_boost, s)
@@ -304,23 +319,21 @@ func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_by
 		queue_redraw()
 
 
-func step_liquid_waves(p_delta: float) -> void:
+func step_tunnel(p_delta: float) -> void:
 	if not is_waves_style_active():
 		return
 	var dt: float = clampf(p_delta, 0.0, 0.1)
-	_liquid_wave_beat_boost *= exp(-LIQUID_WAVE_BEAT_DECAY_RATE * dt)
-	if _liquid_wave_beat_boost < 0.002:
-		_liquid_wave_beat_boost = 0.0
-	_liquid_wave_drop_boost *= exp(-3.4 * dt)
-	if _liquid_wave_drop_boost < 0.002:
-		_liquid_wave_drop_boost = 0.0
+	_tunnel_beat_boost *= exp(-TUNNEL_BEAT_DECAY_RATE * dt)
+	if _tunnel_beat_boost < 0.002:
+		_tunnel_beat_boost = 0.0
+	_tunnel_drop_boost *= exp(-TUNNEL_DROP_DECAY_RATE * dt)
+	if _tunnel_drop_boost < 0.002:
+		_tunnel_drop_boost = 0.0
 
-	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var flow_boost: float = 1.0 + (((_liquid_wave_beat_boost * 0.45) + (_smoothed_bass * 0.25)) * react_mult)
-	_liquid_wave_phases[0] = wrapf(_liquid_wave_phases[0] + (0.62 * flow_boost * dt), 0.0, TAU * 4.0)
-	_liquid_wave_phases[1] = wrapf(_liquid_wave_phases[1] - (0.88 * flow_boost * dt), 0.0, TAU * 4.0)
-	_liquid_wave_phases[2] = wrapf(_liquid_wave_phases[2] + (1.18 * flow_boost * dt), 0.0, TAU * 4.0)
-	_update_liquid_wave_min_crest_ratio()
+	var speed_mult: float = get_tunnel_speed_multiplier()
+	var advance: float = TUNNEL_BASE_DEPTH_SPEED * speed_mult * dt
+	for i: int in range(_tunnel_depths.size()):
+		_tunnel_depths[i] = fposmod(_tunnel_depths[i] + advance, 1.0)
 	queue_redraw()
 
 
@@ -725,11 +738,23 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("edge_drop_color", edge_drop_color)
 
 
+func _init_tunnel_depths() -> void:
+	_tunnel_depths.resize(TUNNEL_FRAME_COUNT)
+	for i: int in range(TUNNEL_FRAME_COUNT):
+		_tunnel_depths[i] = float(i) / float(TUNNEL_FRAME_COUNT)
+
+
+func _depth_to_tunnel_scale(p_depth: float) -> float:
+	var t: float = clampf(p_depth, 0.0, 1.0)
+	return lerpf(TUNNEL_MIN_SCALE, TUNNEL_MAX_SCALE, pow(t, 2.35))
+
+
 func _apply_active_style_mode() -> void:
 	if is_waves_style_active():
 		material = null
 		color = WAVE_BASE_TOP_COLOR
-		_update_liquid_wave_min_crest_ratio()
+		if _tunnel_depths.size() != TUNNEL_FRAME_COUNT:
+			_init_tunnel_depths()
 		queue_redraw()
 	elif is_aurora_style_active():
 		material = null
@@ -738,8 +763,8 @@ func _apply_active_style_mode() -> void:
 	else:
 		_setup_shader_material()
 		material = _shader_material
-		_liquid_wave_beat_boost = 0.0
-		_liquid_wave_drop_boost = 0.0
+		_tunnel_beat_boost = 0.0
+		_tunnel_drop_boost = 0.0
 		_aurora_beat_boost = 0.0
 		_aurora_drop_boost = 0.0
 		_sync_shader_parameters()
@@ -758,86 +783,68 @@ func _draw_vertical_dark_gradient(p_w: float, p_h: float, p_top: Color, p_bottom
 	draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 
-func _sample_liquid_wave_y(p_layer_idx: int, p_nx: float, p_h: float, p_amp_mult: float) -> float:
-	var base_ratios: PackedFloat32Array = PackedFloat32Array([0.62, 0.73, 0.84])
-	var freqs: PackedFloat32Array = PackedFloat32Array([1.50, 2.10, 2.65])
-	var base_amps: PackedFloat32Array = PackedFloat32Array([0.032, 0.028, 0.024])
-	var phase: float = _liquid_wave_phases[p_layer_idx]
-	var freq: float = freqs[p_layer_idx] * TAU
-	var amp_px: float = p_h * base_amps[p_layer_idx] * p_amp_mult
-	var harmonic: float = (sin((p_nx * freq) + phase) * 0.65) + (sin((p_nx * freq * 1.73) - (phase * 0.62)) * 0.35)
-	var raw_y: float = (p_h * base_ratios[p_layer_idx]) - (harmonic * amp_px)
-	return maxf(p_h * LIQUID_WAVE_MIN_CREST_Y_RATIO, raw_y)
-
-
-func _update_liquid_wave_min_crest_ratio() -> void:
-	var bounds: Vector2 = _resolve_draw_bounds()
-	var h: float = maxf(1.0, bounds.y)
-	var amp_mult: float = get_liquid_wave_amplitude_multiplier()
-	var min_y: float = h
-	for layer_idx: int in range(LIQUID_WAVE_COUNT):
-		for s_idx: int in range(LIQUID_WAVE_SEGMENTS + 1):
-			var nx: float = float(s_idx) / float(LIQUID_WAVE_SEGMENTS)
-			var y_val: float = _sample_liquid_wave_y(layer_idx, nx, h, amp_mult)
-			if y_val < min_y:
-				min_y = y_val
-	_liquid_wave_last_min_y_ratio = min_y / h
-
-
-func _draw_liquid_waves_backdrop() -> void:
+func _draw_tunnel_backdrop() -> void:
 	var bounds: Vector2 = _resolve_draw_bounds()
 	var w: float = bounds.x
 	var h: float = bounds.y
 	_draw_vertical_dark_gradient(w, h, WAVE_BASE_TOP_COLOR, WAVE_BASE_BOTTOM_COLOR)
 
-	var amp_mult: float = get_liquid_wave_amplitude_multiplier()
-	var bright_mult: float = get_liquid_wave_brightness_multiplier()
-	var fill_alphas: PackedFloat32Array = PackedFloat32Array([0.16, 0.20, 0.24])
-	var crest_alphas: PackedFloat32Array = PackedFloat32Array([0.44, 0.56, 0.68])
+	var center: Vector2 = bounds * 0.5
+	var half_w_max: float = w * 0.52
+	var half_h_max: float = h * 0.52
+	var bright_mult: float = get_tunnel_brightness_multiplier()
+	var palette_len: int = TUNNEL_FRAME_COLORS.size()
 
-	if _liquid_wave_crest_pts.size() != LIQUID_WAVE_SEGMENTS + 1:
-		_liquid_wave_crest_pts.resize(LIQUID_WAVE_SEGMENTS + 1)
+	if _tunnel_frame_pts.size() != 9:
+		_tunnel_frame_pts.resize(9)
 
-	for layer_idx: int in range(LIQUID_WAVE_COUNT):
-		var col: Color = LIQUID_WAVE_COLORS[layer_idx]
-		var top_fill_alpha: float = clampf(fill_alphas[layer_idx] * bright_mult, 0.0, 0.34)
-		var fill_top_col: Color = Color(col.r, col.g, col.b, top_fill_alpha)
-		var fill_bot_col: Color = Color(col.r * 0.45, col.g * 0.45, col.b * 0.60, 0.0)
+	for i: int in range(_tunnel_depths.size()):
+		var depth_t: float = clampf(_tunnel_depths[i], 0.0, 1.0)
+		var scale_f: float = _depth_to_tunnel_scale(depth_t)
+		var hw: float = half_w_max * scale_f
+		var hh: float = half_h_max * scale_f
+		if hw < 2.0 or hh < 2.0:
+			continue
 
-		for s_idx: int in range(LIQUID_WAVE_SEGMENTS + 1):
-			var nx: float = float(s_idx) / float(LIQUID_WAVE_SEGMENTS)
-			var x_pos: float = nx * w
-			var y_pos: float = _sample_liquid_wave_y(layer_idx, nx, h, amp_mult)
-			_liquid_wave_crest_pts[s_idx] = Vector2(x_pos, y_pos)
+		var fade_in: float = smoothstep(0.0, 0.16, depth_t)
+		var fade_out: float = 1.0 - smoothstep(0.86, 1.0, depth_t)
+		var base_alpha: float = lerpf(0.07, 0.22, depth_t) * fade_in * fade_out
+		var final_alpha: float = clampf(base_alpha * bright_mult, 0.0, 0.30)
+		if final_alpha <= 0.004:
+			continue
 
-		# Translucent downward gradient fill per wave segment
-		for q_idx: int in range(LIQUID_WAVE_SEGMENTS):
-			var p0: Vector2 = _liquid_wave_crest_pts[q_idx]
-			var p1: Vector2 = _liquid_wave_crest_pts[q_idx + 1]
-			var fill_depth: float = minf(h, maxf(p0.y, p1.y) + (h * 0.36))
-			_quad_pts_buf[0] = p0
-			_quad_pts_buf[1] = p1
-			_quad_pts_buf[2] = Vector2(p1.x, fill_depth)
-			_quad_pts_buf[3] = Vector2(p0.x, fill_depth)
-			_quad_cols_buf[0] = fill_top_col
-			_quad_cols_buf[1] = fill_top_col
-			_quad_cols_buf[2] = fill_bot_col
-			_quad_cols_buf[3] = fill_bot_col
-			draw_polygon(_quad_pts_buf, _quad_cols_buf)
+		# Beveled hollow neon octagon / rounded-corner frame in perspective (no fill)
+		var cx: float = center.x
+		var cy: float = center.y
+		var ch_x: float = hw * TUNNEL_CHAMFER_RATIO
+		var ch_y: float = hh * TUNNEL_CHAMFER_RATIO
 
-		# Soft 3-layer blurred neon upper crest (no WorldEnvironment)
-		var crest_alpha: float = clampf(crest_alphas[layer_idx] * bright_mult, 0.0, 0.80)
-		var outer_col: Color = Color(col.r, col.g, col.b, crest_alpha * 0.16)
-		var mid_col: Color = Color(col.r, col.g, col.b, crest_alpha * 0.34)
+		_tunnel_frame_pts[0] = Vector2(cx - hw + ch_x, cy - hh)
+		_tunnel_frame_pts[1] = Vector2(cx + hw - ch_x, cy - hh)
+		_tunnel_frame_pts[2] = Vector2(cx + hw, cy - hh + ch_y)
+		_tunnel_frame_pts[3] = Vector2(cx + hw, cy + hh - ch_y)
+		_tunnel_frame_pts[4] = Vector2(cx + hw - ch_x, cy + hh)
+		_tunnel_frame_pts[5] = Vector2(cx - hw + ch_x, cy + hh)
+		_tunnel_frame_pts[6] = Vector2(cx - hw, cy + hh - ch_y)
+		_tunnel_frame_pts[7] = Vector2(cx - hw, cy - hh + ch_y)
+		_tunnel_frame_pts[8] = _tunnel_frame_pts[0]
+
+		var col: Color = TUNNEL_FRAME_COLORS[i % palette_len]
+		var core_w: float = lerpf(1.1, 2.5, depth_t)
+
+		# 3-layer soft translucent halo (no WorldEnvironment)
+		var outer_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.24)
+		var mid_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.48)
 		var core_col: Color = Color(
-			lerpf(col.r, 1.0, 0.38),
-			lerpf(col.g, 1.0, 0.38),
-			lerpf(col.b, 1.0, 0.38),
-			crest_alpha
+			lerpf(col.r, 1.0, 0.30),
+			lerpf(col.g, 1.0, 0.30),
+			lerpf(col.b, 1.0, 0.30),
+			final_alpha
 		)
-		draw_polyline(_liquid_wave_crest_pts, outer_col, 15.0, true)
-		draw_polyline(_liquid_wave_crest_pts, mid_col, 6.5, true)
-		draw_polyline(_liquid_wave_crest_pts, core_col, 2.2, true)
+
+		draw_polyline(_tunnel_frame_pts, outer_col, core_w * 5.2, true)
+		draw_polyline(_tunnel_frame_pts, mid_col, core_w * 2.6, true)
+		draw_polyline(_tunnel_frame_pts, core_col, core_w, true)
 
 
 func _sample_aurora_color(p_phase: float) -> Color:

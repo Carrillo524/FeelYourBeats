@@ -2,10 +2,12 @@ class_name ReactiveParticlesLayer
 extends Control
 
 const BEAT_DECAY_RATE: float = 5.5
+const SUSTAINED_ATTACK_SPEED: float = 5.5
+const SUSTAINED_DECAY_RATE: float = 1.35
 const BEAT_EPSILON: float = 0.002
 const AUDIO_ENERGY_LERP_SPEED: float = 8.0
-const AUDIO_TARGET_DECAY_SPEED: float = 4.0
-const MAX_EFFECTIVE_DRIVE: float = 1.65
+const AUDIO_TARGET_DECAY_SPEED: float = 3.2
+const MAX_EFFECTIVE_DRIVE: float = 2.20
 
 const CIRCLE_SPEED_BEAT_BOOST: float = 1.15
 const CIRCLE_MIN_RADIUS_PX: float = 1.2
@@ -13,23 +15,26 @@ const CIRCLE_MAX_RADIUS_PX: float = 3.8
 const CIRCLE_FADE_IN_END: float = 0.14
 const CIRCLE_EDGE_FADE_START: float = 0.72
 const CIRCLE_BASE_HALO_SCALE: float = 2.3
-const CIRCLE_BEAT_HALO_BOOST: float = 1.75
-const SQUARE_SCALE_BEAT_BOOST: float = 0.28
-const MIST_SPEED_BEAT_BOOST: float = 0.95
-const MIST_INTENSITY_BEAT_BOOST: float = 0.65
-const STREAK_LENGTH_BEAT_BOOST: float = 0.75
+const CIRCLE_BEAT_HALO_BOOST: float = 2.15
+const SQUARE_SCALE_BEAT_BOOST: float = 0.34
+const SQUARE_MOTION_DROP_BOOST: float = 0.90
+const MIST_SPEED_BEAT_BOOST: float = 1.28
+const MIST_INTENSITY_BEAT_BOOST: float = 0.72
+const STREAK_LENGTH_BEAT_BOOST: float = 0.90
 const STREAK_MIN_WIDTH_PX: float = 1.4
 const STREAK_MAX_WIDTH_PX: float = 2.6
 const STREAK_MIN_LENGTH_PX: float = 22.0
 const STREAK_MAX_LENGTH_PX: float = 48.0
 const STREAK_GRADIENT_SEGMENTS: int = 5
-const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.65
+const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.72
+const SPARKLE_MOTION_DROP_BOOST: float = 0.90
 const SPARKLE_BASE_HALO_SCALE: float = 4.2
-const SPARKLE_HALO_BEAT_BOOST: float = 2.6
+const SPARKLE_HALO_BEAT_BOOST: float = 3.40
 const SHOOTING_STAR_MIN_ANGLE_DEG: float = 28.0
 const SHOOTING_STAR_MAX_ANGLE_DEG: float = 38.0
-const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 0.70
-const SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST: float = 0.62
+const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 1.15
+const SHOOTING_STAR_LENGTH_DROP_BOOST: float = 1.02
+const SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST: float = 0.74
 const SHOOTING_STAR_TAIL_SEGMENTS: int = 6
 const DEFAULT_VIEWPORT_SIZE: Vector2 = Vector2(1080.0, 1920.0)
 
@@ -77,17 +82,23 @@ var _soft_radial_texture: GradientTexture2D = null
 
 var _elapsed_time: float = 0.0
 var _beat_impulse: float = 0.0
+var _sustained_energy_target: float = 0.0
+var _sustained_energy_drive: float = 0.0
+var _drop_tier_level: float = 0.0
 var _target_audio_energy: float = 0.0
 var _smoothed_audio_energy: float = 0.0
 var _current_drive: float = 0.0
 var _current_speed_mult: float = 1.0
 var _current_scale_mult: float = 1.0
+var _current_square_motion_mult: float = 1.0
 var _current_mist_speed_mult: float = 1.0
 var _current_mist_intensity_mult: float = 1.0
 var _current_streak_length_mult: float = 1.0
 var _current_sparkle_brightness_mult: float = 1.0
+var _current_sparkle_motion_mult: float = 1.0
 var _current_sparkle_halo_scale: float = SPARKLE_BASE_HALO_SCALE
 var _current_shooting_star_speed_mult: float = 1.0
+var _current_shooting_star_length_mult: float = 1.0
 var _current_shooting_star_brightness_mult: float = 1.0
 var _audio_active: bool = true
 var _beat_trigger_count: int = 0
@@ -126,6 +137,8 @@ func connect_dependencies() -> void:
 	if dsp_clock != null:
 		if not dsp_clock.beat_pulsed.is_connected(_on_dsp_beat_pulsed):
 			dsp_clock.beat_pulsed.connect(_on_dsp_beat_pulsed)
+		if not dsp_clock.intensity_changed.is_connected(_on_dsp_intensity_changed):
+			dsp_clock.intensity_changed.connect(_on_dsp_intensity_changed)
 
 	if reactive_background != null:
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
@@ -152,6 +165,8 @@ func set_audio_active(p_active: bool) -> void:
 	_audio_active = p_active
 	if not _audio_active:
 		_target_audio_energy = 0.0
+		_sustained_energy_target = 0.0
+		_drop_tier_level = 0.0
 
 
 func is_effectively_active() -> bool:
@@ -255,8 +270,24 @@ func get_sparkle_halo_scale() -> float:
 	return _current_sparkle_halo_scale
 
 
+func get_sustained_energy_drive() -> float:
+	return _sustained_energy_drive
+
+
+func get_square_motion_multiplier() -> float:
+	return _current_square_motion_mult
+
+
+func get_sparkle_motion_multiplier() -> float:
+	return _current_sparkle_motion_mult
+
+
 func get_shooting_star_speed_multiplier() -> float:
 	return _current_shooting_star_speed_mult
+
+
+func get_shooting_star_length_multiplier() -> float:
+	return _current_shooting_star_length_mult
 
 
 func get_shooting_star_brightness_multiplier() -> float:
@@ -283,11 +314,25 @@ func get_shooting_star_angles_deg_snapshot() -> PackedFloat32Array:
 	return result
 
 
+func inject_drop_energy(p_energy: float, p_drop_tier: int = 2) -> void:
+	var clamped_e: float = clampf(p_energy, 0.0, 1.0)
+	_drop_tier_level = 1.0 if p_drop_tier >= 3 else (0.72 if p_drop_tier >= 2 else 0.0)
+	var target_sustained: float = clampf(maxf(clamped_e, _drop_tier_level), 0.0, 1.0)
+	_sustained_energy_target = maxf(_sustained_energy_target, target_sustained)
+	_sustained_energy_drive = maxf(_sustained_energy_drive, target_sustained)
+	_recompute_drive_metrics()
+
+
 func trigger_beat_impulse(p_strength: float = 0.85) -> void:
 	var clamped: float = clampf(p_strength, 0.0, 1.0)
 	if clamped <= 0.0:
 		return
 	_beat_impulse = maxf(_beat_impulse, clamped)
+	_sustained_energy_drive = clampf(
+		maxf(_sustained_energy_drive, clamped * 0.52) + (clamped * 0.24),
+		0.0,
+		1.0
+	)
 	_beat_trigger_count += 1
 	_recompute_drive_metrics()
 	if is_effectively_active() and _config.particle_type == ReactiveParticlesConfig.TYPE_SHOOTING_STARS:
@@ -319,6 +364,19 @@ func step_simulation(p_delta: float) -> void:
 	if _smoothed_audio_energy < BEAT_EPSILON and energy_target <= 0.0:
 		_smoothed_audio_energy = 0.0
 	_target_audio_energy = maxf(0.0, _target_audio_energy - (AUDIO_TARGET_DECAY_SPEED * dt))
+
+	var sustained_goal: float = maxf(_sustained_energy_target, _drop_tier_level) if _audio_active else 0.0
+	if sustained_goal > _sustained_energy_drive:
+		_sustained_energy_drive = lerpf(
+			_sustained_energy_drive,
+			sustained_goal,
+			clampf(SUSTAINED_ATTACK_SPEED * dt, 0.0, 1.0)
+		)
+	else:
+		_sustained_energy_drive = maxf(sustained_goal, _sustained_energy_drive * exp(-SUSTAINED_DECAY_RATE * dt))
+	if _sustained_energy_drive < BEAT_EPSILON and sustained_goal <= 0.0:
+		_sustained_energy_drive = 0.0
+	_sustained_energy_target = maxf(0.0, _sustained_energy_target - (1.8 * dt))
 
 	_recompute_drive_metrics()
 
@@ -361,20 +419,24 @@ func _draw() -> void:
 
 func _recompute_drive_metrics() -> void:
 	var reactivity_mult: float = _config.get_reactivity_multiplier()
+	var sustained_component: float = maxf(_sustained_energy_drive, _smoothed_audio_energy * 0.85)
 	_current_drive = clampf(
-		((_beat_impulse * 0.85) + (_smoothed_audio_energy * 0.25)) * reactivity_mult,
+		((_beat_impulse * 0.72) + (sustained_component * 0.98)) * reactivity_mult,
 		0.0,
 		MAX_EFFECTIVE_DRIVE
 	)
-	_current_speed_mult = 1.0 + (_current_drive * CIRCLE_SPEED_BEAT_BOOST)
-	_current_scale_mult = 1.0 + (_current_drive * SQUARE_SCALE_BEAT_BOOST)
-	_current_mist_speed_mult = 1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST)
-	_current_mist_intensity_mult = 1.0 + (_current_drive * MIST_INTENSITY_BEAT_BOOST)
-	_current_streak_length_mult = 1.0 + (_current_drive * STREAK_LENGTH_BEAT_BOOST)
-	_current_sparkle_brightness_mult = 1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST)
-	_current_sparkle_halo_scale = SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST)
-	_current_shooting_star_speed_mult = 1.0 + (_current_drive * SHOOTING_STAR_SPEED_BEAT_BOOST)
-	_current_shooting_star_brightness_mult = 1.0 + (_current_drive * SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST)
+	_current_speed_mult = clampf(1.0 + (_current_drive * CIRCLE_SPEED_BEAT_BOOST), 1.0, 2.90)
+	_current_scale_mult = clampf(1.0 + (_current_drive * SQUARE_SCALE_BEAT_BOOST), 1.0, 1.68)
+	_current_square_motion_mult = clampf(1.0 + (_current_drive * SQUARE_MOTION_DROP_BOOST), 1.0, 2.55)
+	_current_mist_speed_mult = clampf(1.0 + (_current_drive * MIST_SPEED_BEAT_BOOST), 1.0, 3.10)
+	_current_mist_intensity_mult = clampf(1.0 + (_current_drive * MIST_INTENSITY_BEAT_BOOST), 1.0, 2.35)
+	_current_streak_length_mult = clampf(1.0 + (_current_drive * STREAK_LENGTH_BEAT_BOOST), 1.0, 2.50)
+	_current_sparkle_brightness_mult = clampf(1.0 + (_current_drive * SPARKLE_BRIGHTNESS_BEAT_BOOST), 1.0, 2.35)
+	_current_sparkle_motion_mult = clampf(1.0 + (_current_drive * SPARKLE_MOTION_DROP_BOOST), 1.0, 2.50)
+	_current_sparkle_halo_scale = clampf(SPARKLE_BASE_HALO_SCALE + (_current_drive * SPARKLE_HALO_BEAT_BOOST), SPARKLE_BASE_HALO_SCALE, 11.2)
+	_current_shooting_star_speed_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_SPEED_BEAT_BOOST), 1.0, 2.95)
+	_current_shooting_star_length_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_LENGTH_DROP_BOOST), 1.0, 2.65)
+	_current_shooting_star_brightness_mult = clampf(1.0 + (_current_drive * SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST), 1.0, 2.40)
 
 
 func _rebuild_pool() -> void:
@@ -505,8 +567,8 @@ func _step_circles(p_dt: float, p_bounds: Vector2) -> void:
 
 
 func _step_squares(p_dt: float, p_bounds: Vector2) -> void:
-	var drift_boost: float = 1.0 + (_current_drive * 0.30)
-	var spin_boost: float = 1.0 + (_current_drive * 0.35)
+	var drift_boost: float = _current_square_motion_mult
+	var spin_boost: float = _current_square_motion_mult
 
 	for i: int in range(_active_count):
 		var phase: float = _life_phase[i] + (_life_speed[i] * p_dt)
@@ -606,13 +668,16 @@ func _draw_squares() -> void:
 		var alpha: float = clampf(_alpha_base[i] * fade, 0.0, 0.64)
 
 		var fill_col: Color = Color(base_col.r, base_col.g, base_col.b, alpha * 0.28)
-		var glow_col: Color = Color(base_col.r, base_col.g, base_col.b, alpha * 0.26)
-		var edge_col: Color = Color(base_col.r, base_col.g, base_col.b, minf(0.72, alpha * 1.05))
+		var outer_glow_col: Color = Color(base_col.r, base_col.g, base_col.b, alpha * (0.14 + minf(0.16, _current_drive * 0.10)))
+		var glow_col: Color = Color(base_col.r, base_col.g, base_col.b, alpha * (0.28 + minf(0.20, _current_drive * 0.12)))
+		var edge_col: Color = Color(base_col.r, base_col.g, base_col.b, minf(0.76, alpha * 1.08))
 		var sq_rect: Rect2 = Rect2(-half_extent, -half_extent, half_extent * 2.0, half_extent * 2.0)
+		var glow_w: float = 5.0 + (_current_drive * 2.6)
 
 		draw_set_transform(_pos[i], _angle[i], scale_vec)
 		draw_rect(sq_rect, fill_col, true)
-		draw_rect(sq_rect, glow_col, false, 5.0)
+		draw_rect(sq_rect, outer_glow_col, false, glow_w * 1.7)
+		draw_rect(sq_rect, glow_col, false, glow_w)
 		draw_rect(sq_rect, edge_col, false, 2.0)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -667,7 +732,7 @@ func _step_mist(p_dt: float, p_bounds: Vector2) -> void:
 func _draw_mist() -> void:
 	var length_mult: float = _current_streak_length_mult
 	var intensity_mult: float = _current_mist_intensity_mult
-	var flare_scale: float = 3.2 + (_current_drive * 1.65)
+	var flare_scale: float = 3.2 + (_current_drive * 2.45)
 	var palette_len: int = MIST_PALETTE.size()
 	var seg_count: int = STREAK_GRADIENT_SEGMENTS
 
@@ -749,8 +814,9 @@ func _spawn_sparkle(p_index: int, p_bounds: Vector2, p_initial_fill: bool) -> vo
 
 
 func _step_sparkles(p_dt: float, p_bounds: Vector2) -> void:
+	var motion_mult: float = _current_sparkle_motion_mult
 	for i: int in range(_active_count):
-		var phase: float = _life_phase[i] + (_life_speed[i] * p_dt)
+		var phase: float = _life_phase[i] + (_life_speed[i] * motion_mult * p_dt)
 		if phase >= 1.0:
 			_spawn_sparkle(i, p_bounds, false)
 			continue
@@ -758,8 +824,8 @@ func _step_sparkles(p_dt: float, p_bounds: Vector2) -> void:
 
 		var pos: Vector2 = _pos[i]
 		var vel: Vector2 = _vel[i]
-		pos.x += vel.x * p_dt
-		pos.y += vel.y * p_dt
+		pos.x += vel.x * motion_mult * p_dt
+		pos.y += vel.y * motion_mult * p_dt
 
 		var margin: float = 28.0
 		if pos.x < -margin:
@@ -863,16 +929,18 @@ func _wake_dormant_shooting_stars(p_strength: float) -> void:
 
 func _step_shooting_stars(p_dt: float, p_bounds: Vector2) -> void:
 	var speed_mult: float = _current_shooting_star_speed_mult
+	var length_mult: float = _current_shooting_star_length_mult
+	var cooldown_rate: float = 1.0 + (_current_drive * 1.45)
 	for i: int in range(_active_count):
 		if _life_phase[i] < 0.0:
-			_life_phase[i] += p_dt
+			_life_phase[i] += p_dt * cooldown_rate
 			if _life_phase[i] >= 0.0:
-				_spawn_shooting_star(i, p_bounds, false, true, 0.0)
+				_spawn_shooting_star(i, p_bounds, false, true, clampf(_sustained_energy_drive, 0.0, 1.0))
 			continue
 
-		_life_phase[i] += p_dt * 1.4
+		_life_phase[i] += p_dt * (1.4 + (_current_drive * 0.45))
 		var pos: Vector2 = _pos[i] + (_vel[i] * speed_mult * p_dt)
-		var tail_len: float = _size_param[i]
+		var tail_len: float = _size_param[i] * length_mult
 		var exit_margin: float = tail_len + 48.0
 		if pos.x > p_bounds.x + exit_margin or pos.y > p_bounds.y + exit_margin:
 			_spawn_shooting_star(i, p_bounds, false, false, 0.0)
@@ -882,6 +950,7 @@ func _step_shooting_stars(p_dt: float, p_bounds: Vector2) -> void:
 
 func _draw_shooting_stars() -> void:
 	var bright_mult: float = _current_shooting_star_brightness_mult
+	var length_mult: float = _current_shooting_star_length_mult
 	var bounds: Vector2 = _resolve_bounds()
 	var palette_len: int = SHOOTING_STAR_PALETTE.size()
 	var seg_count: int = SHOOTING_STAR_TAIL_SEGMENTS
@@ -893,43 +962,46 @@ func _draw_shooting_stars() -> void:
 		var head: Vector2 = _pos[i]
 		var angle_rad: float = _angle[i]
 		var dir: Vector2 = Vector2(cos(angle_rad), sin(angle_rad))
-		var tail_len: float = _size_param[i] * (1.0 + (_current_drive * 0.28))
+		var tail_len: float = _size_param[i] * length_mult
 		var width_px: float = _ang_vel[i]
 
 		var fade_in: float = smoothstep(0.0, 0.18, _life_phase[i])
 		var edge_x: float = 1.0 - smoothstep(bounds.x * 0.80, bounds.x + (tail_len * 0.65), head.x)
 		var edge_y: float = 1.0 - smoothstep(bounds.y * 0.80, bounds.y + (tail_len * 0.65), head.y)
 		var edge_fade: float = minf(edge_x, edge_y)
-		var head_alpha: float = clampf(_alpha_base[i] * fade_in * edge_fade * bright_mult, 0.0, 0.94)
+		var head_alpha: float = clampf(_alpha_base[i] * fade_in * edge_fade * bright_mult, 0.0, 0.96)
 		if head_alpha <= 0.01:
 			continue
 
 		var base_col: Color = SHOOTING_STAR_PALETTE[_color_idx[i] % palette_len]
+		var blur_width_mult: float = 2.6 + (_current_drive * 1.4)
 
-		# Tapered multi-segment diagonal tail from transparent back (t=0) to glowing head (t=1)
+		# Tapered multi-segment diagonal tail with soft blur halo behind sharp streak
 		for seg_idx: int in range(seg_count):
 			var t0: float = float(seg_idx) / float(seg_count)
 			var t1: float = float(seg_idx + 1) / float(seg_count)
 			var t_mid: float = (t0 + t1) * 0.5
-			var seg_alpha: float = head_alpha * pow(t_mid, 1.9)
+			var seg_alpha: float = head_alpha * pow(t_mid, 1.85)
 			if seg_alpha <= 0.004:
 				continue
 
 			var p0: Vector2 = head - (dir * ((1.0 - t0) * tail_len))
 			var p1: Vector2 = head - (dir * ((1.0 - t1) * tail_len))
 			var seg_w: float = lerpf(0.75, width_px, t_mid)
+			var halo_seg_col: Color = Color(base_col.r, base_col.g, base_col.b, seg_alpha * (0.24 + minf(0.18, _current_drive * 0.10)))
 			var seg_col: Color = Color(
-				lerpf(base_col.r, 1.0, t_mid * 0.35),
-				lerpf(base_col.g, 1.0, t_mid * 0.35),
-				lerpf(base_col.b, 1.0, t_mid * 0.35),
+				lerpf(base_col.r, 1.0, t_mid * 0.38),
+				lerpf(base_col.g, 1.0, t_mid * 0.38),
+				lerpf(base_col.b, 1.0, t_mid * 0.38),
 				seg_alpha
 			)
+			draw_line(p0, p1, halo_seg_col, seg_w * blur_width_mult, true)
 			draw_line(p0, p1, seg_col, seg_w, true)
 
 		# Glowing circular head flare using shared _soft_radial_texture
 		if _soft_radial_texture != null:
-			var flare_r: float = width_px * (4.6 + (_current_drive * 2.2))
-			var flare_alpha: float = clampf(head_alpha * (0.64 + minf(0.24, _current_drive * 0.16)), 0.0, 0.82)
+			var flare_r: float = width_px * (4.6 + (_current_drive * 3.0))
+			var flare_alpha: float = clampf(head_alpha * (0.64 + minf(0.28, _current_drive * 0.18)), 0.0, 0.88)
 			var flare_rect: Rect2 = Rect2(head.x - flare_r, head.y - flare_r, flare_r * 2.0, flare_r * 2.0)
 			var flare_tint: Color = Color(base_col.r, base_col.g, base_col.b, flare_alpha)
 			draw_texture_rect(_soft_radial_texture, flare_rect, false, flare_tint)
@@ -976,6 +1048,18 @@ func _on_dsp_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
 	trigger_beat_impulse(0.82)
 
 
+func _on_dsp_intensity_changed(p_block: IntensityBlock) -> void:
+	if p_block == null:
+		return
+	var energy: float = clampf(p_block.energy, 0.0, 1.0)
+	_drop_tier_level = 1.0 if p_block.tier >= 3 else (0.72 if p_block.tier >= 2 else 0.0)
+	_sustained_energy_target = maxf(energy * 0.65, _drop_tier_level)
+	if p_block.tier >= 2:
+		_sustained_energy_drive = maxf(_sustained_energy_drive, _drop_tier_level)
+		trigger_beat_impulse(0.95)
+	_recompute_drive_metrics()
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	trigger_beat_impulse(p_strength)
 
@@ -988,9 +1072,10 @@ func _on_spectrum_updated(
 ) -> void:
 	if not _audio_active:
 		return
-	var combined: float = clampf(
-		(clampf(p_bass_energy, 0.0, 1.0) * 0.65) + (clampf(p_total_energy, 0.0, 1.0) * 0.35),
-		0.0,
-		1.0
-	)
+	var clamped_bass: float = clampf(p_bass_energy, 0.0, 1.0)
+	var clamped_total: float = clampf(p_total_energy, 0.0, 1.0)
+	var combined: float = clampf((clamped_bass * 0.65) + (clamped_total * 0.35), 0.0, 1.0)
 	_target_audio_energy = maxf(_target_audio_energy * 0.65, combined)
+	if combined >= 0.62:
+		var drop_norm: float = clampf((combined - 0.55) / 0.35, 0.0, 1.0)
+		_sustained_energy_target = maxf(_sustained_energy_target, drop_norm)

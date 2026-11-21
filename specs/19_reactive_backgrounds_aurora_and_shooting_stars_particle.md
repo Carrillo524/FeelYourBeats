@@ -17,7 +17,7 @@ En la Fase 8A quedaron dos puntos por refinar para lograr una experiencia visual
 Incluye exclusivamente:
 1. **Fondos Reactivos (`ReactiveBackgroundConfig` y `ReactiveBackground`) — 3 estilos activos:**
    - **`Clásico` (`"classic"`):** conservado 100 % intacto como predeterminado (`vfx/reactive_backdrop.gdshader` sin cambios).
-   - **`Ondas` (`"waves"`):** rediseñado como **3 ondas líquidas continuas de borde a borde** en la zona media-baja (`y_cresta >= 0.50 * alto`), dibujadas en `_draw()` con relleno degradado translúcido hacia abajo (`draw_polygon`) y cresta superior difuminada en 3 capas neón (`draw_polyline`) en tonos cian y violeta; fluyen horizontalmente en ambiente sin música y elevan amplitud, velocidad y brillo en beats y drops sin invadir los carriles superiores.
+   - **`Túnel` (clave interna retrocompatible `STYLE_WAVES = "waves"`, etiqueta UI `"Túnel"`):** túnel de perspectiva neón compuesto por un pool acotado de `12` marcos octogonales/rectangulares biselados huecos (sin relleno) que nacen diminutos en el centro (`scale = 0.04`) y avanzan exponencialmente hacia los bordes (`scale -> 1.15`) en cian y violeta con halo suave de 3 capas translúcidas y alfa bajo (`0.07–0.22`) para preservar la legibilidad; avanza suavemente en ambiente y acelera e intensifica brillo en beats y Drops.
    - **`Aurora` (`"aurora"`):** 4 cortinas luminosas amplias y difusas (bandas verticales/diagonales con degradados translúcidos en `_draw()`, sin `WorldEnvironment` global) que ondulan lentamente y transicionan suavemente entre cian, violeta y azul neón, intensificando brillo y ondulación en beats y drops.
    - **Migración retrocompatible:** `ReactiveBackgroundConfig` conserva exactamente 3 estilos válidos (`"classic"`, `"waves"`, `"aurora"`). Si un `user://user_settings.cfg` antiguo contenía `style="shooting_stars"` en `[reactive_background]`, `sanitize_style()` lo normaliza silenciosamente a `"classic"` sin errores ni corrupción.
 2. **Partículas Reactivas (`ReactiveParticlesConfig` y `ReactiveParticlesLayer`) — añadir `Estrellas Fugaces`:**
@@ -71,15 +71,18 @@ Incluye exclusivamente:
 
 ## 7. Diseño Técnico y Rendimiento Móvil
 
-### 7.1 Fondo `Ondas` Continuas (`style == "waves"`)
-- **Base:** `material = null` + degradado oscuro vertical (`Color(0.035, 0.045, 0.11)` → `Color(0.075, 0.03, 0.145)`).
-- **3 capas continuas de borde a borde (`x = 0` → `bounds.x`, `32` segmentos horizontales por onda):**
-  - Capa 0 (fondo, violeta): altura base `0.62 * h`, frecuencia `1.5`, deriva suave.
-  - Capa 1 (media, azul-cian): altura base `0.73 * h`, frecuencia `2.1`, deriva intermedia.
-  - Capa 2 (frente, cian neón): altura base `0.84 * h`, frecuencia `2.6`, cresta más definida.
-  - Todas las crestas quedan acotadas a `y >= 0.50 * h` (zona media-baja), sin invadir la mitad superior ni oscurecer notas.
-- **Renderizado sin `WorldEnvironment`:** cada onda rellena hacia abajo mediante segmentos `draw_polygon` con degradado vertical translúcido (`alpha 0.22 -> 0.0`) y dibuja su cresta con 3 pasadas `draw_polyline` de grosor decreciente y alfa creciente (`14 px` blur → `6 px` glow → `2.2 px` núcleo).
-- **Reacción musical:** flujo horizontal continuo aun sin música; en beats/drops, `_wave_beat_boost` eleva amplitud (`1.0 + drive * 0.65`), velocidad de flujo y brillo de cresta con decaimiento exponencial suave.
+### 7.1 Fondo `Túnel` en Perspectiva (`style == "waves"`, etiqueta `"Túnel"`)
+- **Base:** `material = null` + degradado oscuro vertical (`Color(0.032, 0.042, 0.105)` → `Color(0.068, 0.028, 0.138)`).
+- **12 marcos huecos en perspectiva:** octógonos biselados sin relleno (`draw_polyline` cerrado de 9 vértices) que nacen en el centro (`scale = 0.04`) y crecen exponencialmente (`pow(t, 2.35)` hasta `scale = 1.15`) hacia los bordes en cian y violeta, con 3 capas de halo suave translúcido (`5.2x`, `2.6x`, `1.0x`) y alfa bajo (`0.07–0.22` base, tope `<= 0.30` en picos) sin reducir legibilidad.
+- **Reacción musical:** avance constante en ambiente sin música (`0.28` u/s); en beats y Drops acelera (`1.0 + drive * 1.45`) e intensifica el brillo (`1.0 + drive * 0.65`).
+
+### 7.3b Dinámica Sostenida de `Drop` en Todas las Partículas
+- `ReactiveParticlesLayer` combina `_beat_impulse` instantáneo con un envolvente suavizado de energía sostenida (`_sustained_energy_drive`) alimentado por `DSPClock.intensity_changed` (`tier >= 2`), `AudioAnalyzer.spectrum_updated` y `trigger_beat_impulse()`, logrando durante todo el Drop:
+  - **`Círculos`:** aceleración hacia adelante hasta `~2.8x` + mayor radio/suavidad de halo blur.
+  - **`Cuadrados`:** flotación y rotación hasta `~2.4x` + pulso de escala y halo neón ampliado.
+  - **`Estelas`:** ascenso hasta `~3.0x`, **alargamiento de estela hasta `2.4x`** y halo de punta más amplio.
+  - **`Destellos`:** ciclo de parpadeo/deriva hasta `~2.4x` + expansión del halo circular blur (`4.2x -> 11.2x`).
+  - **`Estrellas Fugaces`:** cruce diagonal hasta `~2.8x`, **alargamiento de estela `2.2x–2.6x`**, halo/blur reforzado en cabeza y trazo, y reducción de espera entre apariciones.
 
 ### 7.2 Fondo `Aurora` Boreal (`style == "aurora"`)
 - **Base:** `material = null` + cielo nocturno profundo (`Color(0.024, 0.036, 0.092)` → `Color(0.052, 0.024, 0.112)`).

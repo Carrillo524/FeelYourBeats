@@ -125,7 +125,7 @@ static func sanitize_style(p_raw_style: String) -> String:
 	match lowered:
 		STYLE_CLASSIC, "clasico", "clásico":
 			return STYLE_CLASSIC
-		STYLE_WAVES, "ondas":
+		STYLE_WAVES, "ondas", "tunel", "túnel":
 			return STYLE_WAVES
 		STYLE_AURORA:
 			return STYLE_AURORA
@@ -160,7 +160,7 @@ static func reactivity_to_multiplier(p_level: String) -> float:
 static func style_to_label(p_style: String) -> String:
 	match sanitize_style(p_style):
 		STYLE_WAVES:
-			return "Ondas"
+			return "Túnel"
 		STYLE_AURORA:
 			return "Aurora"
 		_:
