@@ -141,9 +141,12 @@ var _bgm_track_label: Label = null
 var _bgm_prev_button: Button = null
 var _bgm_next_button: Button = null
 var _bgm_mode_button: Button = null
-var _particles_toggle_button: Button = null
 var _particles_type_buttons: Dictionary = {}
+var _particles_density_label: Label = null
+var _particles_density_row: HBoxContainer = null
 var _particles_density_buttons: Dictionary = {}
+var _particles_reactivity_label: Label = null
+var _particles_reactivity_row: HBoxContainer = null
 var _particles_reactivity_buttons: Dictionary = {}
 var _bg_style_buttons: Dictionary = {}
 var _bg_reactivity_buttons: Dictionary = {}
@@ -2222,6 +2225,9 @@ func set_particles_settings_path(p_path: String) -> void:
 
 func reload_particle_settings() -> void:
 	_particles_config.load_from_file(particles_settings_path)
+	if not _particles_config.enabled:
+		_particles_config.particle_type = ReactiveParticlesConfig.TYPE_NONE
+		_particles_config.enabled = true
 	if reactive_particles_layer != null:
 		reactive_particles_layer.apply_config(_particles_config)
 	_refresh_particle_controls()
@@ -2234,17 +2240,11 @@ func _apply_and_persist_particle_settings() -> void:
 	_refresh_particle_controls()
 
 
-func _on_particles_toggle_pressed() -> void:
-	if _consume_suppressed_scroll_press():
-		return
-	_particles_config.enabled = not _particles_config.enabled
-	_apply_and_persist_particle_settings()
-
-
 func _on_particles_type_selected(p_type: String) -> void:
 	if _consume_suppressed_scroll_press():
 		return
 	_particles_config.particle_type = ReactiveParticlesConfig.sanitize_type(p_type)
+	_particles_config.enabled = true
 	_apply_and_persist_particle_settings()
 
 
@@ -3159,19 +3159,22 @@ func _refresh_bgm_controls() -> void:
 
 
 func _refresh_particle_controls() -> void:
-	if _particles_toggle_button != null:
-		_particles_toggle_button.text = (
-			"PARTÍCULAS: ACTIVADAS"
-			if _particles_config.enabled
-			else "PARTÍCULAS: DESACTIVADAS"
-		)
-		_set_option_highlight(_particles_toggle_button, _particles_config.enabled)
-
 	for i: int in range(ReactiveParticlesConfig.SUPPORTED_TYPES.size()):
 		var type_id: String = ReactiveParticlesConfig.SUPPORTED_TYPES[i]
 		var btn: Button = _particles_type_buttons.get(type_id, null) as Button
 		if btn != null:
 			_set_option_highlight(btn, _particles_config.particle_type == type_id)
+
+	var is_none_selected: bool = _particles_config.particle_type == ReactiveParticlesConfig.TYPE_NONE
+	var sub_alpha: float = 0.45 if is_none_selected else 1.0
+	if _particles_density_label != null:
+		_particles_density_label.modulate.a = sub_alpha
+	if _particles_density_row != null:
+		_particles_density_row.modulate.a = sub_alpha
+	if _particles_reactivity_label != null:
+		_particles_reactivity_label.modulate.a = sub_alpha
+	if _particles_reactivity_row != null:
+		_particles_reactivity_row.modulate.a = sub_alpha
 
 	for j: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
 		var level_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[j]
@@ -3664,14 +3667,6 @@ func _build_browser_screen_ui() -> void:
 	particles_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	settings_vbox.add_child(particles_header)
 
-	_particles_toggle_button = Button.new()
-	_particles_toggle_button.name = "ParticlesToggleButton"
-	_particles_toggle_button.text = "PARTÍCULAS: ACTIVADAS"
-	_particles_toggle_button.custom_minimum_size = Vector2(0.0, 82.0)
-	_particles_toggle_button.add_theme_font_size_override("font_size", 34)
-	_particles_toggle_button.pressed.connect(_on_particles_toggle_pressed)
-	settings_vbox.add_child(_particles_toggle_button)
-
 	var particles_type_label: Label = Label.new()
 	particles_type_label.name = "ParticlesTypeLabel"
 	particles_type_label.text = "TIPO DE PARTÍCULAS"
@@ -3702,18 +3697,18 @@ func _build_browser_screen_ui() -> void:
 			type_row.add_child(type_btn)
 			_particles_type_buttons[type_id] = type_btn
 
-	var particles_density_label: Label = Label.new()
-	particles_density_label.name = "ParticlesDensityLabel"
-	particles_density_label.text = "DENSIDAD"
-	particles_density_label.add_theme_font_size_override("font_size", 30)
-	particles_density_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
-	settings_vbox.add_child(particles_density_label)
+	_particles_density_label = Label.new()
+	_particles_density_label.name = "ParticlesDensityLabel"
+	_particles_density_label.text = "DENSIDAD"
+	_particles_density_label.add_theme_font_size_override("font_size", 30)
+	_particles_density_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(_particles_density_label)
 
 	_particles_density_buttons.clear()
-	var density_row: HBoxContainer = HBoxContainer.new()
-	density_row.name = "ParticlesDensityRow"
-	density_row.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(density_row)
+	_particles_density_row = HBoxContainer.new()
+	_particles_density_row.name = "ParticlesDensityRow"
+	_particles_density_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(_particles_density_row)
 
 	for d_idx: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
 		var d_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[d_idx]
@@ -3722,21 +3717,21 @@ func _build_browser_screen_ui() -> void:
 			ReactiveParticlesConfig.level_to_label(d_id)
 		)
 		d_btn.pressed.connect(_on_particles_density_selected.bind(d_id))
-		density_row.add_child(d_btn)
+		_particles_density_row.add_child(d_btn)
 		_particles_density_buttons[d_id] = d_btn
 
-	var particles_react_label: Label = Label.new()
-	particles_react_label.name = "ParticlesReactivityLabel"
-	particles_react_label.text = "REACCIÓN MUSICAL"
-	particles_react_label.add_theme_font_size_override("font_size", 30)
-	particles_react_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
-	settings_vbox.add_child(particles_react_label)
+	_particles_reactivity_label = Label.new()
+	_particles_reactivity_label.name = "ParticlesReactivityLabel"
+	_particles_reactivity_label.text = "REACCIÓN MUSICAL"
+	_particles_reactivity_label.add_theme_font_size_override("font_size", 30)
+	_particles_reactivity_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(_particles_reactivity_label)
 
 	_particles_reactivity_buttons.clear()
-	var reactivity_row: HBoxContainer = HBoxContainer.new()
-	reactivity_row.name = "ParticlesReactivityRow"
-	reactivity_row.add_theme_constant_override("separation", 12)
-	settings_vbox.add_child(reactivity_row)
+	_particles_reactivity_row = HBoxContainer.new()
+	_particles_reactivity_row.name = "ParticlesReactivityRow"
+	_particles_reactivity_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(_particles_reactivity_row)
 
 	for r_idx: int in range(ReactiveParticlesConfig.SUPPORTED_LEVELS.size()):
 		var r_id: String = ReactiveParticlesConfig.SUPPORTED_LEVELS[r_idx]
@@ -3745,7 +3740,7 @@ func _build_browser_screen_ui() -> void:
 			ReactiveParticlesConfig.level_to_label(r_id)
 		)
 		r_btn.pressed.connect(_on_particles_reactivity_selected.bind(r_id))
-		reactivity_row.add_child(r_btn)
+		_particles_reactivity_row.add_child(r_btn)
 		_particles_reactivity_buttons[r_id] = r_btn
 
 	settings_vbox.add_child(_create_white_divider("SettingsDivider_3", 0))
