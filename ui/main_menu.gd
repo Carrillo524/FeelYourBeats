@@ -30,6 +30,8 @@ const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
 const USEC_TO_SEC: float = 0.000001
 const BACK_DEBOUNCE_MSEC: int = 300
+const TOUCH_SCROLL_DEADZONE_PX: int = 20
+const TOUCH_SCROLL_DRAG_THRESHOLD_PX: float = 18.0
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -93,14 +95,17 @@ var _tab_settings_button: Button = null
 var _content_sheet_panel: PanelContainer = null
 
 var _songs_tab_container: Control = null
+var _songs_scroll: ScrollContainer = null
 var _songs_list_vbox: VBoxContainer = null
 
 var _import_tab_container: Control = null
+var _import_scroll: ScrollContainer = null
 var _browse_button: Button = null
 var _import_status_label: Label = null
 var _import_list_vbox: VBoxContainer = null
 
 var _settings_tab_container: Control = null
+var _settings_scroll: ScrollContainer = null
 var _bgm_toggle_button: Button = null
 var _bgm_track_label: Label = null
 var _bgm_prev_button: Button = null
@@ -110,6 +115,7 @@ var _bgm_mode_button: Button = null
 # Floating Song Setup Modal
 var _song_modal_backdrop: ColorRect = null
 var _song_modal_panel: Panel = null
+var _modal_scroll: ScrollContainer = null
 var _modal_vbox: VBoxContainer = null
 var _modal_song_title_label: Label = null
 var _modal_close_button: Button = null
@@ -164,6 +170,16 @@ var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
 var _pending_import_after_permission: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
+
+var _touch_scroll_containers: Array[ScrollContainer] = []
+var _active_scroll_touch_index: int = -1
+var _active_scroll_container: ScrollContainer = null
+var _touch_scroll_start_pos: Vector2 = Vector2.ZERO
+var _touch_scroll_last_pos: Vector2 = Vector2.ZERO
+var _touch_scroll_start_v: int = 0
+var _touch_scroll_accum_y: float = 0.0
+var _touch_scroll_drag_active: bool = false
+var _suppress_scroll_button_press: bool = false
 
 var _pulse_phase: float = 0.0
 var _title_bass_boost: float = 0.0
@@ -267,6 +283,158 @@ func _input(p_event: InputEvent) -> void:
 				if vp != null:
 					vp.set_input_as_handled()
 				handle_back_request()
+		return
+
+	_handle_touch_scroll_input(p_event)
+
+
+func _configure_touch_scroll_container(p_scroll: ScrollContainer) -> void:
+	if p_scroll == null:
+		return
+	p_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	p_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	p_scroll.scroll_deadzone = TOUCH_SCROLL_DEADZONE_PX
+	p_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	if not _touch_scroll_containers.has(p_scroll):
+		_touch_scroll_containers.append(p_scroll)
+	_apply_scroll_children_mouse_filter(p_scroll)
+
+
+func _apply_scroll_children_mouse_filter(p_root: Node) -> void:
+	if p_root == null:
+		return
+	var children: Array[Node] = p_root.get_children()
+	for i: int in range(children.size()):
+		var child: Node = children[i]
+		if child is BaseButton:
+			var btn: BaseButton = child as BaseButton
+			btn.mouse_filter = Control.MOUSE_FILTER_PASS
+		elif child is Control:
+			var ctrl: Control = child as Control
+			if ctrl.mouse_filter == Control.MOUSE_FILTER_STOP:
+				ctrl.mouse_filter = Control.MOUSE_FILTER_PASS
+		_apply_scroll_children_mouse_filter(child)
+
+
+func get_touch_scroll_containers() -> Array[ScrollContainer]:
+	return _touch_scroll_containers
+
+
+func _reset_touch_scroll_state() -> void:
+	_active_scroll_touch_index = -1
+	_active_scroll_container = null
+	_touch_scroll_start_pos = Vector2.ZERO
+	_touch_scroll_last_pos = Vector2.ZERO
+	_touch_scroll_start_v = 0
+	_touch_scroll_accum_y = 0.0
+	_touch_scroll_drag_active = false
+	_suppress_scroll_button_press = false
+
+
+func _find_touch_scroll_container_at(p_pos: Vector2) -> ScrollContainer:
+	if _is_launching:
+		return null
+	if is_exit_confirm_modal_open():
+		return null
+	if _file_dialog != null and _file_dialog.visible:
+		return null
+
+	if is_song_modal_open():
+		if _modal_scroll != null and _modal_scroll.is_visible_in_tree() and _modal_scroll.get_global_rect().has_point(p_pos):
+			return _modal_scroll
+		return null
+
+	for i: int in range(_touch_scroll_containers.size()):
+		var candidate: ScrollContainer = _touch_scroll_containers[i]
+		if candidate == null or candidate == _modal_scroll:
+			continue
+		if candidate.is_visible_in_tree() and candidate.get_global_rect().has_point(p_pos):
+			return candidate
+	return null
+
+
+func _get_scroll_max_vertical(p_scroll: ScrollContainer) -> int:
+	if p_scroll == null or p_scroll.get_child_count() == 0:
+		return 0
+	var content_node: Control = p_scroll.get_child(0) as Control
+	if content_node == null:
+		return 0
+	var content_h: float = maxf(content_node.size.y, content_node.get_combined_minimum_size().y)
+	var viewport_h: float = p_scroll.size.y
+	if viewport_h <= 0.0:
+		return 0
+	return maxi(0, int(ceil(content_h - viewport_h)))
+
+
+func _handle_touch_scroll_input(p_event: InputEvent) -> void:
+	if p_event is InputEventScreenTouch:
+		var touch: InputEventScreenTouch = p_event as InputEventScreenTouch
+		if touch.pressed:
+			_suppress_scroll_button_press = false
+			_touch_scroll_drag_active = false
+			_touch_scroll_accum_y = 0.0
+			var target_scroll: ScrollContainer = _find_touch_scroll_container_at(touch.position)
+			if target_scroll != null:
+				_active_scroll_touch_index = touch.index
+				_active_scroll_container = target_scroll
+				_touch_scroll_start_pos = touch.position
+				_touch_scroll_last_pos = touch.position
+				_touch_scroll_start_v = target_scroll.scroll_vertical
+			else:
+				_active_scroll_touch_index = -1
+				_active_scroll_container = null
+		elif touch.index == _active_scroll_touch_index:
+			_suppress_scroll_button_press = _touch_scroll_drag_active
+			_active_scroll_touch_index = -1
+			_active_scroll_container = null
+			_touch_scroll_drag_active = false
+		return
+
+	if p_event is InputEventScreenDrag:
+		var drag: InputEventScreenDrag = p_event as InputEventScreenDrag
+		if drag.index != _active_scroll_touch_index or _active_scroll_container == null:
+			return
+		var step_y: float = drag.position.y - _touch_scroll_last_pos.y
+		if absf(step_y) < 0.001 and absf(drag.relative.y) > 0.001:
+			step_y = drag.relative.y
+		_touch_scroll_last_pos = drag.position
+		_touch_scroll_accum_y += absf(step_y)
+		var net_y: float = drag.position.y - _touch_scroll_start_pos.y
+		var effective_travel: float = maxf(_touch_scroll_accum_y, absf(net_y))
+
+		if effective_travel > TOUCH_SCROLL_DRAG_THRESHOLD_PX:
+			_touch_scroll_drag_active = true
+			_suppress_scroll_button_press = true
+			var max_v: int = _get_scroll_max_vertical(_active_scroll_container)
+			if max_v > 0:
+				var target_v: int = clampi(_touch_scroll_start_v - int(round(net_y)), 0, max_v)
+				_active_scroll_container.scroll_vertical = target_v
+			else:
+				_active_scroll_container.scroll_vertical = 0
+			var vp: Viewport = get_viewport()
+			if vp != null:
+				vp.set_input_as_handled()
+		return
+
+	if p_event is InputEventMouseButton:
+		var mb: InputEventMouseButton = p_event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _active_scroll_touch_index == -1:
+			_suppress_scroll_button_press = false
+
+
+func _consume_suppressed_scroll_press() -> bool:
+	if _touch_scroll_drag_active or _suppress_scroll_button_press:
+		_suppress_scroll_button_press = false
+		return true
+	return false
+
+
+func _on_song_row_pressed(p_entry: Dictionary) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	if ui_sfx_player != null:
+		ui_sfx_player.play_button_click()
+	open_song_setup_modal(p_entry)
 
 
 func _unhandled_input(p_event: InputEvent) -> void:
@@ -355,8 +523,15 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_song_modal_panel.size = Vector2(modal_w, modal_h)
 	_song_modal_panel.position = Vector2((safe_w - modal_w) * 0.5, (safe_h - modal_h) * 0.5)
 
-	_modal_vbox.position = Vector2(26.0, 24.0)
-	_modal_vbox.size = Vector2(maxf(240.0, modal_w - 52.0), maxf(400.0, modal_h - 48.0))
+	var modal_inner_w: float = maxf(240.0, modal_w - 52.0)
+	var modal_inner_h: float = maxf(400.0, modal_h - 48.0)
+	if _modal_scroll != null:
+		_modal_scroll.position = Vector2(26.0, 24.0)
+		_modal_scroll.size = Vector2(modal_inner_w, modal_inner_h)
+		_modal_vbox.custom_minimum_size = Vector2(0.0, modal_inner_h)
+	else:
+		_modal_vbox.position = Vector2(26.0, 24.0)
+		_modal_vbox.size = Vector2(modal_inner_w, modal_inner_h)
 
 	if _exit_confirm_backdrop != null:
 		_exit_confirm_backdrop.position = Vector2.ZERO
@@ -392,6 +567,7 @@ func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
 
 func show_title_screen() -> void:
 	_ensure_ui_nodes()
+	_reset_touch_scroll_state()
 	_title_screen_container.visible = true
 	_browser_screen_container.visible = false
 	_song_modal_backdrop.visible = false
@@ -401,6 +577,7 @@ func show_title_screen() -> void:
 
 func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 	_ensure_ui_nodes()
+	_reset_touch_scroll_state()
 	_title_screen_container.visible = false
 	_browser_screen_container.visible = true
 	_song_modal_backdrop.visible = false
@@ -410,6 +587,7 @@ func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 
 
 func select_tab(p_tab: int) -> void:
+	_reset_touch_scroll_state()
 	_active_tab = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
 	if _active_tab == MenuTab.SONGS:
 		_reset_marquee_items(_songs_marquee_items)
@@ -455,6 +633,7 @@ func close_exit_confirm_modal() -> void:
 
 func open_song_setup_modal(p_entry: Dictionary) -> void:
 	_ensure_ui_nodes()
+	_reset_touch_scroll_state()
 	if p_entry.is_empty():
 		return
 	_selected_entry = p_entry.duplicate()
@@ -485,6 +664,7 @@ func open_song_setup_modal(p_entry: Dictionary) -> void:
 func close_song_setup_modal() -> void:
 	if _is_launching:
 		return
+	_reset_touch_scroll_state()
 	if _song_modal_backdrop != null:
 		_song_modal_backdrop.visible = false
 
@@ -1046,6 +1226,8 @@ func _on_file_selected(p_path: String) -> void:
 
 
 func _on_bgm_toggle_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
 	if menu_bgm_player != null:
 		menu_bgm_player.set_bgm_enabled(not menu_bgm_player.is_bgm_enabled)
 	_refresh_bgm_controls()
@@ -1053,18 +1235,24 @@ func _on_bgm_toggle_pressed() -> void:
 
 
 func _on_bgm_prev_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
 	if menu_bgm_player != null:
 		menu_bgm_player.prev_track()
 	_refresh_bgm_controls()
 
 
 func _on_bgm_next_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
 	if menu_bgm_player != null:
 		menu_bgm_player.next_track()
 	_refresh_bgm_controls()
 
 
 func _on_bgm_mode_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
 	if menu_bgm_player != null:
 		menu_bgm_player.set_auto_rotate(not menu_bgm_player.is_auto_rotate)
 	_refresh_bgm_controls()
@@ -1646,13 +1834,12 @@ func _rebuild_entry_list(
 		var row_btn: Button = Button.new()
 		row_btn.name = "%s_%d" % [p_prefix, idx]
 		row_btn.text = ""
+		row_btn.mouse_filter = Control.MOUSE_FILTER_PASS
 		row_btn.custom_minimum_size = Vector2(0.0, SONG_ROW_HEIGHT_PX)
 		row_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		_apply_song_row_style(row_btn, idx < count - 1)
-		row_btn.pressed.connect(open_song_setup_modal.bind(entry))
-		if ui_sfx_player != null:
-			ui_sfx_player.bind_button(row_btn)
+		row_btn.pressed.connect(_on_song_row_pressed.bind(entry))
 
 		var row_margin: MarginContainer = MarginContainer.new()
 		row_margin.name = "RowInnerMargin"
@@ -2174,18 +2361,19 @@ func _build_browser_screen_ui() -> void:
 	_content_sheet_panel.add_child(sheet_inner)
 
 	# Tab 1: CANCIONES
-	var songs_scroll: ScrollContainer = ScrollContainer.new()
-	songs_scroll.name = "SongsTabScroll"
-	songs_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	songs_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sheet_inner.add_child(songs_scroll)
-	_songs_tab_container = songs_scroll
+	_songs_scroll = ScrollContainer.new()
+	_songs_scroll.name = "SongsTabScroll"
+	_songs_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_songs_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sheet_inner.add_child(_songs_scroll)
+	_songs_tab_container = _songs_scroll
 
 	_songs_list_vbox = VBoxContainer.new()
 	_songs_list_vbox.name = "SongsListVBox"
 	_songs_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_songs_list_vbox.add_theme_constant_override("separation", 0)
-	songs_scroll.add_child(_songs_list_vbox)
+	_songs_scroll.add_child(_songs_list_vbox)
+	_configure_touch_scroll_container(_songs_scroll)
 
 	# Tab 2: IMPORTAR
 	var import_vbox: VBoxContainer = VBoxContainer.new()
@@ -2239,19 +2427,28 @@ func _build_browser_screen_ui() -> void:
 
 	import_vbox.add_child(_create_white_divider("ImportSectionDivider", 24))
 
-	var import_scroll: ScrollContainer = ScrollContainer.new()
-	import_scroll.name = "ImportedListScroll"
-	import_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	import_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	import_vbox.add_child(import_scroll)
+	_import_scroll = ScrollContainer.new()
+	_import_scroll.name = "ImportedListScroll"
+	_import_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_import_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	import_vbox.add_child(_import_scroll)
 
 	_import_list_vbox = VBoxContainer.new()
 	_import_list_vbox.name = "ImportedListVBox"
 	_import_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_import_list_vbox.add_theme_constant_override("separation", 0)
-	import_scroll.add_child(_import_list_vbox)
+	_import_scroll.add_child(_import_list_vbox)
+	_configure_touch_scroll_container(_import_scroll)
 
-	# Tab 3: AJUSTES (within the same unified frosted sheet with white dividers)
+	# Tab 3: AJUSTES (wrapped in ScrollContainer for touch scrolling and future growth)
+	_settings_scroll = ScrollContainer.new()
+	_settings_scroll.name = "SettingsTabScroll"
+	_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_settings_scroll.visible = false
+	sheet_inner.add_child(_settings_scroll)
+	_settings_tab_container = _settings_scroll
+
 	var settings_margin: MarginContainer = MarginContainer.new()
 	settings_margin.name = "SettingsTabContainer"
 	settings_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2260,9 +2457,7 @@ func _build_browser_screen_ui() -> void:
 	settings_margin.add_theme_constant_override("margin_right", 28)
 	settings_margin.add_theme_constant_override("margin_top", 28)
 	settings_margin.add_theme_constant_override("margin_bottom", 28)
-	settings_margin.visible = false
-	sheet_inner.add_child(settings_margin)
-	_settings_tab_container = settings_margin
+	_settings_scroll.add_child(settings_margin)
 
 	var settings_vbox: VBoxContainer = VBoxContainer.new()
 	settings_vbox.name = "SettingsContentVBox"
@@ -2322,6 +2517,8 @@ func _build_browser_screen_ui() -> void:
 	_bgm_mode_button.pressed.connect(_on_bgm_mode_pressed)
 	settings_vbox.add_child(_bgm_mode_button)
 
+	_configure_touch_scroll_container(_settings_scroll)
+
 
 func _build_song_setup_modal_ui() -> void:
 	_song_modal_backdrop = ColorRect.new()
@@ -2338,10 +2535,16 @@ func _build_song_setup_modal_ui() -> void:
 	_song_modal_panel.add_theme_stylebox_override("panel", _style_modal_panel)
 	_song_modal_backdrop.add_child(_song_modal_panel)
 
+	_modal_scroll = ScrollContainer.new()
+	_modal_scroll.name = "SongModalScroll"
+	_song_modal_panel.add_child(_modal_scroll)
+
 	_modal_vbox = VBoxContainer.new()
 	_modal_vbox.name = "SongModalVBox"
+	_modal_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_modal_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_modal_vbox.add_theme_constant_override("separation", 18)
-	_song_modal_panel.add_child(_modal_vbox)
+	_modal_scroll.add_child(_modal_vbox)
 
 	var header_row: HBoxContainer = HBoxContainer.new()
 	header_row.name = "ModalHeaderRow"
@@ -2488,6 +2691,8 @@ func _build_song_setup_modal_ui() -> void:
 	_apply_stylebox_to_button(_play_button, _style_play_cta)
 	_play_button.pressed.connect(_on_play_button_pressed)
 	_modal_vbox.add_child(_play_button)
+
+	_configure_touch_scroll_container(_modal_scroll)
 
 
 func _build_exit_confirm_modal_ui() -> void:
