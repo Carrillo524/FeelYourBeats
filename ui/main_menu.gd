@@ -94,10 +94,12 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 @export var ui_sfx_player: UiSfxPlayer = null
 @export var audio_analyzer: AudioAnalyzer = null
 @export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
+@export var background_settings_path: String = ReactiveBackgroundConfig.DEFAULT_SETTINGS_PATH
 @export var allow_scene_change: bool = true
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _particles_config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
+var _bg_config: ReactiveBackgroundConfig = ReactiveBackgroundConfig.new()
 var _font_registry: UiFontRegistry = null
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
 var _imported_songs_dir: String = IMPORTED_SONGS_DIR_PATH
@@ -143,6 +145,9 @@ var _particles_toggle_button: Button = null
 var _particles_type_buttons: Dictionary = {}
 var _particles_density_buttons: Dictionary = {}
 var _particles_reactivity_buttons: Dictionary = {}
+var _bg_style_buttons: Dictionary = {}
+var _bg_style_hint_label: Label = null
+var _bg_reactivity_buttons: Dictionary = {}
 
 # Floating Song Setup Modal
 var _song_modal_backdrop: ColorRect = null
@@ -271,6 +276,7 @@ func _ready() -> void:
 	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
 	_refresh_particle_controls()
+	_refresh_background_controls()
 	_sync_live_audio_monitoring()
 	var returning_to_selector: bool = open_directly_to_selector
 	if open_directly_to_selector:
@@ -2257,6 +2263,43 @@ func _on_particles_reactivity_selected(p_reactivity: String) -> void:
 	_apply_and_persist_particle_settings()
 
 
+func get_background_config_snapshot() -> ReactiveBackgroundConfig:
+	return _bg_config.duplicate_config()
+
+
+func set_background_settings_path(p_path: String) -> void:
+	background_settings_path = p_path
+	reload_background_settings()
+
+
+func reload_background_settings() -> void:
+	_bg_config.load_from_file(background_settings_path)
+	if reactive_background != null:
+		reactive_background.apply_background_config(_bg_config)
+	_refresh_background_controls()
+
+
+func _apply_and_persist_background_settings() -> void:
+	_bg_config.save_to_file(background_settings_path)
+	if reactive_background != null:
+		reactive_background.apply_background_config(_bg_config)
+	_refresh_background_controls()
+
+
+func _on_bg_style_selected(p_style: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_bg_config.style = ReactiveBackgroundConfig.sanitize_style(p_style)
+	_apply_and_persist_background_settings()
+
+
+func _on_bg_reactivity_selected(p_reactivity: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_bg_config.reactivity = ReactiveBackgroundConfig.sanitize_level(p_reactivity)
+	_apply_and_persist_background_settings()
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	_title_bass_boost = maxf(_title_bass_boost, clampf(p_strength, 0.0, 1.0))
 
@@ -2379,6 +2422,7 @@ func _connect_dependencies() -> void:
 		reactive_background.set_perimeter_wave_enabled(false)
 		reactive_background.audio_analyzer = audio_analyzer
 		reactive_background.connect_dependencies()
+		reload_background_settings()
 		if not reactive_background.bass_kick_pulsed.is_connected(_on_bass_kick_pulsed):
 			reactive_background.bass_kick_pulsed.connect(_on_bass_kick_pulsed)
 		if not audio_analyzer.spectrum_updated.is_connected(_on_menu_spectrum_updated):
@@ -3140,6 +3184,26 @@ func _refresh_particle_controls() -> void:
 			_set_option_highlight(react_btn, _particles_config.music_reactivity == level_id)
 
 
+func _refresh_background_controls() -> void:
+	for i: int in range(ReactiveBackgroundConfig.SUPPORTED_STYLES.size()):
+		var style_id: String = ReactiveBackgroundConfig.SUPPORTED_STYLES[i]
+		var style_btn: Button = _bg_style_buttons.get(style_id, null) as Button
+		if style_btn != null:
+			_set_option_highlight(style_btn, _bg_config.style == style_id)
+
+	if _bg_style_hint_label != null:
+		var show_hint: bool = _bg_config.is_reserved_for_phase8b()
+		_bg_style_hint_label.visible = show_hint
+		if show_hint:
+			_bg_style_hint_label.text = "%s: reservado para Fase 8B (usando fondo Clásico temporalmente)." % ReactiveBackgroundConfig.style_to_label(_bg_config.style)
+
+	for j: int in range(ReactiveBackgroundConfig.SUPPORTED_LEVELS.size()):
+		var level_id: String = ReactiveBackgroundConfig.SUPPORTED_LEVELS[j]
+		var level_btn: Button = _bg_reactivity_buttons.get(level_id, null) as Button
+		if level_btn != null:
+			_set_option_highlight(level_btn, _bg_config.reactivity == level_id)
+
+
 func _set_option_highlight(p_button: Button, p_is_active: bool) -> void:
 	if p_button == null:
 		return
@@ -3707,6 +3771,93 @@ func _build_browser_screen_ui() -> void:
 		r_btn.pressed.connect(_on_particles_reactivity_selected.bind(r_id))
 		reactivity_row.add_child(r_btn)
 		_particles_reactivity_buttons[r_id] = r_btn
+
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_3", 0))
+
+	var bg_header: Label = Label.new()
+	bg_header.name = "SettingsBackgroundHeader"
+	bg_header.text = "FONDO REACTIVO"
+	bg_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	bg_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	settings_vbox.add_child(bg_header)
+
+	var bg_style_label: Label = Label.new()
+	bg_style_label.name = "BackgroundStyleLabel"
+	bg_style_label.text = "ESTILO DE FONDO"
+	bg_style_label.add_theme_font_size_override("font_size", 30)
+	bg_style_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(bg_style_label)
+
+	_bg_style_buttons.clear()
+	var bg_row_1: HBoxContainer = HBoxContainer.new()
+	bg_row_1.name = "BackgroundStyleRow1"
+	bg_row_1.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(bg_row_1)
+
+	var bg_row1_styles: PackedStringArray = PackedStringArray([
+		ReactiveBackgroundConfig.STYLE_CLASSIC,
+		ReactiveBackgroundConfig.STYLE_WAVES,
+	])
+	for b1_idx: int in range(bg_row1_styles.size()):
+		var b1_id: String = bg_row1_styles[b1_idx]
+		var b1_btn: Button = _create_compact_settings_button(
+			"BackgroundStyle_%s" % b1_id,
+			ReactiveBackgroundConfig.style_to_label(b1_id)
+		)
+		b1_btn.pressed.connect(_on_bg_style_selected.bind(b1_id))
+		bg_row_1.add_child(b1_btn)
+		_bg_style_buttons[b1_id] = b1_btn
+
+	var bg_row_2: HBoxContainer = HBoxContainer.new()
+	bg_row_2.name = "BackgroundStyleRow2"
+	bg_row_2.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(bg_row_2)
+
+	var bg_row2_styles: PackedStringArray = PackedStringArray([
+		ReactiveBackgroundConfig.STYLE_AURORA,
+		ReactiveBackgroundConfig.STYLE_SHOOTING_STARS,
+	])
+	for b2_idx: int in range(bg_row2_styles.size()):
+		var b2_id: String = bg_row2_styles[b2_idx]
+		var b2_btn: Button = _create_compact_settings_button(
+			"BackgroundStyle_%s" % b2_id,
+			ReactiveBackgroundConfig.style_to_label(b2_id)
+		)
+		b2_btn.pressed.connect(_on_bg_style_selected.bind(b2_id))
+		bg_row_2.add_child(b2_btn)
+		_bg_style_buttons[b2_id] = b2_btn
+
+	_bg_style_hint_label = Label.new()
+	_bg_style_hint_label.name = "BackgroundStyleHintLabel"
+	_bg_style_hint_label.text = ""
+	_bg_style_hint_label.visible = false
+	_bg_style_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_bg_style_hint_label.add_theme_font_size_override("font_size", 24)
+	_bg_style_hint_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+	settings_vbox.add_child(_bg_style_hint_label)
+
+	var bg_react_label: Label = Label.new()
+	bg_react_label.name = "BackgroundReactivityLabel"
+	bg_react_label.text = "INTENSIDAD MUSICAL DEL FONDO"
+	bg_react_label.add_theme_font_size_override("font_size", 30)
+	bg_react_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	settings_vbox.add_child(bg_react_label)
+
+	_bg_reactivity_buttons.clear()
+	var bg_react_row: HBoxContainer = HBoxContainer.new()
+	bg_react_row.name = "BackgroundReactivityRow"
+	bg_react_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(bg_react_row)
+
+	for br_idx: int in range(ReactiveBackgroundConfig.SUPPORTED_LEVELS.size()):
+		var br_id: String = ReactiveBackgroundConfig.SUPPORTED_LEVELS[br_idx]
+		var br_btn: Button = _create_compact_settings_button(
+			"BackgroundReactivity_%s" % br_id,
+			ReactiveBackgroundConfig.level_to_label(br_id)
+		)
+		br_btn.pressed.connect(_on_bg_reactivity_selected.bind(br_id))
+		bg_react_row.add_child(br_btn)
+		_bg_reactivity_buttons[br_id] = br_btn
 
 	_configure_touch_scroll_container(_settings_scroll)
 
