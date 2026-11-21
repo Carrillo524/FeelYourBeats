@@ -30,8 +30,9 @@ const SPARKLE_BRIGHTNESS_BEAT_BOOST: float = 0.72
 const SPARKLE_MOTION_DROP_BOOST: float = 1.80
 const SPARKLE_BASE_HALO_SCALE: float = 4.2
 const SPARKLE_HALO_BEAT_BOOST: float = 3.40
-const SHOOTING_STAR_MIN_ANGLE_DEG: float = 28.0
-const SHOOTING_STAR_MAX_ANGLE_DEG: float = 38.0
+const SHOOTING_STAR_FIXED_ANGLE_DEG: float = 34.0
+const SHOOTING_STAR_STRATA_COUNT: int = 8
+const SHOOTING_STAR_STRATA_STEP: int = 3
 const SHOOTING_STAR_SPEED_BEAT_BOOST: float = 2.30
 const SHOOTING_STAR_LENGTH_DROP_BOOST: float = 1.02
 const SHOOTING_STAR_BRIGHTNESS_BEAT_BOOST: float = 0.74
@@ -102,6 +103,7 @@ var _current_shooting_star_length_mult: float = 1.0
 var _current_shooting_star_brightness_mult: float = 1.0
 var _audio_active: bool = true
 var _beat_trigger_count: int = 0
+var _shooting_star_lane_cursor: int = 0
 var _needs_clear_draw: bool = false
 
 # Pre-allocated typed parallel arrays (0 heap allocations per frame)
@@ -876,26 +878,33 @@ func _draw_sparkles() -> void:
 
 
 func _spawn_shooting_star(p_index: int, p_bounds: Vector2, p_initial_fill: bool, p_force_active: bool = false, p_beat_strength: float = 0.0) -> void:
-	var angle_deg: float = _rng.randf_range(SHOOTING_STAR_MIN_ANGLE_DEG, SHOOTING_STAR_MAX_ANGLE_DEG)
-	var angle_rad: float = deg_to_rad(angle_deg)
+	# Fixed parallel diagonal trajectory (~34 deg) + stratified uniform coverage across left & top entry borders
+	var angle_rad: float = deg_to_rad(SHOOTING_STAR_FIXED_ANGLE_DEG)
 	var dir: Vector2 = Vector2(cos(angle_rad), sin(angle_rad))
 	var base_speed: float = _rng.randf_range(210.0, 350.0) * (1.0 + (p_beat_strength * 0.35))
 	var tail_len: float = _rng.randf_range(125.0, 235.0) * (1.0 + (p_beat_strength * 0.25))
 	var width_px: float = _rng.randf_range(1.6, 2.6)
 
-	var start_pos: Vector2 = Vector2.ZERO
-	if p_initial_fill and p_index < 2:
-		# Pre-seed 1-2 active streaks inside viewport for immediate live preview
-		start_pos = Vector2(
-			_rng.randf_range(p_bounds.x * 0.12, p_bounds.x * 0.58),
-			_rng.randf_range(p_bounds.y * 0.08, p_bounds.y * 0.45)
-		)
-	elif _rng.randf() < 0.65:
-		# Enter along top edge
-		start_pos = Vector2(_rng.randf_range(-p_bounds.x * 0.15, p_bounds.x * 0.72), -24.0)
+	var stratum_idx: int = posmod(_shooting_star_lane_cursor, SHOOTING_STAR_STRATA_COUNT)
+	_shooting_star_lane_cursor = posmod(_shooting_star_lane_cursor + SHOOTING_STAR_STRATA_STEP, SHOOTING_STAR_STRATA_COUNT)
+	var u: float = (float(stratum_idx) + _rng.randf_range(0.15, 0.85)) / float(SHOOTING_STAR_STRATA_COUNT)
+
+	var left_span: float = p_bounds.y * 0.82
+	var top_span: float = p_bounds.x * 0.92
+	var total_span: float = maxf(1.0, left_span + top_span)
+	var perim_dist: float = u * total_span
+
+	var entry_pos: Vector2 = Vector2.ZERO
+	if perim_dist < left_span:
+		entry_pos = Vector2(-24.0, left_span - perim_dist)
 	else:
-		# Enter along left edge
-		start_pos = Vector2(-24.0, _rng.randf_range(p_bounds.y * 0.04, p_bounds.y * 0.46))
+		entry_pos = Vector2(perim_dist - left_span, -24.0)
+
+	var start_pos: Vector2 = entry_pos
+	if p_initial_fill and p_index < 2:
+		# Advance pre-seeded preview stars along their exact stratified diagonal ray
+		var preview_advance: float = _rng.randf_range(p_bounds.x * 0.16, p_bounds.x * 0.38)
+		start_pos = entry_pos + (dir * preview_advance)
 
 	var is_active_now: bool = p_force_active or (p_initial_fill and p_index < 2)
 	var dormant_delay: float = -_rng.randf_range(0.55, 2.60)

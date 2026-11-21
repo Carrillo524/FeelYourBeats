@@ -36,9 +36,13 @@ const EDGE_EPSILON: float = 0.004
 const TUNNEL_FRAME_COUNT: int = 12
 const TUNNEL_MIN_SCALE: float = 0.04
 const TUNNEL_MAX_SCALE: float = 1.15
-const TUNNEL_BASE_DEPTH_SPEED: float = 0.28
+const TUNNEL_BASE_DEPTH_SPEED: float = 0.085
 const TUNNEL_BEAT_DECAY_RATE: float = 4.8
 const TUNNEL_DROP_DECAY_RATE: float = 2.2
+const TUNNEL_SHAKE_MIN_PX: float = 2.0
+const TUNNEL_SHAKE_MAX_PX: float = 5.5
+const TUNNEL_SHAKE_DECAY_RATE: float = 11.5
+const TUNNEL_SHAKE_OSC_SPEED: float = 48.0
 const TUNNEL_CHAMFER_RATIO: float = 0.20
 const WAVE_BASE_TOP_COLOR: Color = Color(0.032, 0.042, 0.105, 1.0)
 const WAVE_BASE_BOTTOM_COLOR: Color = Color(0.068, 0.028, 0.138, 1.0)
@@ -101,6 +105,9 @@ var _spectrum_update_count: int = 0
 var _tunnel_depths: PackedFloat32Array = PackedFloat32Array()
 var _tunnel_beat_boost: float = 0.0
 var _tunnel_drop_boost: float = 0.0
+var _tunnel_shake_intensity: float = 0.0
+var _tunnel_shake_phase: float = 0.0
+var _tunnel_shake_offset_px: Vector2 = Vector2.ZERO
 var _tunnel_frame_pts: PackedVector2Array = PackedVector2Array()
 var _tunnel_pulse_count: int = 0
 
@@ -251,18 +258,41 @@ func get_tunnel_speed_multiplier() -> float:
 		0.0,
 		1.85
 	)
-	return 1.0 + (drive * 2.90)
+	return 1.0 + (drive * 0.88)
 
 
 func get_tunnel_brightness_multiplier() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var tier_drop: float = 0.45 if _current_tier >= 2 else 0.0
+	var tier_drop: float = 0.55 if _current_tier >= 2 else 0.0
 	var drive: float = clampf(
-		((_tunnel_beat_boost * 0.72) + maxf(_tunnel_drop_boost * 0.65, tier_drop) + (_smoothed_bass * 0.30)) * react_mult,
+		((_tunnel_beat_boost * 0.82) + maxf(_tunnel_drop_boost * 0.75, tier_drop) + (_smoothed_bass * 0.38)) * react_mult,
 		0.0,
-		1.75
+		1.95
 	)
-	return 1.0 + (drive * 0.65)
+	return 1.0 + (drive * 1.15)
+
+
+func get_tunnel_blur_multiplier() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var tier_drop: float = 0.50 if _current_tier >= 2 else 0.0
+	var drive: float = clampf(
+		((_tunnel_beat_boost * 0.80) + maxf(_tunnel_drop_boost * 0.72, tier_drop) + (_smoothed_bass * 0.35)) * react_mult,
+		0.0,
+		1.90
+	)
+	return 1.0 + (drive * 0.55)
+
+
+func get_tunnel_shake_offset() -> Vector2:
+	return _tunnel_shake_offset_px
+
+
+func get_global_hit_flash_energy() -> float:
+	return maxf(maxf(_lane_flashes.x, _lane_flashes.y), maxf(_lane_flashes.z, _lane_flashes.w))
+
+
+func is_custom_hit_flash_rendering() -> bool:
+	return (is_waves_style_active() or is_aurora_style_active()) and get_global_hit_flash_energy() > 0.004
 
 
 func get_tunnel_scales_snapshot() -> PackedFloat32Array:
@@ -285,17 +315,17 @@ func get_aurora_curtain_count() -> int:
 
 func get_aurora_brightness_multiplier() -> float:
 	var drive: float = _compute_aurora_musical_drive()
-	return 1.0 + (drive * 0.92)
+	return 1.0 + (drive * 1.25)
 
 
 func get_aurora_blur_scale() -> float:
 	var drive: float = _compute_aurora_musical_drive()
-	return 1.0 + (drive * 0.42)
+	return 1.0 + (drive * 0.62)
 
 
 func get_aurora_peak_alpha() -> float:
 	var bright_mult: float = get_aurora_brightness_multiplier()
-	return clampf(0.135 * bright_mult, 0.0, 0.36)
+	return clampf(0.20 * bright_mult, 0.0, 0.46)
 
 
 func get_aurora_undulation_multiplier() -> float:
@@ -333,6 +363,10 @@ func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_by
 		_tunnel_beat_boost = maxf(_tunnel_beat_boost, s)
 		if p_is_drop:
 			_tunnel_drop_boost = maxf(_tunnel_drop_boost, s)
+		var shake_target: float = clampf(s * (1.15 if p_is_drop else 0.85), 0.35, 1.0)
+		_tunnel_shake_intensity = maxf(_tunnel_shake_intensity, shake_target)
+		_tunnel_shake_phase += 1.37
+		_update_tunnel_shake_offset()
 		_tunnel_pulse_count += 1
 		queue_redraw()
 	elif is_aurora_style_active():
@@ -354,11 +388,34 @@ func step_tunnel(p_delta: float) -> void:
 	if _tunnel_drop_boost < 0.002:
 		_tunnel_drop_boost = 0.0
 
+	_tunnel_shake_phase += dt * TUNNEL_SHAKE_OSC_SPEED
+	_tunnel_shake_intensity *= exp(-TUNNEL_SHAKE_DECAY_RATE * dt)
+	if _tunnel_shake_intensity < 0.01:
+		_tunnel_shake_intensity = 0.0
+	_update_tunnel_shake_offset()
+
 	var speed_mult: float = get_tunnel_speed_multiplier()
 	var advance: float = TUNNEL_BASE_DEPTH_SPEED * speed_mult * dt
 	for i: int in range(_tunnel_depths.size()):
 		_tunnel_depths[i] = fposmod(_tunnel_depths[i] + advance, 1.0)
 	queue_redraw()
+
+
+func _update_tunnel_shake_offset() -> void:
+	if _tunnel_shake_intensity <= 0.01:
+		_tunnel_shake_offset_px = Vector2.ZERO
+		return
+	var react_scale: float = lerpf(0.75, 1.15, (_bg_config.get_reactivity_multiplier() - 0.55) / 0.90)
+	var envelope: float = smoothstep(0.0, 0.25, _tunnel_shake_intensity)
+	var amp_px: float = clampf(
+		lerpf(TUNNEL_SHAKE_MIN_PX, TUNNEL_SHAKE_MAX_PX, _tunnel_shake_intensity) * react_scale,
+		TUNNEL_SHAKE_MIN_PX,
+		TUNNEL_SHAKE_MAX_PX
+	) * envelope
+	_tunnel_shake_offset_px = Vector2(
+		cos(_tunnel_shake_phase * 1.41) * amp_px,
+		sin(_tunnel_shake_phase * 1.93) * amp_px
+	)
 
 
 func step_aurora(p_delta: float) -> void:
@@ -635,7 +692,10 @@ func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: in
 		_:
 			pass
 
-	_sync_shader_parameters()
+	if is_waves_style_active() or is_aurora_style_active():
+		queue_redraw()
+	else:
+		_sync_shader_parameters()
 
 
 func _setup_shader_material() -> void:
@@ -798,6 +858,8 @@ func _apply_active_style_mode() -> void:
 		material = _shader_material
 		_tunnel_beat_boost = 0.0
 		_tunnel_drop_boost = 0.0
+		_tunnel_shake_intensity = 0.0
+		_tunnel_shake_offset_px = Vector2.ZERO
 		_aurora_beat_boost = 0.0
 		_aurora_drop_boost = 0.0
 		_sync_shader_parameters()
@@ -826,6 +888,8 @@ func _draw_tunnel_backdrop() -> void:
 	var half_w_max: float = w * 0.52
 	var half_h_max: float = h * 0.52
 	var bright_mult: float = get_tunnel_brightness_multiplier()
+	var blur_mult: float = get_tunnel_blur_multiplier()
+	var core_flash_mix: float = clampf((bright_mult - 1.0) * 0.22, 0.0, 0.42)
 	var palette_len: int = TUNNEL_FRAME_COLORS.size()
 
 	if _tunnel_frame_pts.size() != 9:
@@ -841,14 +905,15 @@ func _draw_tunnel_backdrop() -> void:
 
 		var fade_in: float = smoothstep(0.0, 0.16, depth_t)
 		var fade_out: float = 1.0 - smoothstep(0.86, 1.0, depth_t)
-		var base_alpha: float = lerpf(0.07, 0.22, depth_t) * fade_in * fade_out
-		var final_alpha: float = clampf(base_alpha * bright_mult, 0.0, 0.30)
+		var base_alpha: float = lerpf(0.11, 0.30, depth_t) * fade_in * fade_out
+		var final_alpha: float = clampf(base_alpha * bright_mult, 0.0, 0.48)
 		if final_alpha <= 0.004:
 			continue
 
-		# Beveled hollow neon octagon / rounded-corner frame in perspective (no fill)
-		var cx: float = center.x
-		var cy: float = center.y
+		# Beveled hollow neon octagon / rounded-corner frame in perspective with beat micro-shake
+		var depth_shake: Vector2 = _tunnel_shake_offset_px * lerpf(0.35, 1.0, depth_t)
+		var cx: float = center.x + depth_shake.x
+		var cy: float = center.y + depth_shake.y
 		var ch_x: float = hw * TUNNEL_CHAMFER_RATIO
 		var ch_y: float = hh * TUNNEL_CHAMFER_RATIO
 
@@ -863,21 +928,27 @@ func _draw_tunnel_backdrop() -> void:
 		_tunnel_frame_pts[8] = _tunnel_frame_pts[0]
 
 		var col: Color = TUNNEL_FRAME_COLORS[i % palette_len]
-		var core_w: float = lerpf(1.1, 2.5, depth_t)
+		var core_w: float = lerpf(1.2, 2.7, depth_t)
 
-		# 3-layer soft translucent halo (no WorldEnvironment)
-		var outer_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.24)
-		var mid_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.48)
+		# 5-layer intense neon blur halo (no WorldEnvironment)
+		var bloom_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.10)
+		var outer_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.19)
+		var mid_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.34)
+		var inner_col: Color = Color(col.r, col.g, col.b, final_alpha * 0.58)
 		var core_col: Color = Color(
-			lerpf(col.r, 1.0, 0.30),
-			lerpf(col.g, 1.0, 0.30),
-			lerpf(col.b, 1.0, 0.30),
+			lerpf(col.r, 1.0, 0.30 + core_flash_mix),
+			lerpf(col.g, 1.0, 0.30 + core_flash_mix),
+			lerpf(col.b, 1.0, 0.30 + core_flash_mix),
 			final_alpha
 		)
 
-		draw_polyline(_tunnel_frame_pts, outer_col, core_w * 5.2, true)
-		draw_polyline(_tunnel_frame_pts, mid_col, core_w * 2.6, true)
+		draw_polyline(_tunnel_frame_pts, bloom_col, core_w * 11.0 * blur_mult, true)
+		draw_polyline(_tunnel_frame_pts, outer_col, core_w * 6.8 * blur_mult, true)
+		draw_polyline(_tunnel_frame_pts, mid_col, core_w * 3.8 * blur_mult, true)
+		draw_polyline(_tunnel_frame_pts, inner_col, core_w * 2.0, true)
 		draw_polyline(_tunnel_frame_pts, core_col, core_w, true)
+
+	_draw_global_note_hit_flashes(bounds)
 
 
 func _sample_aurora_color(p_phase: float) -> Color:
@@ -898,7 +969,20 @@ func _draw_aurora_backdrop() -> void:
 	var bright_mult: float = get_aurora_brightness_multiplier()
 	var blur_scale: float = get_aurora_blur_scale()
 	var undul_mult: float = get_aurora_undulation_multiplier()
-	var glow_flash_mix: float = clampf((bright_mult - 1.0) * 0.18, 0.0, 0.32)
+	var glow_flash_mix: float = clampf((bright_mult - 1.0) * 0.22, 0.0, 0.40)
+
+	# Atmospheric neon sky wash in active aurora color for richer luminous presence
+	var wash_col: Color = _sample_aurora_color(_aurora_color_phase)
+	var wash_alpha: float = clampf(0.055 * bright_mult, 0.0, 0.14)
+	_quad_pts_buf[0] = Vector2(0.0, 0.0)
+	_quad_pts_buf[1] = Vector2(w, 0.0)
+	_quad_pts_buf[2] = Vector2(w, h * 0.78)
+	_quad_pts_buf[3] = Vector2(0.0, h * 0.78)
+	_quad_cols_buf[0] = Color(wash_col.r, wash_col.g, wash_col.b, wash_alpha)
+	_quad_cols_buf[1] = Color(wash_col.r, wash_col.g, wash_col.b, wash_alpha)
+	_quad_cols_buf[2] = Color(wash_col.r, wash_col.g, wash_col.b, 0.0)
+	_quad_cols_buf[3] = Color(wash_col.r, wash_col.g, wash_col.b, 0.0)
+	draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.16, 0.42, 0.66, 0.86])
 	var slants: PackedFloat32Array = PackedFloat32Array([0.14, -0.10, 0.12, -0.13])
@@ -906,24 +990,24 @@ func _draw_aurora_backdrop() -> void:
 	var y_starts: PackedFloat32Array = PackedFloat32Array([0.04, 0.08, 0.05, 0.10])
 	var y_ends: PackedFloat32Array = PackedFloat32Array([0.74, 0.82, 0.78, 0.72])
 	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 1.55, 3.10, 4.65])
-	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.05 * blur_scale, 1.38 * blur_scale, 0.68])
-	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.28, 0.56, 0.95])
+	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.65 * blur_scale, 1.85 * blur_scale, 1.18 * blur_scale, 0.58])
+	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.22, 0.42, 0.70, 1.0])
 
 	for c_idx: int in range(AURORA_CURTAIN_COUNT):
 		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15))
 		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 1.15) + 1.65)
-		var base_alpha: float = clampf((0.11 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, 0.36)
+		var base_alpha: float = clampf((0.16 + (0.035 * float(c_idx % 2))) * bright_mult, 0.0, 0.46)
 		var y_top_px: float = h * y_starts[c_idx]
 		var y_bot_px: float = h * y_ends[c_idx]
 		var span_y: float = maxf(1.0, y_bot_px - y_top_px)
 		var base_hw: float = w * half_widths[c_idx]
 		var sway_amp: float = w * 0.065 * undul_mult
 
-		# Three soft concentric curtain passes (wide blur halo + mid veil + luminous silk core)
-		for pass_idx: int in range(3):
+		# Four soft concentric curtain passes for lush neon blur glow without hiding notes
+		for pass_idx: int in range(4):
 			var width_scale: float = pass_widths[pass_idx]
 			var pass_alpha_scale: float = pass_alphas[pass_idx]
-			var core_flash: float = glow_flash_mix if pass_idx == 2 else (glow_flash_mix * 0.45)
+			var core_flash: float = glow_flash_mix if pass_idx == 3 else (glow_flash_mix * 0.42)
 			for s_idx: int in range(AURORA_RIBBON_SEGMENTS):
 				var t0: float = float(s_idx) / float(AURORA_RIBBON_SEGMENTS)
 				var t1: float = float(s_idx + 1) / float(AURORA_RIBBON_SEGMENTS)
@@ -943,8 +1027,8 @@ func _draw_aurora_backdrop() -> void:
 				var env0: float = pow(sin(clampf(t0, 0.0, 1.0) * PI), 1.35)
 				var env1: float = pow(sin(clampf(t1, 0.0, 1.0) * PI), 1.35)
 
-				var c0_rgb: Color = col_top.lerp(col_bot, t0).lerp(Color(0.92, 0.98, 1.0, 1.0), core_flash)
-				var c1_rgb: Color = col_top.lerp(col_bot, t1).lerp(Color(0.92, 0.98, 1.0, 1.0), core_flash)
+				var c0_rgb: Color = col_top.lerp(col_bot, t0).lerp(Color(0.94, 0.99, 1.0, 1.0), core_flash)
+				var c1_rgb: Color = col_top.lerp(col_bot, t1).lerp(Color(0.94, 0.99, 1.0, 1.0), core_flash)
 				var c0: Color = Color(c0_rgb.r, c0_rgb.g, c0_rgb.b, base_alpha * pass_alpha_scale * env0)
 				var c1: Color = Color(c1_rgb.r, c1_rgb.g, c1_rgb.b, base_alpha * pass_alpha_scale * env1)
 
@@ -957,6 +1041,50 @@ func _draw_aurora_backdrop() -> void:
 				_quad_cols_buf[2] = c1
 				_quad_cols_buf[3] = c1
 				draw_polygon(_quad_pts_buf, _quad_cols_buf)
+
+	_draw_global_note_hit_flashes(bounds)
+
+
+func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:
+	if get_global_hit_flash_energy() <= 0.004:
+		return
+
+	var w: float = p_bounds.x
+	var h: float = p_bounds.y
+	var lane_w: float = w * 0.25
+	var top_y: float = h * 0.10
+	var energies: PackedFloat32Array = PackedFloat32Array([
+		_lane_flashes.x,
+		_lane_flashes.y,
+		_lane_flashes.z,
+		_lane_flashes.w,
+	])
+	var beam_widths: PackedFloat32Array = PackedFloat32Array([lane_w * 0.46, lane_w * 0.26, lane_w * 0.11])
+	var beam_alphas: PackedFloat32Array = PackedFloat32Array([0.18, 0.28, 0.42])
+
+	for lane_idx: int in range(4):
+		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
+		if e <= 0.004:
+			continue
+
+		var perfect_boost: float = smoothstep(0.75, 1.0, e)
+		var col: Color = Color(0.20, 0.85, 1.0, 1.0).lerp(Color(0.58, 1.0, 0.96, 1.0), perfect_boost * 0.68)
+		var cx: float = (float(lane_idx) + 0.5) * lane_w
+
+		for pass_idx: int in range(3):
+			var hw: float = beam_widths[pass_idx]
+			var a_bot: float = clampf(e * beam_alphas[pass_idx] * (1.0 + (perfect_boost * 0.25)), 0.0, 0.44)
+			var c_top: Color = Color(col.r, col.g, col.b, 0.0)
+			var c_bot: Color = Color(col.r, col.g, col.b, a_bot)
+			_quad_pts_buf[0] = Vector2(cx - hw, top_y)
+			_quad_pts_buf[1] = Vector2(cx + hw, top_y)
+			_quad_pts_buf[2] = Vector2(cx + hw, h)
+			_quad_pts_buf[3] = Vector2(cx - hw, h)
+			_quad_cols_buf[0] = c_top
+			_quad_cols_buf[1] = c_top
+			_quad_cols_buf[2] = c_bot
+			_quad_cols_buf[3] = c_bot
+			draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 
 func _resolve_draw_bounds() -> Vector2:
