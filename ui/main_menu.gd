@@ -28,6 +28,11 @@ const MODAL_OPTION_HEIGHT_PX: float = 80.0
 const PLAY_BUTTON_HEIGHT_PX: float = 94.0
 const TRANSITION_FADE_DURATION_SEC: float = 2.5
 const TRANSITION_FADE_Z_INDEX: int = 100
+const STARTUP_INTRO_Z_INDEX: int = 95
+const STARTUP_INTRO_VEIL_SEC: float = 0.25
+const STARTUP_INTRO_WAVE_SEC: float = 0.45
+const STARTUP_INTRO_TOTAL_SEC: float = 0.95
+const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
 const LOADING_OVERLAY_Z_INDEX: int = 90
 const BGM_FADEOUT_DURATION_SEC: float = 0.35
 const USEC_TO_SEC: float = 0.000001
@@ -57,6 +62,15 @@ const MARQUEE_EDGE_PAD_PX: float = 16.0
 const MARQUEE_INITIAL_PAUSE_SEC: float = 1.2
 
 static var open_directly_to_selector: bool = false
+static var _has_played_startup_intro: bool = false
+
+
+static func reset_startup_intro_for_tests() -> void:
+	_has_played_startup_intro = false
+
+
+static func has_played_startup_intro() -> bool:
+	return _has_played_startup_intro
 
 const COLOR_TEXT_ACTIVE: Color = Color(0.98, 1.0, 1.0, 1.0)
 const COLOR_TEXT_INACTIVE: Color = Color(0.76, 0.84, 0.94, 0.90)
@@ -92,6 +106,7 @@ var _hero_play_button: Button = null
 # Screen 2: Tabbed Browser
 var _browser_screen_container: VBoxContainer = null
 var _browser_header_label: Label = null
+var _tabs_row: HBoxContainer = null
 var _tab_songs_button: Button = null
 var _tab_import_button: Button = null
 var _tab_settings_button: Button = null
@@ -158,6 +173,10 @@ var _loading_percent_label: Label = null
 var _file_dialog: FileDialog = null
 var _transition_fade_rect: ColorRect = null
 var _transition_tween: Tween = null
+var _intro_overlay: Control = null
+var _intro_veil_rect: ColorRect = null
+var _intro_wave_fx: Control = null
+var _intro_tween: Tween = null
 
 var _style_option_active: StyleBoxFlat = null
 var _style_option_inactive: StyleBoxFlat = null
@@ -184,6 +203,9 @@ var _selected_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
 var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
 var _is_processing_song: bool = false
+var _is_playing_startup_intro: bool = false
+var _intro_wave_progress: float = 0.0
+var _intro_wave_center: Vector2 = Vector2.ZERO
 var _pending_import_after_permission: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 var _active_worker_task_id: int = -1
@@ -230,6 +252,7 @@ func _ready() -> void:
 	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
 	_sync_live_audio_monitoring()
+	var returning_to_selector: bool = open_directly_to_selector
 	if open_directly_to_selector:
 		open_directly_to_selector = false
 		show_browser_screen(MenuTab.SONGS)
@@ -241,6 +264,11 @@ func _ready() -> void:
 	else:
 		apply_hud_safe_rect(Rect2(64.8, 0.0, 950.4, 1920.0))
 
+	if returning_to_selector:
+		_has_played_startup_intro = true
+	elif not _has_played_startup_intro:
+		_start_startup_intro()
+
 
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
@@ -251,7 +279,7 @@ func _process(p_delta: float) -> void:
 	var bgm_active: bool = menu_bgm_player != null and menu_bgm_player.is_bgm_enabled and menu_bgm_player.get_track_count() > 0
 	var combined_energy: float = clampf(maxf(_title_bass_boost, _live_menu_bass), 0.0, 1.0) if bgm_active else 0.0
 
-	if _title_screen_container != null and _title_screen_container.visible:
+	if _title_screen_container != null and _title_screen_container.visible and not _is_playing_startup_intro:
 		var ambient_wave: float = sin(_pulse_phase) * 0.5 + 0.5
 		if _hero_title_label != null:
 			_hero_title_label.pivot_offset = _hero_title_label.size * 0.5
@@ -291,6 +319,9 @@ func _exit_tree() -> void:
 	if _active_worker_task_id != -1:
 		WorkerThreadPool.wait_for_task_completion(_active_worker_task_id)
 		_active_worker_task_id = -1
+	if _intro_tween != null:
+		_intro_tween.kill()
+		_intro_tween = null
 	if _transition_tween != null:
 		_transition_tween.kill()
 		_transition_tween = null
@@ -360,7 +391,7 @@ func _reset_touch_scroll_state() -> void:
 
 
 func _find_touch_scroll_container_at(p_pos: Vector2) -> ScrollContainer:
-	if _is_launching or _is_processing_song:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro:
 		return null
 	if is_loading_overlay_visible():
 		return null
@@ -460,6 +491,8 @@ func _consume_suppressed_scroll_press() -> bool:
 
 
 func _on_song_row_pressed(p_entry: Dictionary) -> void:
+	if _is_playing_startup_intro:
+		return
 	if _consume_suppressed_scroll_press():
 		return
 	if ui_sfx_player != null:
@@ -484,7 +517,7 @@ func _consume_back_debounce(p_now_msec: int = -1) -> bool:
 
 
 func handle_back_request(p_now_msec: int = -1) -> void:
-	if _is_launching or _is_processing_song:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro:
 		return
 	if not _consume_back_debounce(p_now_msec):
 		return
@@ -618,6 +651,8 @@ func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 
 
 func select_tab(p_tab: int) -> void:
+	if _is_playing_startup_intro:
+		return
 	_reset_touch_scroll_state()
 	_active_tab = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
 	if _active_tab == MenuTab.SONGS:
@@ -905,6 +940,14 @@ func is_processing_song() -> bool:
 	return _is_processing_song
 
 
+func is_playing_startup_intro() -> bool:
+	return _is_playing_startup_intro
+
+
+func get_intro_wave_progress() -> float:
+	return _intro_wave_progress
+
+
 func is_loading_overlay_visible() -> bool:
 	return _loading_overlay != null and _loading_overlay.visible
 
@@ -1078,7 +1121,228 @@ func prepare_session_launch_payload() -> Dictionary:
 
 
 func _on_hero_play_pressed() -> void:
+	if _is_playing_startup_intro:
+		return
 	show_browser_screen(MenuTab.SONGS)
+
+
+func _start_startup_intro() -> void:
+	_has_played_startup_intro = true
+	_is_playing_startup_intro = true
+	_intro_wave_progress = 0.0
+
+	if _intro_tween != null:
+		_intro_tween.kill()
+		_intro_tween = null
+	if _intro_overlay != null:
+		_intro_overlay.queue_free()
+		_intro_overlay = null
+		_intro_veil_rect = null
+		_intro_wave_fx = null
+
+	_intro_overlay = Control.new()
+	_intro_overlay.name = "StartupIntroOverlay"
+	_intro_overlay.z_index = STARTUP_INTRO_Z_INDEX
+	_intro_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_intro_overlay)
+	_intro_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	_intro_veil_rect = ColorRect.new()
+	_intro_veil_rect.name = "StartupIntroVeil"
+	_intro_veil_rect.color = Color(0.01, 0.02, 0.06, 1.0)
+	_intro_veil_rect.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_intro_veil_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_intro_overlay.add_child(_intro_veil_rect)
+	_intro_veil_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	_intro_wave_fx = Control.new()
+	_intro_wave_fx.name = "StartupIntroWaveFx"
+	_intro_wave_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_intro_wave_fx.draw.connect(_draw_intro_wave)
+	_intro_overlay.add_child(_intro_wave_fx)
+	_intro_wave_fx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	var on_title_screen: bool = _title_screen_container != null and _title_screen_container.visible
+	var title_node: Control = _hero_title_label if on_title_screen else _browser_header_label
+	var primary_node: Control = _hero_play_button if on_title_screen else _tabs_row
+	var secondary_node: Control = _hero_subtitle_label if on_title_screen else _content_sheet_panel
+
+	var title_base_y: float = 0.0
+	if title_node != null:
+		title_base_y = title_node.position.y
+		title_node.pivot_offset = title_node.size * 0.5
+		title_node.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		title_node.scale = Vector2(0.94, 0.94)
+		title_node.position.y = title_base_y + STARTUP_INTRO_TITLE_OFFSET_Y_PX
+		var title_rect: Rect2 = title_node.get_global_rect()
+		_intro_wave_center = (title_rect.position + (title_rect.size * 0.5)) - global_position
+	else:
+		_intro_wave_center = Vector2(size.x * 0.5, size.y * 0.30)
+
+	if primary_node != null:
+		primary_node.pivot_offset = primary_node.size * 0.5
+		primary_node.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		primary_node.scale = Vector2(0.94, 0.94)
+
+	if secondary_node != null:
+		secondary_node.modulate = Color(1.0, 1.0, 1.0, 0.0)
+
+	_intro_tween = create_tween()
+	_intro_tween.set_parallel(true)
+
+	# 1. Rapid dark veil fade-in (0.00s -> 0.25s)
+	_intro_tween.tween_property(
+		_intro_veil_rect,
+		"modulate:a",
+		0.0,
+		STARTUP_INTRO_VEIL_SEC
+	).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	# 2. Title / logo progressive reveal with subtle scale & lift (0.12s -> 0.50s)
+	if title_node != null:
+		_intro_tween.tween_property(
+			title_node,
+			"modulate:a",
+			1.0,
+			0.38
+		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_intro_tween.tween_property(
+			title_node,
+			"scale",
+			Vector2.ONE,
+			0.38
+		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_intro_tween.tween_property(
+			title_node,
+			"position:y",
+			title_base_y,
+			0.38
+		).set_delay(0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# 3. Subtle expanding circular neon "boom" wave centered on title (0.18s -> 0.63s)
+	_intro_tween.tween_method(
+		_set_intro_wave_progress,
+		0.0,
+		1.0,
+		STARTUP_INTRO_WAVE_SEC
+	).set_delay(0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+	# 4. Primary action / tabs row reveal (0.34s -> 0.68s)
+	if primary_node != null:
+		_intro_tween.tween_property(
+			primary_node,
+			"modulate:a",
+			1.0,
+			0.34
+		).set_delay(0.34).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_intro_tween.tween_property(
+			primary_node,
+			"scale",
+			Vector2.ONE,
+			0.34
+		).set_delay(0.34).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# 5. Secondary elements / content sheet reveal (0.52s -> 0.95s)
+	if secondary_node != null:
+		_intro_tween.tween_property(
+			secondary_node,
+			"modulate:a",
+			1.0,
+			STARTUP_INTRO_TOTAL_SEC - 0.52
+		).set_delay(0.52).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	_intro_tween.chain().tween_callback(_finish_startup_intro)
+
+
+func _set_intro_wave_progress(p_progress: float) -> void:
+	_intro_wave_progress = clampf(p_progress, 0.0, 1.0)
+	if _intro_wave_fx != null:
+		_intro_wave_fx.queue_redraw()
+
+
+func _draw_intro_wave() -> void:
+	if _intro_wave_fx == null:
+		return
+	if _intro_wave_progress <= 0.001 or _intro_wave_progress >= 0.999:
+		return
+
+	var t: float = _intro_wave_progress
+	var fade: float = pow(1.0 - t, 1.65)
+	var base_radius: float = lerpf(24.0, 340.0, t)
+	var inner_radius: float = lerpf(12.0, 235.0, t)
+
+	# Soft radial bloom behind title at wave peak
+	var core_alpha: float = fade * 0.14
+	if core_alpha > 0.005:
+		_intro_wave_fx.draw_circle(
+			_intro_wave_center,
+			lerpf(42.0, 165.0, t),
+			Color(0.32, 0.92, 1.0, core_alpha)
+		)
+
+	# Outer glowing neon cyan ring + crisp core arc
+	_intro_wave_fx.draw_arc(
+		_intro_wave_center,
+		base_radius,
+		0.0,
+		TAU,
+		56,
+		Color(0.24, 0.88, 1.0, fade * 0.24),
+		lerpf(22.0, 6.0, t),
+		true
+	)
+	_intro_wave_fx.draw_arc(
+		_intro_wave_center,
+		base_radius,
+		0.0,
+		TAU,
+		56,
+		Color(0.68, 0.99, 1.0, fade * 0.62),
+		lerpf(4.2, 1.4, t),
+		true
+	)
+
+	# Subtle secondary magenta/violet harmonic ring
+	_intro_wave_fx.draw_arc(
+		_intro_wave_center,
+		inner_radius,
+		0.0,
+		TAU,
+		48,
+		Color(0.78, 0.42, 1.0, fade * 0.30),
+		lerpf(6.0, 1.8, t),
+		true
+	)
+
+
+func _finish_startup_intro() -> void:
+	_is_playing_startup_intro = false
+	_intro_wave_progress = 1.0
+	_intro_tween = null
+
+	var revealed_nodes: Array[Control] = [
+		_hero_title_label,
+		_hero_subtitle_label,
+		_hero_play_button,
+		_browser_header_label,
+		_tabs_row,
+		_content_sheet_panel,
+	]
+	for i: int in range(revealed_nodes.size()):
+		var node_ctrl: Control = revealed_nodes[i]
+		if node_ctrl != null:
+			node_ctrl.modulate = Color(1.0, 1.0, 1.0, 1.0)
+			node_ctrl.scale = Vector2.ONE
+
+	if _safe_container != null:
+		apply_hud_safe_rect(Rect2(_safe_container.position, _safe_container.size))
+
+	if _intro_overlay != null:
+		var overlay_to_free: Control = _intro_overlay
+		_intro_overlay = null
+		_intro_veil_rect = null
+		_intro_wave_fx = null
+		overlay_to_free.queue_free()
 
 
 func get_last_launch_sequence() -> Array[String]:
@@ -1086,7 +1350,7 @@ func get_last_launch_sequence() -> Array[String]:
 
 
 func _on_play_button_pressed() -> void:
-	if _is_launching or _is_processing_song:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro:
 		return
 	_is_launching = true
 	_is_processing_song = true
@@ -2744,22 +3008,22 @@ func _build_browser_screen_ui() -> void:
 	_browser_header_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_browser_screen_container.add_child(_browser_header_label)
 
-	var tabs_row: HBoxContainer = HBoxContainer.new()
-	tabs_row.name = "TopTabsRow"
-	tabs_row.add_theme_constant_override("separation", 10)
-	_browser_screen_container.add_child(tabs_row)
+	_tabs_row = HBoxContainer.new()
+	_tabs_row.name = "TopTabsRow"
+	_tabs_row.add_theme_constant_override("separation", 10)
+	_browser_screen_container.add_child(_tabs_row)
 
 	_tab_songs_button = _create_tab_button("TabSongsButton", "CANCIONES")
 	_tab_songs_button.pressed.connect(select_tab.bind(MenuTab.SONGS))
-	tabs_row.add_child(_tab_songs_button)
+	_tabs_row.add_child(_tab_songs_button)
 
 	_tab_import_button = _create_tab_button("TabImportButton", "IMPORTAR")
 	_tab_import_button.pressed.connect(select_tab.bind(MenuTab.IMPORT))
-	tabs_row.add_child(_tab_import_button)
+	_tabs_row.add_child(_tab_import_button)
 
 	_tab_settings_button = _create_tab_button("TabSettingsButton", "AJUSTES")
 	_tab_settings_button.pressed.connect(select_tab.bind(MenuTab.SETTINGS))
-	tabs_row.add_child(_tab_settings_button)
+	_tabs_row.add_child(_tab_settings_button)
 
 	# Unified full-height frosted translucent sheet below the top tabs
 	_content_sheet_panel = PanelContainer.new()
