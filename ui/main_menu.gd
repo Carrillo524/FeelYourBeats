@@ -39,6 +39,10 @@ const USEC_TO_SEC: float = 0.000001
 const BACK_DEBOUNCE_MSEC: int = 300
 const TOUCH_SCROLL_DEADZONE_PX: int = 20
 const TOUCH_SCROLL_DRAG_THRESHOLD_PX: float = 18.0
+const TAB_SLIDE_MAIN_DURATION_SEC: float = 0.17
+const TAB_SLIDE_SETTLE_DURATION_SEC: float = 0.05
+const TAB_SLIDE_OVERSHOOT_PX: float = 10.0
+const TAB_INDICATOR_HEIGHT_PX: float = 5.0
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -106,11 +110,14 @@ var _hero_play_button: Button = null
 # Screen 2: Tabbed Browser
 var _browser_screen_container: VBoxContainer = null
 var _browser_header_label: Label = null
+var _tabs_bar_wrapper: Control = null
 var _tabs_row: HBoxContainer = null
+var _tab_indicator_bar: Panel = null
 var _tab_songs_button: Button = null
 var _tab_import_button: Button = null
 var _tab_settings_button: Button = null
 var _content_sheet_panel: PanelContainer = null
+var _tab_content_viewport: Control = null
 
 var _songs_tab_container: Control = null
 var _songs_scroll: ScrollContainer = null
@@ -191,6 +198,7 @@ var _style_exit_danger: StyleBoxFlat = null
 var _style_floating_play: StyleBoxEmpty = null
 var _style_loading_track: StyleBoxFlat = null
 var _style_loading_fill: StyleBoxFlat = null
+var _style_tab_indicator: StyleBoxFlat = null
 
 var _song_entries: Array[Dictionary] = []
 var _imported_entries: Array[Dictionary] = []
@@ -204,6 +212,10 @@ var _selected_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _is_launching: bool = false
 var _is_processing_song: bool = false
 var _is_playing_startup_intro: bool = false
+var _is_tab_transitioning: bool = false
+var _tab_transition_tween: Tween = null
+var _tab_transition_outgoing: Control = null
+var _tab_transition_incoming: Control = null
 var _intro_wave_progress: float = 0.0
 var _intro_wave_center: Vector2 = Vector2.ZERO
 var _pending_import_after_permission: bool = false
@@ -322,6 +334,9 @@ func _exit_tree() -> void:
 	if _intro_tween != null:
 		_intro_tween.kill()
 		_intro_tween = null
+	if _tab_transition_tween != null:
+		_tab_transition_tween.kill()
+		_tab_transition_tween = null
 	if _transition_tween != null:
 		_transition_tween.kill()
 		_transition_tween = null
@@ -391,7 +406,7 @@ func _reset_touch_scroll_state() -> void:
 
 
 func _find_touch_scroll_container_at(p_pos: Vector2) -> ScrollContainer:
-	if _is_launching or _is_processing_song or _is_playing_startup_intro:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro or _is_tab_transitioning:
 		return null
 	if is_loading_overlay_visible():
 		return null
@@ -602,6 +617,9 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 
 	_layout_exit_confirm_panel(safe_w, safe_h)
 	_layout_loading_overlay(safe_w, safe_h)
+	if not _is_tab_transitioning:
+		_sync_all_tab_panel_geometries()
+		call_deferred(&"_snap_tab_indicator_to_active")
 
 
 func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
@@ -642,24 +660,247 @@ func show_title_screen() -> void:
 func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 	_ensure_ui_nodes()
 	_reset_touch_scroll_state()
+	_cancel_tab_transition_immediately()
 	_title_screen_container.visible = false
 	_browser_screen_container.visible = true
 	_song_modal_backdrop.visible = false
 	if _exit_confirm_backdrop != null:
 		_exit_confirm_backdrop.visible = false
-	select_tab(p_tab)
+	select_tab(p_tab, false)
 
 
-func select_tab(p_tab: int) -> void:
-	if _is_playing_startup_intro:
+func select_tab(p_tab: int, p_animate: bool = true) -> void:
+	if _is_playing_startup_intro or _is_processing_song or _is_launching:
 		return
+	if _is_tab_transitioning:
+		return
+
+	var target_tab: int = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
+	var old_tab: int = _active_tab
 	_reset_touch_scroll_state()
-	_active_tab = clampi(p_tab, MenuTab.SONGS, MenuTab.SETTINGS)
+
+	var can_animate: bool = (
+		p_animate
+		and old_tab != target_tab
+		and _browser_screen_container != null
+		and _browser_screen_container.visible
+		and _tab_content_viewport != null
+		and is_inside_tree()
+	)
+
+	_active_tab = target_tab
 	if _active_tab == MenuTab.SONGS:
 		_reset_marquee_items(_songs_marquee_items)
 	elif _active_tab == MenuTab.IMPORT:
 		_reset_marquee_items(_imported_marquee_items)
+
+	if not can_animate:
+		_refresh_tab_visuals()
+		_sync_all_tab_panel_geometries()
+		call_deferred(&"_snap_tab_indicator_to_active")
+		return
+
+	_start_tab_transition(old_tab, target_tab)
+
+
+func is_tab_transitioning() -> bool:
+	return _is_tab_transitioning
+
+
+func get_tab_indicator_bar() -> Panel:
+	return _tab_indicator_bar
+
+
+func get_tab_content_viewport() -> Control:
+	return _tab_content_viewport
+
+
+func _get_tab_container(p_tab: int) -> Control:
+	match p_tab:
+		MenuTab.SONGS:
+			return _songs_tab_container
+		MenuTab.IMPORT:
+			return _import_tab_container
+		MenuTab.SETTINGS:
+			return _settings_tab_container
+		_:
+			return _songs_tab_container
+
+
+func _get_tab_button(p_tab: int) -> Button:
+	match p_tab:
+		MenuTab.SONGS:
+			return _tab_songs_button
+		MenuTab.IMPORT:
+			return _tab_import_button
+		MenuTab.SETTINGS:
+			return _tab_settings_button
+		_:
+			return _tab_songs_button
+
+
+func _restore_tab_panel_geometry(p_panel: Control) -> void:
+	if p_panel == null:
+		return
+	p_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	p_panel.position = Vector2.ZERO
+	if _tab_content_viewport != null and _tab_content_viewport.size.x > 1.0 and _tab_content_viewport.size.y > 1.0:
+		p_panel.size = _tab_content_viewport.size
+
+
+func _sync_all_tab_panel_geometries() -> void:
+	_restore_tab_panel_geometry(_songs_tab_container)
+	_restore_tab_panel_geometry(_import_tab_container)
+	_restore_tab_panel_geometry(_settings_tab_container)
+
+
+func _snap_tab_indicator_to_active() -> void:
+	if _tab_indicator_bar == null or _tabs_row == null:
+		return
+	var active_btn: Button = _get_tab_button(_active_tab)
+	if active_btn == null:
+		return
+	var btn_w: float = active_btn.size.x
+	var btn_x: float = active_btn.position.x
+	if btn_w <= 1.0 and _tabs_bar_wrapper != null and _tabs_bar_wrapper.size.x > 1.0:
+		var slot_w: float = (_tabs_bar_wrapper.size.x - 20.0) / 3.0
+		btn_w = maxf(40.0, slot_w)
+		btn_x = float(_active_tab) * (slot_w + 10.0)
+	_tab_indicator_bar.position = Vector2(btn_x, 85.0)
+	_tab_indicator_bar.size = Vector2(maxf(24.0, btn_w), TAB_INDICATOR_HEIGHT_PX)
+
+
+func _cancel_tab_transition_immediately() -> void:
+	if _tab_transition_tween != null:
+		_tab_transition_tween.kill()
+		_tab_transition_tween = null
+	_is_tab_transitioning = false
+	_tab_transition_outgoing = null
+	_tab_transition_incoming = null
+	_sync_all_tab_panel_geometries()
+
+
+func _start_tab_transition(p_old_tab: int, p_new_tab: int) -> void:
+	var outgoing: Control = _get_tab_container(p_old_tab)
+	var incoming: Control = _get_tab_container(p_new_tab)
+	if outgoing == null or incoming == null or outgoing == incoming:
+		_refresh_tab_visuals()
+		_sync_all_tab_panel_geometries()
+		_snap_tab_indicator_to_active()
+		return
+
+	_is_tab_transitioning = true
+	_tab_transition_outgoing = outgoing
+	_tab_transition_incoming = incoming
+
+	# Update tab button highlights immediately while indicator bar slides smoothly
+	_set_option_highlight(_tab_songs_button, p_new_tab == MenuTab.SONGS)
+	_set_option_highlight(_tab_import_button, p_new_tab == MenuTab.IMPORT)
+	_set_option_highlight(_tab_settings_button, p_new_tab == MenuTab.SETTINGS)
+
+	# Hide any non-participating tab (e.g. IMPORT when jumping SONGS <-> SETTINGS)
+	var all_tabs: Array[Control] = [_songs_tab_container, _import_tab_container, _settings_tab_container]
+	for i: int in range(all_tabs.size()):
+		var tab_ctrl: Control = all_tabs[i]
+		if tab_ctrl != null and tab_ctrl != outgoing and tab_ctrl != incoming:
+			tab_ctrl.visible = false
+			_restore_tab_panel_geometry(tab_ctrl)
+
+	var vp_size: Vector2 = _tab_content_viewport.size
+	var slide_w: float = maxf(240.0, vp_size.x)
+	var direction: float = 1.0 if p_new_tab > p_old_tab else -1.0
+	var overshoot_x: float = -direction * TAB_SLIDE_OVERSHOOT_PX
+
+	_restore_tab_panel_geometry(outgoing)
+	_restore_tab_panel_geometry(incoming)
+	outgoing.visible = true
+	incoming.visible = true
+	outgoing.position.x = 0.0
+	incoming.position.x = direction * slide_w
+
+	# Ensure indicator bar starts from old tab button position
+	var old_btn: Button = _get_tab_button(p_old_tab)
+	var new_btn: Button = _get_tab_button(p_new_tab)
+	if _tab_indicator_bar != null and old_btn != null and old_btn.size.x > 1.0:
+		_tab_indicator_bar.position = Vector2(old_btn.position.x, 85.0)
+		_tab_indicator_bar.size = Vector2(old_btn.size.x, TAB_INDICATOR_HEIGHT_PX)
+
+	if _tab_transition_tween != null:
+		_tab_transition_tween.kill()
+		_tab_transition_tween = null
+
+	_tab_transition_tween = create_tween()
+	_tab_transition_tween.set_parallel(true)
+
+	# Phase A (170ms): Horizontal directional slide + subtle overshoot (10px)
+	_tab_transition_tween.tween_property(
+		outgoing,
+		"position:x",
+		-direction * slide_w,
+		TAB_SLIDE_MAIN_DURATION_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	_tab_transition_tween.tween_property(
+		incoming,
+		"position:x",
+		overshoot_x,
+		TAB_SLIDE_MAIN_DURATION_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# Sliding neon indicator bar across total 220ms
+	if _tab_indicator_bar != null and new_btn != null:
+		var target_x: float = new_btn.position.x
+		var target_w: float = new_btn.size.x
+		if target_w <= 1.0 and _tabs_bar_wrapper != null and _tabs_bar_wrapper.size.x > 1.0:
+			var slot_w: float = (_tabs_bar_wrapper.size.x - 20.0) / 3.0
+			target_w = maxf(40.0, slot_w)
+			target_x = float(p_new_tab) * (slot_w + 10.0)
+		var total_dur: float = TAB_SLIDE_MAIN_DURATION_SEC + TAB_SLIDE_SETTLE_DURATION_SEC
+		_tab_transition_tween.tween_property(
+			_tab_indicator_bar,
+			"position:x",
+			target_x,
+			total_dur
+		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_tab_transition_tween.tween_property(
+			_tab_indicator_bar,
+			"size:x",
+			maxf(24.0, target_w),
+			total_dur
+		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# Phase B (50ms): Quick settle from overshoot back to exact x == 0.0
+	_tab_transition_tween.tween_property(
+		incoming,
+		"position:x",
+		0.0,
+		TAB_SLIDE_SETTLE_DURATION_SEC
+	).set_delay(TAB_SLIDE_MAIN_DURATION_SEC).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	_tab_transition_tween.chain().tween_callback(_finish_tab_transition)
+
+
+func _finish_tab_transition() -> void:
+	var outgoing: Control = _tab_transition_outgoing
+	var incoming: Control = _tab_transition_incoming
+	_tab_transition_tween = null
+	_tab_transition_outgoing = null
+	_tab_transition_incoming = null
+	_is_tab_transitioning = false
+
+	if outgoing != null and outgoing != incoming:
+		outgoing.visible = false
+		_restore_tab_panel_geometry(outgoing)
+
 	_refresh_tab_visuals()
+	_sync_all_tab_panel_geometries()
+	_snap_tab_indicator_to_active()
+
+
+func _on_tab_viewport_resized() -> void:
+	if not _is_tab_transitioning:
+		_sync_all_tab_panel_geometries()
+		_snap_tab_indicator_to_active()
 
 
 func get_active_tab() -> int:
@@ -2923,6 +3164,12 @@ func _build_theme_styles() -> void:
 	_style_loading_fill.shadow_color = Color(0.24, 0.92, 1.0, 0.45)
 	_style_loading_fill.shadow_size = 8
 
+	_style_tab_indicator = StyleBoxFlat.new()
+	_style_tab_indicator.bg_color = Color(0.42, 0.98, 1.0, 1.0)
+	_style_tab_indicator.set_corner_radius_all(3)
+	_style_tab_indicator.shadow_color = Color(0.22, 0.92, 1.0, 0.65)
+	_style_tab_indicator.shadow_size = 8
+
 
 func _apply_external_fonts() -> void:
 	if _font_registry == null:
@@ -3027,10 +3274,19 @@ func _build_browser_screen_ui() -> void:
 	_browser_header_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_browser_screen_container.add_child(_browser_header_label)
 
+	_tabs_bar_wrapper = Control.new()
+	_tabs_bar_wrapper.name = "TopTabsBarWrapper"
+	_tabs_bar_wrapper.custom_minimum_size = Vector2(0.0, 92.0)
+	_tabs_bar_wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tabs_bar_wrapper.mouse_filter = Control.MOUSE_FILTER_PASS
+	_browser_screen_container.add_child(_tabs_bar_wrapper)
+
 	_tabs_row = HBoxContainer.new()
 	_tabs_row.name = "TopTabsRow"
 	_tabs_row.add_theme_constant_override("separation", 10)
-	_browser_screen_container.add_child(_tabs_row)
+	_tabs_bar_wrapper.add_child(_tabs_row)
+	_tabs_row.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_tabs_row.offset_bottom = 84.0
 
 	_tab_songs_button = _create_tab_button("TabSongsButton", "CANCIONES")
 	_tab_songs_button.pressed.connect(select_tab.bind(MenuTab.SONGS))
@@ -3043,6 +3299,14 @@ func _build_browser_screen_ui() -> void:
 	_tab_settings_button = _create_tab_button("TabSettingsButton", "AJUSTES")
 	_tab_settings_button.pressed.connect(select_tab.bind(MenuTab.SETTINGS))
 	_tabs_row.add_child(_tab_settings_button)
+
+	_tab_indicator_bar = Panel.new()
+	_tab_indicator_bar.name = "TabActiveIndicatorBar"
+	_tab_indicator_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tab_indicator_bar.position = Vector2(0.0, 85.0)
+	_tab_indicator_bar.size = Vector2(120.0, TAB_INDICATOR_HEIGHT_PX)
+	_tab_indicator_bar.add_theme_stylebox_override("panel", _style_tab_indicator)
+	_tabs_bar_wrapper.add_child(_tab_indicator_bar)
 
 	# Unified full-height frosted translucent sheet below the top tabs
 	_content_sheet_panel = PanelContainer.new()
@@ -3063,12 +3327,20 @@ func _build_browser_screen_ui() -> void:
 	sheet_inner.add_theme_constant_override("margin_bottom", 8)
 	_content_sheet_panel.add_child(sheet_inner)
 
+	_tab_content_viewport = Control.new()
+	_tab_content_viewport.name = "TabContentViewport"
+	_tab_content_viewport.clip_contents = true
+	_tab_content_viewport.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tab_content_viewport.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tab_content_viewport.mouse_filter = Control.MOUSE_FILTER_PASS
+	_tab_content_viewport.resized.connect(_on_tab_viewport_resized)
+	sheet_inner.add_child(_tab_content_viewport)
+
 	# Tab 1: CANCIONES
 	_songs_scroll = ScrollContainer.new()
 	_songs_scroll.name = "SongsTabScroll"
-	_songs_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_songs_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sheet_inner.add_child(_songs_scroll)
+	_tab_content_viewport.add_child(_songs_scroll)
+	_songs_scroll.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_songs_tab_container = _songs_scroll
 
 	_songs_list_vbox = VBoxContainer.new()
@@ -3081,11 +3353,10 @@ func _build_browser_screen_ui() -> void:
 	# Tab 2: IMPORTAR
 	var import_vbox: VBoxContainer = VBoxContainer.new()
 	import_vbox.name = "ImportTabContainer"
-	import_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	import_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	import_vbox.add_theme_constant_override("separation", 16)
 	import_vbox.visible = false
-	sheet_inner.add_child(import_vbox)
+	_tab_content_viewport.add_child(import_vbox)
+	import_vbox.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_import_tab_container = import_vbox
 
 	var import_top_margin: MarginContainer = MarginContainer.new()
@@ -3146,10 +3417,9 @@ func _build_browser_screen_ui() -> void:
 	# Tab 3: AJUSTES (wrapped in ScrollContainer for touch scrolling and future growth)
 	_settings_scroll = ScrollContainer.new()
 	_settings_scroll.name = "SettingsTabScroll"
-	_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_settings_scroll.visible = false
-	sheet_inner.add_child(_settings_scroll)
+	_tab_content_viewport.add_child(_settings_scroll)
+	_settings_scroll.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_settings_tab_container = _settings_scroll
 
 	var settings_margin: MarginContainer = MarginContainer.new()
