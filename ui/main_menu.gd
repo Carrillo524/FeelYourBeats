@@ -278,9 +278,11 @@ var _release_modal_close_button: Button = null
 var _release_welcome_title_label: Label = null
 var _release_welcome_body_label: Label = null
 var _release_notes_heading_label: Label = null
-var _release_notes_body_label: Label = null
+var _release_notes_body_label: RichTextLabel = null
 var _release_download_button: Button = null
 var _release_modal_readable_font: SystemFont = null
+var _release_modal_readable_bold_font: SystemFont = null
+var _release_modal_readable_italic_font: SystemFont = null
 var _release_http_request: HTTPRequest = null
 static var _cached_local_app_version: String = ""
 
@@ -3455,14 +3457,122 @@ func _refresh_release_notes_modal_content() -> void:
 			_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 
 	if _release_notes_body_label != null:
-		if not _remote_release_body.is_empty():
-			_release_notes_body_label.text = _remote_release_body
-		else:
-			_release_notes_body_label.text = DEFAULT_RELEASE_NOTES_SUMMARY
+		var raw_notes: String = _remote_release_body if not _remote_release_body.is_empty() else DEFAULT_RELEASE_NOTES_SUMMARY
+		_release_notes_body_label.text = _markdown_to_bbcode(raw_notes)
 
 	if _release_download_button != null:
 		var can_download: bool = _has_remote_update and not _remote_apk_download_url.is_empty()
 		_release_download_button.visible = can_download
+
+
+static func _markdown_to_bbcode(p_markdown: String) -> String:
+	if p_markdown.is_empty():
+		return ""
+	var normalized: String = p_markdown.replace("\r\n", "\n").replace("\r", "\n")
+	# Escape literal brackets first to prevent accidental BBCode tag injection
+	normalized = normalized.replace("[", "[lb]")
+
+	var raw_lines: PackedStringArray = normalized.split("\n", true)
+	var out_lines: PackedStringArray = PackedStringArray()
+	out_lines.resize(raw_lines.size())
+
+	for i: int in range(raw_lines.size()):
+		var raw_line: String = raw_lines[i].strip_edges(false, true)
+		var trimmed: String = raw_line.strip_edges(true, true)
+		if trimmed.is_empty():
+			out_lines[i] = ""
+			continue
+
+		if trimmed.begins_with("### "):
+			out_lines[i] = "[b][color=#7ce8ff]%s[/color][/b]" % _convert_inline_markdown(trimmed.substr(4).strip_edges())
+		elif trimmed.begins_with("## "):
+			out_lines[i] = "[b][color=#7ce8ff]%s[/color][/b]" % _convert_inline_markdown(trimmed.substr(3).strip_edges())
+		elif trimmed.begins_with("# "):
+			out_lines[i] = "[b][color=#7ce8ff]%s[/color][/b]" % _convert_inline_markdown(trimmed.substr(2).strip_edges())
+		elif trimmed.begins_with("- ") or trimmed.begins_with("* "):
+			var lead_len: int = raw_line.length() - raw_line.lstrip(" \t").length()
+			var indent_prefix: String = raw_line.substr(0, lead_len)
+			var item_text: String = trimmed.substr(2)
+			out_lines[i] = "%s• %s" % [indent_prefix, _convert_inline_markdown(item_text)]
+		else:
+			out_lines[i] = _convert_inline_markdown(raw_line)
+
+	var result: String = "\n".join(out_lines)
+	while result.contains("\n\n\n"):
+		result = result.replace("\n\n\n", "\n\n")
+	return result.strip_edges()
+
+
+static func _convert_inline_markdown(p_line: String) -> String:
+	if p_line.is_empty():
+		return ""
+	var out: String = ""
+	var cursor: int = 0
+	var length: int = p_line.length()
+
+	while cursor < length:
+		var tick_open: int = p_line.find("`", cursor)
+		if tick_open < 0:
+			out += _convert_markdown_emphasis(p_line.substr(cursor))
+			break
+		var tick_close: int = p_line.find("`", tick_open + 1)
+		if tick_close < 0:
+			out += _convert_markdown_emphasis(p_line.substr(cursor))
+			break
+		if tick_open > cursor:
+			out += _convert_markdown_emphasis(p_line.substr(cursor, tick_open - cursor))
+		var code_inner: String = p_line.substr(tick_open + 1, tick_close - tick_open - 1)
+		if code_inner.is_empty():
+			out += "``"
+		else:
+			out += "[color=#ffd166]%s[/color]" % code_inner
+		cursor = tick_close + 1
+
+	return out
+
+
+static func _convert_markdown_emphasis(p_text: String) -> String:
+	var with_bold: String = _replace_markdown_delim(p_text, "**", "[b]", "[/b]", false)
+	return _replace_markdown_delim(with_bold, "*", "[i]", "[/i]", true)
+
+
+static func _replace_markdown_delim(
+	p_text: String,
+	p_delim: String,
+	p_open_tag: String,
+	p_close_tag: String,
+	p_reject_edge_spaces: bool
+) -> String:
+	if not p_text.contains(p_delim):
+		return p_text
+	var dlen: int = p_delim.length()
+	var out: String = ""
+	var cursor: int = 0
+	var length: int = p_text.length()
+
+	while cursor < length:
+		var open_idx: int = p_text.find(p_delim, cursor)
+		if open_idx < 0:
+			out += p_text.substr(cursor)
+			break
+		var close_idx: int = p_text.find(p_delim, open_idx + dlen)
+		if close_idx < 0:
+			out += p_text.substr(cursor)
+			break
+		var inner: String = p_text.substr(open_idx + dlen, close_idx - open_idx - dlen)
+		var valid_inner: bool = not inner.is_empty()
+		if valid_inner and p_reject_edge_spaces:
+			if inner.begins_with(" ") or inner.ends_with(" ") or inner.begins_with("\t") or inner.ends_with("\t"):
+				valid_inner = false
+		if valid_inner:
+			out += p_text.substr(cursor, open_idx - cursor)
+			out += p_open_tag + inner + p_close_tag
+			cursor = close_idx + dlen
+		else:
+			out += p_text.substr(cursor, (open_idx + dlen) - cursor)
+			cursor = open_idx + dlen
+
+	return out
 
 
 func _on_release_bell_pressed() -> void:
@@ -4595,17 +4705,54 @@ func _build_theme_styles() -> void:
 	)
 
 
+func _create_release_modal_system_font(p_weight: int, p_italic: bool) -> SystemFont:
+	var font: SystemFont = SystemFont.new()
+	font.font_names = PackedStringArray([
+		"Sans-Serif",
+		"Roboto",
+		"Segoe UI",
+		"Arial",
+	])
+	font.font_weight = p_weight
+	font.font_italic = p_italic
+	font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	return font
+
+
 func _ensure_release_modal_readable_font() -> SystemFont:
 	if _release_modal_readable_font == null:
-		_release_modal_readable_font = SystemFont.new()
-		_release_modal_readable_font.font_names = PackedStringArray([
-			"Sans-Serif",
-			"Roboto",
-			"Segoe UI",
-			"Arial",
-		])
-		_release_modal_readable_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+		_release_modal_readable_font = _create_release_modal_system_font(400, false)
 	return _release_modal_readable_font
+
+
+func _ensure_release_modal_readable_bold_font() -> SystemFont:
+	if _release_modal_readable_bold_font == null:
+		_release_modal_readable_bold_font = _create_release_modal_system_font(700, false)
+	return _release_modal_readable_bold_font
+
+
+func _ensure_release_modal_readable_italic_font() -> SystemFont:
+	if _release_modal_readable_italic_font == null:
+		_release_modal_readable_italic_font = _create_release_modal_system_font(400, true)
+	return _release_modal_readable_italic_font
+
+
+func _apply_release_notes_body_theme() -> void:
+	if _release_notes_body_label == null:
+		return
+	var readable_font: SystemFont = _ensure_release_modal_readable_font()
+	var bold_font: SystemFont = _ensure_release_modal_readable_bold_font()
+	var italic_font: SystemFont = _ensure_release_modal_readable_italic_font()
+	_release_notes_body_label.add_theme_font_override(&"normal_font", readable_font)
+	_release_notes_body_label.add_theme_font_override(&"bold_font", bold_font)
+	_release_notes_body_label.add_theme_font_override(&"italics_font", italic_font)
+	_release_notes_body_label.add_theme_font_override(&"bold_italics_font", bold_font)
+	_release_notes_body_label.add_theme_font_size_override(&"normal_font_size", 28)
+	_release_notes_body_label.add_theme_font_size_override(&"bold_font_size", 28)
+	_release_notes_body_label.add_theme_font_size_override(&"italics_font_size", 28)
+	_release_notes_body_label.add_theme_font_size_override(&"bold_italics_font_size", 28)
+	_release_notes_body_label.add_theme_color_override(&"default_color", COLOR_TEXT_INACTIVE)
+	_release_notes_body_label.add_theme_constant_override(&"line_separation", 8)
 
 
 func _apply_external_fonts() -> void:
@@ -4635,8 +4782,7 @@ func _apply_external_fonts() -> void:
 		_release_welcome_body_label.add_theme_font_override(&"font", readable_font)
 	if _release_notes_heading_label != null:
 		_release_notes_heading_label.add_theme_font_override(&"font", readable_font)
-	if _release_notes_body_label != null:
-		_release_notes_body_label.add_theme_font_override(&"font", readable_font)
+	_apply_release_notes_body_theme()
 
 
 func _ensure_ui_nodes() -> void:
@@ -5313,14 +5459,16 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_release_modal_vbox.add_child(_release_notes_heading_label)
 
-	_release_notes_body_label = Label.new()
+	_release_notes_body_label = RichTextLabel.new()
 	_release_notes_body_label.name = "ReleaseNotesBodyLabel"
-	_release_notes_body_label.text = DEFAULT_RELEASE_NOTES_SUMMARY
+	_release_notes_body_label.bbcode_enabled = true
+	_release_notes_body_label.fit_content = true
+	_release_notes_body_label.scroll_active = false
 	_release_notes_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_release_notes_body_label.add_theme_font_override(&"font", readable_font)
-	_release_notes_body_label.add_theme_font_size_override("font_size", 28)
-	_release_notes_body_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
-	_release_notes_body_label.add_theme_constant_override("line_spacing", 8)
+	_release_notes_body_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_notes_body_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_apply_release_notes_body_theme()
+	_release_notes_body_label.text = _markdown_to_bbcode(DEFAULT_RELEASE_NOTES_SUMMARY)
 	_release_modal_vbox.add_child(_release_notes_body_label)
 
 	_release_download_button = Button.new()
