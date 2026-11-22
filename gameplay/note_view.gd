@@ -9,9 +9,9 @@ const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.74
 const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 1.0
 const HOLD_TOP_FADE_PX: float = 22.0
 const HOLD_TOP_SOFT_TAPER: float = 0.88
-const HOLD_ELASTIC_PULSE_HZ: float = 14.0
-const HOLD_ACTIVE_WIDTH_CENTER_RATIO: float = 0.94
-const HOLD_ACTIVE_WIDTH_AMPLITUDE_RATIO: float = 0.06
+const HOLD_ELASTIC_PULSE_HZ: float = 2.5
+const HOLD_ACTIVE_WIDTH_MIN_RATIO: float = 0.82
+const HOLD_ACTIVE_WIDTH_RANGE_RATIO: float = 0.13
 const HOLD_PULSE_FREQ_RAD: float = 18.0
 
 const MOTION_FEATHER_MIN_MULTIPLIER: int = 3
@@ -86,8 +86,8 @@ func _draw() -> void:
 	var tail_top_y: float = -tail_h
 
 	# Idle: narrower (~74% of lane_width, centered) with softer 3-tier glow.
-	# Holding: elastic horizontal zoom-pulse oscillating 88%..100% of lane_width at ~14 Hz
-	# centered on lane_center_x, preserving full neon alpha without attenuation.
+	# Holding: smooth elastic breathing oscillating 82%..95% of lane_width at ~2.5 Hz
+	# centered on lane_center_x, preserving soft translucent 3-tier glow.
 	var ribbon_w: float = _compute_current_hold_ribbon_width()
 	var ribbon_hw: float = ribbon_w * 0.5
 	var alpha_mod: float = get_active_hold_alpha_mod()
@@ -180,7 +180,8 @@ func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: b
 		return
 
 	position.x = float(note_data.lane) * lane_width
-	var pulse_signed: float = sin(p_dsp_time_sec * TAU * HOLD_ELASTIC_PULSE_HZ) if p_is_holding else 0.0
+	var hold_elapsed_sec: float = maxf(0.0, p_dsp_time_sec - note_data.time_sec)
+	var elastic_wave: float = (0.5 - (0.5 * cos(hold_elapsed_sec * TAU * HOLD_ELASTIC_PULSE_HZ))) if p_is_holding else 0.0
 	var visual_width: float = maxf(4.0, lane_width - (HORIZONTAL_PADDING_PX * 2.0))
 
 	if p_is_holding and note_data.is_hold():
@@ -189,7 +190,7 @@ func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: b
 		var remaining_sec: float = maxf(0.0, end_time_sec - p_dsp_time_sec)
 		var remaining_tail_height_px: float = remaining_sec * scroll_speed_px_per_sec
 		_head_rect.color = HEAD_HOLD_ACTIVE_COLOR
-		_update_hold_body_geometry(remaining_tail_height_px, true, pulse_signed)
+		_update_hold_body_geometry(remaining_tail_height_px, true, elastic_wave)
 		_update_motion_feather(visual_width, true)
 	else:
 		position.y = p_hit_line_y - (note_data.time_sec - p_dsp_time_sec) * scroll_speed_px_per_sec
@@ -228,10 +229,11 @@ func get_active_hold_alpha_mod() -> float:
 func _compute_current_hold_ribbon_width() -> float:
 	if not _is_hold_active:
 		return lane_width * HOLD_INNER_BEAM_IDLE_RATIO
+	var wave: float = clampf(_hold_pulse_phase, 0.0, 1.0)
 	var active_ratio: float = clampf(
-		HOLD_ACTIVE_WIDTH_CENTER_RATIO + (HOLD_ACTIVE_WIDTH_AMPLITUDE_RATIO * _hold_pulse_phase),
-		0.88,
-		1.0
+		HOLD_ACTIVE_WIDTH_MIN_RATIO + (HOLD_ACTIVE_WIDTH_RANGE_RATIO * wave),
+		HOLD_ACTIVE_WIDTH_MIN_RATIO,
+		0.95
 	)
 	return lane_width * active_ratio
 
@@ -313,17 +315,17 @@ static func _ensure_shared_textures() -> void:
 		_shared_hold_beam_texture = idle_tex
 
 	if _shared_hold_active_texture == null:
-		# 3-tier smooth horizontal gradient (holding: bright neon cyan -> electric cyan -> radiant white-cyan core)
+		# 3-tier smooth horizontal gradient (holding: soft translucent sides -> neon cyan -> soft white-cyan core)
 		var active_grad: Gradient = Gradient.new()
-		active_grad.offsets = PackedFloat32Array([0.0, 0.08, 0.32, 0.50, 0.68, 0.92, 1.0])
+		active_grad.offsets = PackedFloat32Array([0.0, 0.15, 0.34, 0.50, 0.66, 0.85, 1.0])
 		active_grad.colors = PackedColorArray([
-			Color(0.18, 0.90, 1.0, 0.0),
-			Color(0.18, 0.90, 1.0, 0.72),
-			Color(0.32, 0.96, 1.0, 0.92),
-			Color(0.94, 1.0, 1.0, 1.0),
-			Color(0.32, 0.96, 1.0, 0.92),
-			Color(0.18, 0.90, 1.0, 0.72),
-			Color(0.18, 0.90, 1.0, 0.0),
+			Color(0.18, 0.88, 0.98, 0.0),
+			Color(0.18, 0.88, 0.98, 0.34),
+			Color(0.28, 0.94, 1.0, 0.58),
+			Color(0.88, 0.99, 1.0, 0.86),
+			Color(0.28, 0.94, 1.0, 0.58),
+			Color(0.18, 0.88, 0.98, 0.34),
+			Color(0.18, 0.88, 0.98, 0.0),
 		])
 		var active_tex: GradientTexture2D = GradientTexture2D.new()
 		active_tex.gradient = active_grad
@@ -429,7 +431,7 @@ func _update_hold_body_geometry(
 	_current_tail_height_px = maxf(0.0, p_tail_height_px)
 	_is_hold_visible = _current_tail_height_px > 0.5
 	_is_hold_active = p_is_holding and _is_hold_visible
-	_hold_pulse_phase = clampf(p_pulse_phase, -1.0, 1.0)
+	_hold_pulse_phase = clampf(p_pulse_phase, 0.0, 1.0)
 
 	var ribbon_w: float = _compute_current_hold_ribbon_width()
 	_current_inner_beam_width_px = ribbon_w
