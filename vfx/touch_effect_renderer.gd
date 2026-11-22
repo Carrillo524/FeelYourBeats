@@ -16,6 +16,9 @@ const OVAL_SEGMENTS: int = 14
 
 const COLOR_LIGHT_CYAN_WHITE: Color = Color(0.84, 0.99, 1.0, 1.0)
 const COLOR_NEON_CYAN_HALO: Color = Color(0.24, 0.90, 1.0, 1.0)
+const WAVE_OUTER_BLUE_NEON: Color = Color(0.18, 0.56, 1.0, 1.0)
+const WAVE_INNER_BLUE_NEON: Color = Color(0.32, 0.74, 1.0, 1.0)
+const WAVE_CORE_BLUE_BRIGHT: Color = Color(0.70, 0.91, 1.0, 1.0)
 
 var _poly4_buf: PackedVector2Array = PackedVector2Array()
 var _line5_buf: PackedVector2Array = PackedVector2Array()
@@ -74,21 +77,43 @@ func draw_touch_effect(
 			_draw_wave(p_canvas, p_pos, t, p_color)
 
 
+static func get_wave_halo_color() -> Color:
+	return WAVE_INNER_BLUE_NEON
+
+
+static func get_wave_core_color() -> Color:
+	return WAVE_CORE_BLUE_BRIGHT
+
+
 func _draw_wave(p_canvas: CanvasItem, p_pos: Vector2, p_t: float, p_color: Color) -> void:
 	var eased_t: float = 1.0 - pow(1.0 - p_t, 2.4)
 	var radius: float = lerpf(WAVE_START_RADIUS_PX, WAVE_END_RADIUS_PX, eased_t)
-	var alpha: float = (1.0 - p_t) * p_color.a
-	var stroke_w: float = lerpf(4.2, 1.4, p_t)
+	var fade: float = (1.0 - p_t) * (1.0 - (p_t * 0.16))
+	var alpha: float = clampf(fade * maxf(0.92, p_color.a), 0.0, 1.0)
+	var stroke_w: float = lerpf(4.8, 1.6, p_t)
 
-	var halo_col: Color = Color(p_color.r, p_color.g, p_color.b, alpha * 0.34)
-	var core_col: Color = Color(
-		minf(1.0, p_color.r + 0.25),
-		minf(1.0, p_color.g + 0.25),
-		minf(1.0, p_color.b + 0.25),
-		alpha
+	# Luminous blue-neon expanding ring with soft multi-layer diffused halo
+	var outer_halo_col: Color = Color(
+		WAVE_OUTER_BLUE_NEON.r,
+		WAVE_OUTER_BLUE_NEON.g,
+		WAVE_OUTER_BLUE_NEON.b,
+		alpha * 0.30
 	)
-	p_canvas.draw_arc(p_pos, radius, 0.0, TAU, 28, halo_col, stroke_w * 2.6, true)
-	p_canvas.draw_arc(p_pos, radius, 0.0, TAU, 28, core_col, stroke_w, true)
+	var inner_halo_col: Color = Color(
+		WAVE_INNER_BLUE_NEON.r,
+		WAVE_INNER_BLUE_NEON.g,
+		WAVE_INNER_BLUE_NEON.b,
+		alpha * 0.56
+	)
+	var core_col: Color = Color(
+		WAVE_CORE_BLUE_BRIGHT.r,
+		WAVE_CORE_BLUE_BRIGHT.g,
+		WAVE_CORE_BLUE_BRIGHT.b,
+		minf(1.0, alpha * 1.15)
+	)
+	p_canvas.draw_arc(p_pos, radius, 0.0, TAU, 32, outer_halo_col, stroke_w * 3.8, true)
+	p_canvas.draw_arc(p_pos, radius, 0.0, TAU, 32, inner_halo_col, stroke_w * 2.0, true)
+	p_canvas.draw_arc(p_pos, radius, 0.0, TAU, 32, core_col, stroke_w * 1.1, true)
 
 
 func _draw_double_diamond(p_canvas: CanvasItem, p_pos: Vector2, p_t: float, p_color: Color) -> void:
