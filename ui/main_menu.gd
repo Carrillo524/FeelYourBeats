@@ -18,7 +18,6 @@ const ANDROID_PERM_READ_MEDIA_AUDIO: String = "android.permission.READ_MEDIA_AUD
 const ANDROID_PERM_READ_EXTERNAL_STORAGE: String = "android.permission.READ_EXTERNAL_STORAGE"
 const ANDROID_PERMISSION_DENIED_MESSAGE: String = "Permiso de audio denegado. Habilita el acceso a música y audio en los Ajustes de Android para importar canciones."
 
-const MIN_TOUCH_BUTTON_HEIGHT_PX: float = 68.0
 const SONG_ROW_HEIGHT_PX: float = 252.0
 const DIVIDER_HEIGHT_PX: float = 2.0
 const ROW_BOTTOM_BORDER_PX: int = 3
@@ -283,11 +282,19 @@ var _release_notes_body_label: Label = null
 var _release_download_button: Button = null
 var _release_modal_readable_font: SystemFont = null
 var _release_http_request: HTTPRequest = null
-var last_read_release_tag: String = ""
+static var _cached_local_app_version: String = ""
+
+var last_read_release_tag: String = "":
+	set(p_value):
+		last_read_release_tag = p_value
+		_release_unread_cache_dirty = true
 var _has_remote_update: bool = false
 var _remote_release_tag: String = ""
 var _remote_release_body: String = ""
 var _remote_apk_download_url: String = ""
+var _cached_active_release_tag: String = ""
+var _cached_has_unread_release: bool = false
+var _release_unread_cache_dirty: bool = true
 var _style_bell_normal: StyleBoxFlat = null
 var _style_bell_hover: StyleBoxFlat = null
 
@@ -362,6 +369,7 @@ var _loading_anim_phase: float = 0.0
 var _loading_target_progress: float = -1.0
 var _loading_display_progress: float = 0.0
 var _loading_indeterminate_phase: float = 0.0
+var _last_displayed_loading_pct: int = -1
 
 var _touch_scroll_containers: Array[ScrollContainer] = []
 var _active_scroll_touch_index: int = -1
@@ -1700,23 +1708,34 @@ func get_modal_option_buttons() -> Dictionary:
 	}
 
 
+func _build_launch_payload(
+	p_is_demo: bool,
+	p_audio_path: String,
+	p_title: String,
+	p_preloaded_chart: ChartData = null,
+	p_preloaded_stream: AudioStream = null,
+	p_from_cache: bool = false
+) -> Dictionary:
+	return {
+		"is_demo": p_is_demo,
+		"audio_path": p_audio_path,
+		"title": p_title,
+		"difficulty": _selected_difficulty,
+		"note_type_mode": _selected_note_type_mode,
+		"speed_multiplier": _selected_speed_multiplier,
+		"preloaded_chart": p_preloaded_chart,
+		"preloaded_stream": p_preloaded_stream,
+		"from_cache": p_from_cache,
+	}
+
+
 func prepare_session_launch_payload() -> Dictionary:
 	var selected: Dictionary = get_selected_track()
 	var is_demo: bool = selected.get("is_demo", true) as bool
 	var audio_path: String = str(selected.get("audio_path", ""))
 	var title: String = str(selected.get("title", "FeelYourBeats Demo 128 BPM"))
 
-	var payload: Dictionary = {
-		"is_demo": is_demo,
-		"audio_path": audio_path,
-		"title": title,
-		"difficulty": _selected_difficulty,
-		"note_type_mode": _selected_note_type_mode,
-		"speed_multiplier": _selected_speed_multiplier,
-		"preloaded_chart": null,
-		"preloaded_stream": null,
-		"from_cache": false,
-	}
+	var payload: Dictionary = _build_launch_payload(is_demo, audio_path, title)
 
 	if is_demo or audio_path.is_empty() or audio_analyzer == null:
 		return payload
@@ -2396,17 +2415,7 @@ func _on_play_button_pressed() -> void:
 		return
 
 	if is_demo or audio_path.is_empty() or audio_analyzer == null:
-		var demo_payload: Dictionary = {
-			"is_demo": true,
-			"audio_path": "",
-			"title": title,
-			"difficulty": _selected_difficulty,
-			"note_type_mode": _selected_note_type_mode,
-			"speed_multiplier": _selected_speed_multiplier,
-			"preloaded_chart": null,
-			"preloaded_stream": null,
-			"from_cache": false,
-		}
+		var demo_payload: Dictionary = _build_launch_payload(true, "", title)
 		_on_song_processing_completed(job_id, demo_payload)
 		return
 
@@ -2416,18 +2425,15 @@ func _on_play_button_pressed() -> void:
 		if cached_stream != null and cached_chart != null:
 			if not title.is_empty():
 				cached_chart.title = title
-			var cached_payload: Dictionary = {
-				"is_demo": false,
-				"audio_path": audio_path,
-				"title": title,
-				"difficulty": _selected_difficulty,
-				"note_type_mode": _selected_note_type_mode,
-				"speed_multiplier": _selected_speed_multiplier,
-				"preloaded_chart": cached_chart,
-				"preloaded_stream": cached_stream,
-				"from_cache": true,
-				"cache_key": cache_key,
-			}
+			var cached_payload: Dictionary = _build_launch_payload(
+				false,
+				audio_path,
+				title,
+				cached_chart,
+				cached_stream,
+				true
+			)
+			cached_payload["cache_key"] = cache_key
 			_on_song_processing_progress(job_id, 1.0, "Pista lista")
 			_on_song_processing_completed(job_id, cached_payload)
 			return
@@ -2668,17 +2674,18 @@ func _show_loading_overlay(
 	_loading_indeterminate_phase = 0.0
 	_loading_target_progress = p_initial_progress
 	_loading_display_progress = maxf(0.0, p_initial_progress)
+	_last_displayed_loading_pct = -1
 	if _loading_title_label != null:
 		_loading_title_label.text = p_title
 	if _loading_stage_label != null:
 		_loading_stage_label.text = p_stage
-	if _loading_percent_label != null:
-		_loading_percent_label.text = "%d%%" % int(round(_loading_display_progress * 100.0)) if p_initial_progress >= 0.0 else "..."
 	if _loading_overlay != null:
 		_loading_overlay.visible = true
 		if _safe_container != null:
 			_layout_loading_overlay(_safe_container.size.x, _safe_container.size.y)
 		_update_loading_progress_bar_visual()
+	elif _loading_percent_label != null:
+		_loading_percent_label.text = "%d%%" % int(round(_loading_display_progress * 100.0)) if p_initial_progress >= 0.0 else "..."
 
 
 func _hide_loading_overlay() -> void:
@@ -2710,14 +2717,18 @@ func _update_loading_progress_bar_visual() -> void:
 		_loading_progress_fill.position = Vector2.ZERO
 		_loading_progress_fill.size = Vector2(track_w * pct, track_h)
 		if _loading_percent_label != null:
-			_loading_percent_label.text = "%d%%" % int(round(clampf(_loading_target_progress, 0.0, 1.0) * 100.0))
+			var pct_int: int = int(round(clampf(_loading_target_progress, 0.0, 1.0) * 100.0))
+			if pct_int != _last_displayed_loading_pct:
+				_last_displayed_loading_pct = pct_int
+				_loading_percent_label.text = "%d%%" % pct_int
 	else:
 		var bar_w: float = track_w * 0.34
 		var travel: float = maxf(0.0, track_w - bar_w)
 		var wave: float = (sin(_loading_indeterminate_phase * PI) * 0.5) + 0.5
 		_loading_progress_fill.position = Vector2(travel * wave, 0.0)
 		_loading_progress_fill.size = Vector2(bar_w, track_h)
-		if _loading_percent_label != null:
+		if _loading_percent_label != null and _last_displayed_loading_pct != -2:
+			_last_displayed_loading_pct = -2
 			_loading_percent_label.text = "..."
 
 
@@ -3206,10 +3217,12 @@ func _on_exit_confirm_quit_pressed() -> void:
 
 
 static func get_local_app_version() -> String:
-	var raw_ver: String = str(ProjectSettings.get_setting("application/config/version", "1.1.0")).strip_edges()
-	if raw_ver.begins_with("v") or raw_ver.begins_with("V"):
-		raw_ver = raw_ver.substr(1)
-	return raw_ver if not raw_ver.is_empty() else "1.1.0"
+	if _cached_local_app_version.is_empty():
+		var raw_ver: String = str(ProjectSettings.get_setting("application/config/version", "1.1.0")).strip_edges()
+		if raw_ver.begins_with("v") or raw_ver.begins_with("V"):
+			raw_ver = raw_ver.substr(1)
+		_cached_local_app_version = raw_ver if not raw_ver.is_empty() else "1.1.0"
+	return _cached_local_app_version
 
 
 static func parse_semver_tuple(p_version_text: String) -> PackedInt32Array:
@@ -3278,19 +3291,26 @@ func save_release_read_state() -> void:
 	cfg.save(release_state_settings_path)
 
 
+func _refresh_release_unread_cache() -> void:
+	var local_ver: String = get_local_app_version()
+	var active_tag: String = normalize_release_tag(local_ver)
+	if not _remote_release_tag.is_empty() and compare_semver(_remote_release_tag, local_ver) >= 0:
+		active_tag = normalize_release_tag(_remote_release_tag)
+	_cached_active_release_tag = active_tag
+	_cached_has_unread_release = (not active_tag.is_empty()) and (last_read_release_tag != active_tag)
+	_release_unread_cache_dirty = false
+
+
 func get_active_release_tag() -> String:
-	var local_tag: String = normalize_release_tag(get_local_app_version())
-	if not _remote_release_tag.is_empty():
-		if compare_semver(_remote_release_tag, get_local_app_version()) >= 0:
-			return normalize_release_tag(_remote_release_tag)
-	return local_tag
+	if _release_unread_cache_dirty or _cached_active_release_tag.is_empty():
+		_refresh_release_unread_cache()
+	return _cached_active_release_tag
 
 
 func has_unread_release_notes() -> bool:
-	var active_tag: String = get_active_release_tag()
-	if active_tag.is_empty():
-		return false
-	return last_read_release_tag != active_tag
+	if _release_unread_cache_dirty:
+		_refresh_release_unread_cache()
+	return _cached_has_unread_release
 
 
 func mark_current_release_as_read() -> void:
@@ -3371,6 +3391,7 @@ func apply_release_payload_dict(p_payload: Dictionary) -> void:
 	_remote_release_body = remote_body
 	_remote_apk_download_url = apk_url
 	_has_remote_update = (not remote_tag.is_empty()) and is_remote_version_newer(remote_tag, local_ver)
+	_release_unread_cache_dirty = true
 
 	_queue_redraw_release_bells()
 	_refresh_release_notes_modal_content()
@@ -3834,10 +3855,9 @@ func _update_persisted_imported_titles(p_upgraded_titles: Dictionary) -> void:
 	var raw_titles: Variant = cfg.get_value("recent_meta", "titles", {})
 	if raw_titles is Dictionary:
 		titles_map = (raw_titles as Dictionary).duplicate()
-	var keys: Array = p_upgraded_titles.keys()
-	for i: int in range(keys.size()):
-		var k: String = str(keys[i])
-		titles_map[k] = str(p_upgraded_titles[k])
+	for raw_key: Variant in p_upgraded_titles:
+		var k: String = str(raw_key)
+		titles_map[k] = str(p_upgraded_titles[raw_key])
 	cfg.set_value("recent_meta", "titles", titles_map)
 	cfg.save(_recent_tracks_path)
 
@@ -3938,16 +3958,6 @@ func _load_imported_catalog_entries() -> Array[Dictionary]:
 		})
 
 	return entries
-
-
-func _load_recent_tracks() -> PackedStringArray:
-	var catalog: Array[Dictionary] = _load_imported_catalog_entries()
-	var result: Array[String] = []
-	for i: int in range(catalog.size()):
-		var p: String = str(catalog[i].get("audio_path", "")).strip_edges()
-		if not p.is_empty():
-			result.append(p)
-	return PackedStringArray(result)
 
 
 func _save_recent_track(
@@ -4478,26 +4488,43 @@ func _create_song_row_stylebox(p_bg_color: Color, p_bottom_border_px: int) -> St
 	return sb
 
 
+static func _create_flat_stylebox(
+	p_bg: Color,
+	p_border: Color = Color(0.0, 0.0, 0.0, 0.0),
+	p_border_width: int = 0,
+	p_corner_radius: int = 0,
+	p_shadow_color: Color = Color(0.0, 0.0, 0.0, 0.0),
+	p_shadow_size: int = 0
+) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = p_bg
+	if p_border_width > 0:
+		sb.border_color = p_border
+		sb.set_border_width_all(p_border_width)
+	if p_corner_radius > 0:
+		sb.set_corner_radius_all(p_corner_radius)
+	if p_shadow_size > 0:
+		sb.shadow_color = p_shadow_color
+		sb.shadow_size = p_shadow_size
+	return sb
+
+
 func _build_theme_styles() -> void:
-	_style_option_active = StyleBoxFlat.new()
-	_style_option_active.bg_color = Color(0.10, 0.44, 0.58, 0.94)
-	_style_option_active.border_color = Color(0.38, 0.96, 1.0, 1.0)
-	_style_option_active.set_border_width_all(3)
-	_style_option_active.set_corner_radius_all(12)
-	_style_option_active.shadow_color = Color(0.20, 0.90, 1.0, 0.35)
-	_style_option_active.shadow_size = 6
-
-	_style_option_inactive = StyleBoxFlat.new()
-	_style_option_inactive.bg_color = Color(0.06, 0.09, 0.16, 0.84)
-	_style_option_inactive.border_color = Color(0.26, 0.36, 0.52, 0.55)
-	_style_option_inactive.set_border_width_all(1)
-	_style_option_inactive.set_corner_radius_all(12)
-
-	_style_content_sheet = StyleBoxFlat.new()
-	_style_content_sheet.bg_color = COLOR_SHEET_BG
-	_style_content_sheet.border_color = COLOR_SHEET_BORDER
-	_style_content_sheet.set_border_width_all(2)
-	_style_content_sheet.set_corner_radius_all(22)
+	_style_option_active = _create_flat_stylebox(
+		Color(0.10, 0.44, 0.58, 0.94),
+		Color(0.38, 0.96, 1.0, 1.0),
+		3,
+		12,
+		Color(0.20, 0.90, 1.0, 0.35),
+		6
+	)
+	_style_option_inactive = _create_flat_stylebox(
+		Color(0.06, 0.09, 0.16, 0.84),
+		Color(0.26, 0.36, 0.52, 0.55),
+		1,
+		12
+	)
+	_style_content_sheet = _create_flat_stylebox(COLOR_SHEET_BG, COLOR_SHEET_BORDER, 2, 22)
 	_style_content_sheet.anti_aliasing = true
 
 	_style_song_row_divider_normal = _create_song_row_stylebox(COLOR_ROW_REST_BG, ROW_BOTTOM_BORDER_PX)
@@ -4505,63 +4532,67 @@ func _build_theme_styles() -> void:
 	_style_song_row_last_normal = _create_song_row_stylebox(COLOR_ROW_REST_BG, 0)
 	_style_song_row_last_hover = _create_song_row_stylebox(COLOR_ROW_HOVER_BG, 0)
 
-	_style_modal_panel = StyleBoxFlat.new()
-	_style_modal_panel.bg_color = Color(0.05, 0.07, 0.14, 0.96)
-	_style_modal_panel.border_color = Color(0.35, 0.92, 1.0, 0.92)
-	_style_modal_panel.set_border_width_all(3)
-	_style_modal_panel.set_corner_radius_all(18)
-	_style_modal_panel.shadow_color = Color(0.0, 0.0, 0.0, 0.65)
-	_style_modal_panel.shadow_size = 18
-
-	_style_play_cta = StyleBoxFlat.new()
-	_style_play_cta.bg_color = Color(0.10, 0.68, 0.64, 0.98)
-	_style_play_cta.border_color = Color(0.65, 1.0, 0.94, 1.0)
-	_style_play_cta.set_border_width_all(3)
-	_style_play_cta.set_corner_radius_all(16)
-	_style_play_cta.shadow_color = Color(0.22, 1.0, 0.88, 0.40)
-	_style_play_cta.shadow_size = 10
-
-	_style_exit_danger = StyleBoxFlat.new()
-	_style_exit_danger.bg_color = Color(0.56, 0.12, 0.22, 0.94)
-	_style_exit_danger.border_color = Color(1.0, 0.42, 0.56, 0.96)
-	_style_exit_danger.set_border_width_all(3)
-	_style_exit_danger.set_corner_radius_all(14)
-	_style_exit_danger.shadow_color = Color(1.0, 0.25, 0.45, 0.35)
-	_style_exit_danger.shadow_size = 8
-
+	_style_modal_panel = _create_flat_stylebox(
+		Color(0.05, 0.07, 0.14, 0.96),
+		Color(0.35, 0.92, 1.0, 0.92),
+		3,
+		18,
+		Color(0.0, 0.0, 0.0, 0.65),
+		18
+	)
+	_style_play_cta = _create_flat_stylebox(
+		Color(0.10, 0.68, 0.64, 0.98),
+		Color(0.65, 1.0, 0.94, 1.0),
+		3,
+		16,
+		Color(0.22, 1.0, 0.88, 0.40),
+		10
+	)
+	_style_exit_danger = _create_flat_stylebox(
+		Color(0.56, 0.12, 0.22, 0.94),
+		Color(1.0, 0.42, 0.56, 0.96),
+		3,
+		14,
+		Color(1.0, 0.25, 0.45, 0.35),
+		8
+	)
 	_style_floating_play = StyleBoxEmpty.new()
-
-	_style_loading_track = StyleBoxFlat.new()
-	_style_loading_track.bg_color = Color(0.08, 0.12, 0.22, 0.92)
-	_style_loading_track.border_color = Color(0.30, 0.72, 0.92, 0.55)
-	_style_loading_track.set_border_width_all(2)
-	_style_loading_track.set_corner_radius_all(10)
-
-	_style_loading_fill = StyleBoxFlat.new()
-	_style_loading_fill.bg_color = Color(0.28, 0.94, 1.0, 0.95)
-	_style_loading_fill.set_corner_radius_all(8)
-	_style_loading_fill.shadow_color = Color(0.24, 0.92, 1.0, 0.45)
-	_style_loading_fill.shadow_size = 8
-
-	_style_tab_indicator = StyleBoxFlat.new()
-	_style_tab_indicator.bg_color = Color(0.42, 0.98, 1.0, 1.0)
-	_style_tab_indicator.set_corner_radius_all(3)
-	_style_tab_indicator.shadow_color = Color(0.22, 0.92, 1.0, 0.65)
-	_style_tab_indicator.shadow_size = 8
-
-	_style_bell_normal = StyleBoxFlat.new()
-	_style_bell_normal.bg_color = Color(0.06, 0.10, 0.20, 0.72)
-	_style_bell_normal.border_color = Color(0.36, 0.92, 1.0, 0.62)
-	_style_bell_normal.set_border_width_all(2)
-	_style_bell_normal.set_corner_radius_all(39)
-
-	_style_bell_hover = StyleBoxFlat.new()
-	_style_bell_hover.bg_color = Color(0.10, 0.18, 0.32, 0.88)
-	_style_bell_hover.border_color = Color(0.56, 0.98, 1.0, 0.95)
-	_style_bell_hover.set_border_width_all(2)
-	_style_bell_hover.set_corner_radius_all(39)
-	_style_bell_hover.shadow_color = Color(0.24, 0.92, 1.0, 0.40)
-	_style_bell_hover.shadow_size = 8
+	_style_loading_track = _create_flat_stylebox(
+		Color(0.08, 0.12, 0.22, 0.92),
+		Color(0.30, 0.72, 0.92, 0.55),
+		2,
+		10
+	)
+	_style_loading_fill = _create_flat_stylebox(
+		Color(0.28, 0.94, 1.0, 0.95),
+		Color(0.0, 0.0, 0.0, 0.0),
+		0,
+		8,
+		Color(0.24, 0.92, 1.0, 0.45),
+		8
+	)
+	_style_tab_indicator = _create_flat_stylebox(
+		Color(0.42, 0.98, 1.0, 1.0),
+		Color(0.0, 0.0, 0.0, 0.0),
+		0,
+		3,
+		Color(0.22, 0.92, 1.0, 0.65),
+		8
+	)
+	_style_bell_normal = _create_flat_stylebox(
+		Color(0.06, 0.10, 0.20, 0.72),
+		Color(0.36, 0.92, 1.0, 0.62),
+		2,
+		39
+	)
+	_style_bell_hover = _create_flat_stylebox(
+		Color(0.10, 0.18, 0.32, 0.88),
+		Color(0.56, 0.98, 1.0, 0.95),
+		2,
+		39,
+		Color(0.24, 0.92, 1.0, 0.40),
+		8
+	)
 
 
 func _ensure_release_modal_readable_font() -> SystemFont:

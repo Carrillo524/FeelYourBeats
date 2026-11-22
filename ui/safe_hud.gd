@@ -6,8 +6,8 @@ signal resume_requested()
 signal restart_requested()
 signal main_menu_requested()
 
-const TOP_BAR_HEIGHT_PX: float = 132.0
 const PAUSE_BUTTON_WIDTH_PX: float = 212.0
+const COUNTDOWN_STEPS: PackedInt32Array = [3, 2, 1]
 const PAUSE_BUTTON_HEIGHT_PX: float = 82.0
 const DANGER_BAR_HEIGHT_PX: float = 28.0
 const DANGER_BAR_LERP_SPEED: float = 9.0
@@ -457,49 +457,24 @@ func close_pause_menu_and_resume() -> void:
 	_is_counting_down = true
 	_countdown_label.visible = true
 
-	_prepare_countdown_step(3)
+	_prepare_countdown_step(COUNTDOWN_STEPS[0])
 	_countdown_tween = create_tween()
 
-	_countdown_tween.tween_property(
-		_countdown_label,
-		"scale",
-		Vector2.ONE,
-		COUNTDOWN_STEP_DURATION_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_countdown_tween.parallel().tween_property(
-		_countdown_label,
-		"modulate:a",
-		COUNTDOWN_END_ALPHA,
-		COUNTDOWN_STEP_DURATION_SEC
-	)
-
-	_countdown_tween.tween_callback(_prepare_countdown_step.bind(2))
-	_countdown_tween.tween_property(
-		_countdown_label,
-		"scale",
-		Vector2.ONE,
-		COUNTDOWN_STEP_DURATION_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_countdown_tween.parallel().tween_property(
-		_countdown_label,
-		"modulate:a",
-		COUNTDOWN_END_ALPHA,
-		COUNTDOWN_STEP_DURATION_SEC
-	)
-
-	_countdown_tween.tween_callback(_prepare_countdown_step.bind(1))
-	_countdown_tween.tween_property(
-		_countdown_label,
-		"scale",
-		Vector2.ONE,
-		COUNTDOWN_STEP_DURATION_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_countdown_tween.parallel().tween_property(
-		_countdown_label,
-		"modulate:a",
-		COUNTDOWN_END_ALPHA,
-		COUNTDOWN_STEP_DURATION_SEC
-	)
+	for step_idx: int in range(COUNTDOWN_STEPS.size()):
+		if step_idx > 0:
+			_countdown_tween.tween_callback(_prepare_countdown_step.bind(COUNTDOWN_STEPS[step_idx]))
+		_countdown_tween.tween_property(
+			_countdown_label,
+			"scale",
+			Vector2.ONE,
+			COUNTDOWN_STEP_DURATION_SEC
+		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_countdown_tween.parallel().tween_property(
+			_countdown_label,
+			"modulate:a",
+			COUNTDOWN_END_ALPHA,
+			COUNTDOWN_STEP_DURATION_SEC
+		)
 
 	_countdown_tween.tween_callback(_on_resume_countdown_finished)
 
@@ -563,23 +538,22 @@ func hide_results_overlay() -> void:
 		_pause_button.disabled = false
 
 
-func request_restart() -> void:
+func _prepare_navigation_action() -> void:
 	_ensure_ui_nodes()
 	_cancel_resume_countdown()
 	_pause_overlay.visible = false
 	_results_overlay.visible = false
 	if input_adapter != null:
 		input_adapter.reset_input_state()
+
+
+func request_restart() -> void:
+	_prepare_navigation_action()
 	restart_requested.emit()
 
 
 func request_main_menu() -> void:
-	_ensure_ui_nodes()
-	_cancel_resume_countdown()
-	_pause_overlay.visible = false
-	_results_overlay.visible = false
-	if input_adapter != null:
-		input_adapter.reset_input_state()
+	_prepare_navigation_action()
 	main_menu_requested.emit()
 
 
@@ -721,13 +695,17 @@ func _prepare_countdown_step(p_number: int) -> void:
 	_countdown_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
 
 
-func _on_resume_countdown_finished() -> void:
-	_countdown_tween = null
+func _reset_countdown_visual_state() -> void:
 	_is_counting_down = false
 	if _countdown_label != null:
 		_countdown_label.visible = false
 		_countdown_label.scale = Vector2.ONE
 		_countdown_label.modulate = Color.WHITE
+
+
+func _on_resume_countdown_finished() -> void:
+	_countdown_tween = null
+	_reset_countdown_visual_state()
 	if _pause_button != null:
 		_pause_button.disabled = false
 	if dsp_clock != null:
@@ -739,11 +717,7 @@ func _cancel_resume_countdown() -> void:
 	if _countdown_tween != null:
 		_countdown_tween.kill()
 		_countdown_tween = null
-	_is_counting_down = false
-	if _countdown_label != null:
-		_countdown_label.visible = false
-		_countdown_label.scale = Vector2.ONE
-		_countdown_label.modulate = Color.WHITE
+	_reset_countdown_visual_state()
 	if _pause_button != null and not is_results_overlay_open():
 		_pause_button.disabled = false
 
@@ -1133,20 +1107,22 @@ func _ensure_ui_nodes() -> void:
 	_pause_button.pressed.connect(open_pause_menu)
 	_right_controls_vbox.add_child(_pause_button)
 
-	_style_danger_track = StyleBoxFlat.new()
-	_style_danger_track.bg_color = Color(0.03, 0.06, 0.14, 0.78)
-	_style_danger_track.border_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.58)
-	_style_danger_track.set_border_width_all(2)
-	_style_danger_track.set_corner_radius_all(14)
-	_style_danger_track.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.25)
-	_style_danger_track.shadow_size = 10
-
-	_style_danger_fill = StyleBoxFlat.new()
-	_style_danger_fill.bg_color = COLOR_DANGER_CYAN
-	_style_danger_fill.set_border_width_all(0)
-	_style_danger_fill.set_corner_radius_all(10)
-	_style_danger_fill.shadow_color = Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.55)
-	_style_danger_fill.shadow_size = 10
+	_style_danger_track = _create_flat_stylebox(
+		Color(0.03, 0.06, 0.14, 0.78),
+		Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.58),
+		2,
+		14,
+		Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.25),
+		10
+	)
+	_style_danger_fill = _create_flat_stylebox(
+		COLOR_DANGER_CYAN,
+		Color(0.0, 0.0, 0.0, 0.0),
+		0,
+		10,
+		Color(COLOR_DANGER_CYAN.r, COLOR_DANGER_CYAN.g, COLOR_DANGER_CYAN.b, 0.55),
+		10
+	)
 
 	_danger_bar_track = Panel.new()
 	_danger_bar_track.name = "DangerBarTrack"
@@ -1356,30 +1332,51 @@ func _ensure_ui_nodes() -> void:
 	_apply_banner_visual_transform()
 
 
+static func _create_flat_stylebox(
+	p_bg: Color,
+	p_border: Color,
+	p_border_width: int,
+	p_corner_radius: int,
+	p_shadow_color: Color = Color(0.0, 0.0, 0.0, 0.0),
+	p_shadow_size: int = 0
+) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = p_bg
+	sb.set_border_width_all(p_border_width)
+	if p_border_width > 0:
+		sb.border_color = p_border
+	sb.set_corner_radius_all(p_corner_radius)
+	if p_shadow_size > 0:
+		sb.shadow_color = p_shadow_color
+		sb.shadow_size = p_shadow_size
+	return sb
+
+
 func _build_results_styles() -> void:
-	_style_results_panel = StyleBoxFlat.new()
-	_style_results_panel.bg_color = Color(0.03, 0.08, 0.16, 0.84)
-	_style_results_panel.border_color = Color(0.18, 0.90, 1.0, 0.85)
-	_style_results_panel.set_border_width_all(3)
-	_style_results_panel.set_corner_radius_all(22)
-	_style_results_panel.shadow_color = Color(0.12, 0.85, 1.0, 0.30)
-	_style_results_panel.shadow_size = 18
-
-	_style_results_retry = StyleBoxFlat.new()
-	_style_results_retry.bg_color = Color(0.08, 0.56, 0.58, 0.94)
-	_style_results_retry.border_color = Color(0.45, 1.0, 0.96, 1.0)
-	_style_results_retry.set_border_width_all(3)
-	_style_results_retry.set_corner_radius_all(16)
-	_style_results_retry.shadow_color = Color(0.20, 0.95, 0.90, 0.35)
-	_style_results_retry.shadow_size = 10
-
-	_style_results_menu = StyleBoxFlat.new()
-	_style_results_menu.bg_color = Color(0.05, 0.14, 0.26, 0.88)
-	_style_results_menu.border_color = Color(0.22, 0.86, 1.0, 0.85)
-	_style_results_menu.set_border_width_all(3)
-	_style_results_menu.set_corner_radius_all(16)
-	_style_results_menu.shadow_color = Color(0.15, 0.80, 1.0, 0.24)
-	_style_results_menu.shadow_size = 8
+	_style_results_panel = _create_flat_stylebox(
+		Color(0.03, 0.08, 0.16, 0.84),
+		Color(0.18, 0.90, 1.0, 0.85),
+		3,
+		22,
+		Color(0.12, 0.85, 1.0, 0.30),
+		18
+	)
+	_style_results_retry = _create_flat_stylebox(
+		Color(0.08, 0.56, 0.58, 0.94),
+		Color(0.45, 1.0, 0.96, 1.0),
+		3,
+		16,
+		Color(0.20, 0.95, 0.90, 0.35),
+		10
+	)
+	_style_results_menu = _create_flat_stylebox(
+		Color(0.05, 0.14, 0.26, 0.88),
+		Color(0.22, 0.86, 1.0, 0.85),
+		3,
+		16,
+		Color(0.15, 0.80, 1.0, 0.24),
+		8
+	)
 
 
 func _apply_results_button_style(p_button: Button, p_style: StyleBoxFlat) -> void:

@@ -3,28 +3,17 @@ extends Control
 
 const DEFAULT_HEAD_HEIGHT_PX: float = 36.0
 const HORIZONTAL_PADDING_PX: float = 8.0
-const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.74
-const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 1.0
 const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.74
-const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 1.0
 const HOLD_TOP_FADE_PX: float = 22.0
 const HOLD_TOP_SOFT_TAPER: float = 0.88
 const HOLD_ELASTIC_PULSE_HZ: float = 2.5
 const HOLD_ACTIVE_WIDTH_MIN_RATIO: float = 0.82
 const HOLD_ACTIVE_WIDTH_RANGE_RATIO: float = 0.13
-const HOLD_PULSE_FREQ_RAD: float = 18.0
 
 const MOTION_FEATHER_MIN_MULTIPLIER: int = 3
 const MOTION_FEATHER_INNER_COLOR: Color = Color(0.45, 0.96, 1.0, 0.16)
 const MOTION_FEATHER_OUTER_COLOR: Color = Color(0.32, 0.88, 1.0, 0.07)
 
-# Strictly neon cyan / turquoise diffused palette (no hard white solid bar)
-const HOLD_OUTER_IDLE_COLOR: Color = Color(0.10, 0.76, 0.94, 0.28)
-const HOLD_OUTER_ACTIVE_COLOR: Color = Color(0.14, 0.92, 0.88, 0.42)
-const HOLD_INNER_IDLE_COLOR: Color = Color(0.20, 0.90, 0.96, 0.62)
-const HOLD_INNER_ACTIVE_COLOR: Color = Color(0.28, 0.98, 0.90, 0.82)
-const HOLD_CAP_IDLE_COLOR: Color = Color(0.24, 0.92, 0.96, 0.58)
-const HOLD_CAP_ACTIVE_COLOR: Color = Color(0.32, 0.98, 0.90, 0.78)
 const HEAD_IDLE_COLOR: Color = Color(0.35, 0.95, 1.0, 1.0)
 const HEAD_HOLD_ACTIVE_COLOR: Color = Color(0.45, 1.0, 0.94, 1.0)
 
@@ -292,94 +281,105 @@ func get_motion_feather_height_px() -> float:
 static func _ensure_shared_textures() -> void:
 	if _shared_hold_idle_texture == null:
 		# 3-tier smooth horizontal gradient (idle: softer translucent cyan halo -> dim neon cyan -> soft white-cyan core)
-		var idle_grad: Gradient = Gradient.new()
-		idle_grad.offsets = PackedFloat32Array([0.0, 0.16, 0.36, 0.50, 0.64, 0.84, 1.0])
-		idle_grad.colors = PackedColorArray([
-			Color(0.16, 0.82, 0.96, 0.0),
-			Color(0.16, 0.82, 0.96, 0.28),
-			Color(0.26, 0.92, 0.98, 0.50),
-			Color(0.80, 0.98, 1.0, 0.72),
-			Color(0.26, 0.92, 0.98, 0.50),
-			Color(0.16, 0.82, 0.96, 0.28),
-			Color(0.16, 0.82, 0.96, 0.0),
-		])
-		var idle_tex: GradientTexture2D = GradientTexture2D.new()
-		idle_tex.gradient = idle_grad
-		idle_tex.fill = GradientTexture2D.FILL_LINEAR
-		idle_tex.fill_from = Vector2(0.0, 0.5)
-		idle_tex.fill_to = Vector2(1.0, 0.5)
-		idle_tex.width = 64
-		idle_tex.height = 8
-		idle_tex.use_hdr = false
+		var idle_tex: GradientTexture2D = _create_gradient_texture(
+			PackedFloat32Array([0.0, 0.16, 0.36, 0.50, 0.64, 0.84, 1.0]),
+			PackedColorArray([
+				Color(0.16, 0.82, 0.96, 0.0),
+				Color(0.16, 0.82, 0.96, 0.28),
+				Color(0.26, 0.92, 0.98, 0.50),
+				Color(0.80, 0.98, 1.0, 0.72),
+				Color(0.26, 0.92, 0.98, 0.50),
+				Color(0.16, 0.82, 0.96, 0.28),
+				Color(0.16, 0.82, 0.96, 0.0),
+			]),
+			GradientTexture2D.FILL_LINEAR,
+			Vector2(0.0, 0.5),
+			Vector2(1.0, 0.5),
+			64,
+			8
+		)
 		_shared_hold_idle_texture = idle_tex
 		_shared_hold_beam_texture = idle_tex
 
 	if _shared_hold_active_texture == null:
 		# 3-tier smooth horizontal gradient (holding: soft translucent sides -> neon cyan -> soft white-cyan core)
-		var active_grad: Gradient = Gradient.new()
-		active_grad.offsets = PackedFloat32Array([0.0, 0.15, 0.34, 0.50, 0.66, 0.85, 1.0])
-		active_grad.colors = PackedColorArray([
-			Color(0.18, 0.88, 0.98, 0.0),
-			Color(0.18, 0.88, 0.98, 0.34),
-			Color(0.28, 0.94, 1.0, 0.58),
-			Color(0.88, 0.99, 1.0, 0.86),
-			Color(0.28, 0.94, 1.0, 0.58),
-			Color(0.18, 0.88, 0.98, 0.34),
-			Color(0.18, 0.88, 0.98, 0.0),
-		])
-		var active_tex: GradientTexture2D = GradientTexture2D.new()
-		active_tex.gradient = active_grad
-		active_tex.fill = GradientTexture2D.FILL_LINEAR
-		active_tex.fill_from = Vector2(0.0, 0.5)
-		active_tex.fill_to = Vector2(1.0, 0.5)
-		active_tex.width = 64
-		active_tex.height = 8
-		active_tex.use_hdr = false
-		_shared_hold_active_texture = active_tex
+		_shared_hold_active_texture = _create_gradient_texture(
+			PackedFloat32Array([0.0, 0.15, 0.34, 0.50, 0.66, 0.85, 1.0]),
+			PackedColorArray([
+				Color(0.18, 0.88, 0.98, 0.0),
+				Color(0.18, 0.88, 0.98, 0.34),
+				Color(0.28, 0.94, 1.0, 0.58),
+				Color(0.88, 0.99, 1.0, 0.86),
+				Color(0.28, 0.94, 1.0, 0.58),
+				Color(0.18, 0.88, 0.98, 0.34),
+				Color(0.18, 0.88, 0.98, 0.0),
+			]),
+			GradientTexture2D.FILL_LINEAR,
+			Vector2(0.0, 0.5),
+			Vector2(1.0, 0.5),
+			64,
+			8
+		)
 
 	if _shared_hold_tail_cap_texture == null:
-		var cap_grad: Gradient = Gradient.new()
-		cap_grad.offsets = PackedFloat32Array([0.0, 0.35, 0.70, 1.0])
-		cap_grad.colors = PackedColorArray([
-			Color(1.0, 1.0, 1.0, 1.0),
-			Color(1.0, 1.0, 1.0, 0.58),
-			Color(1.0, 1.0, 1.0, 0.16),
-			Color(1.0, 1.0, 1.0, 0.0),
-		])
-		var cap_tex: GradientTexture2D = GradientTexture2D.new()
-		cap_tex.gradient = cap_grad
-		cap_tex.fill = GradientTexture2D.FILL_RADIAL
-		cap_tex.fill_from = Vector2(0.5, 0.5)
-		cap_tex.fill_to = Vector2(0.5, 0.0)
-		cap_tex.width = 64
-		cap_tex.height = 64
-		cap_tex.use_hdr = false
-		_shared_hold_tail_cap_texture = cap_tex
+		_shared_hold_tail_cap_texture = _create_gradient_texture(
+			PackedFloat32Array([0.0, 0.35, 0.70, 1.0]),
+			PackedColorArray([
+				Color(1.0, 1.0, 1.0, 1.0),
+				Color(1.0, 1.0, 1.0, 0.58),
+				Color(1.0, 1.0, 1.0, 0.16),
+				Color(1.0, 1.0, 1.0, 0.0),
+			]),
+			GradientTexture2D.FILL_RADIAL,
+			Vector2(0.5, 0.5),
+			Vector2(0.5, 0.0),
+			64,
+			64
+		)
+
+
+static func _create_gradient_texture(
+	p_offsets: PackedFloat32Array,
+	p_colors: PackedColorArray,
+	p_fill: GradientTexture2D.Fill,
+	p_from: Vector2,
+	p_to: Vector2,
+	p_width: int,
+	p_height: int
+) -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = p_offsets
+	grad.colors = p_colors
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = p_fill
+	tex.fill_from = p_from
+	tex.fill_to = p_to
+	tex.width = p_width
+	tex.height = p_height
+	tex.use_hdr = false
+	return tex
+
+
+func _create_visual_rect(p_name: String, p_color: Color, p_visible: bool) -> ColorRect:
+	var rect: ColorRect = ColorRect.new()
+	rect.name = p_name
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rect.color = p_color
+	rect.visible = p_visible
+	add_child(rect)
+	return rect
 
 
 func _ensure_visual_nodes() -> void:
 	if _motion_feather_outer_rect == null:
-		_motion_feather_outer_rect = ColorRect.new()
-		_motion_feather_outer_rect.name = "MotionFeatherOuterRect"
-		_motion_feather_outer_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_motion_feather_outer_rect.color = MOTION_FEATHER_OUTER_COLOR
-		_motion_feather_outer_rect.visible = false
-		add_child(_motion_feather_outer_rect)
+		_motion_feather_outer_rect = _create_visual_rect("MotionFeatherOuterRect", MOTION_FEATHER_OUTER_COLOR, false)
 
 	if _motion_feather_inner_rect == null:
-		_motion_feather_inner_rect = ColorRect.new()
-		_motion_feather_inner_rect.name = "MotionFeatherInnerRect"
-		_motion_feather_inner_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_motion_feather_inner_rect.color = MOTION_FEATHER_INNER_COLOR
-		_motion_feather_inner_rect.visible = false
-		add_child(_motion_feather_inner_rect)
+		_motion_feather_inner_rect = _create_visual_rect("MotionFeatherInnerRect", MOTION_FEATHER_INNER_COLOR, false)
 
 	if _head_rect == null:
-		_head_rect = ColorRect.new()
-		_head_rect.name = "HeadRect"
-		_head_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_head_rect.color = HEAD_IDLE_COLOR
-		add_child(_head_rect)
+		_head_rect = _create_visual_rect("HeadRect", HEAD_IDLE_COLOR, true)
 
 
 func _hide_and_clear_hold_layers() -> void:

@@ -15,8 +15,15 @@ const HIT_EFFECT_STAR: String = GameplayEffectsConfig.HIT_STAR
 const HIT_EFFECT_CROWN: String = GameplayEffectsConfig.HIT_CROWN
 const STAR_ARM_ANGLE_RAD: float = PI * 0.25
 const CROWN_MAX_ALPHA: float = 0.62
-const CROWN_MAX_LANE_WIDTH_RATIO: float = 1.0
 const CROWN_LANE_INSET_PX: float = 0.0
+const AURORA_X_ANCHORS: PackedFloat32Array = [0.08, 0.22, 0.37, 0.51, 0.65, 0.79, 0.92]
+const AURORA_HALF_WIDTHS: PackedFloat32Array = [0.15, 0.18, 0.16, 0.20, 0.17, 0.18, 0.15]
+const AURORA_Y_STARTS: PackedFloat32Array = [0.03, 0.06, 0.02, 0.05, 0.03, 0.07, 0.04]
+const AURORA_Y_SPANS: PackedFloat32Array = [0.48, 0.54, 0.50, 0.56, 0.52, 0.49, 0.46]
+const AURORA_PHASE_OFFSETS: PackedFloat32Array = [0.0, 0.95, 1.90, 2.85, 3.80, 4.75, 5.70]
+const AURORA_PASS_ALPHAS: PackedFloat32Array = [0.52, 1.00]
+
+static var _cached_star_arm_directions: PackedVector2Array = PackedVector2Array()
 const CROWN_BASE_CYAN_TURQUOISE: Color = Color(0.22, 0.94, 0.96, 1.0)
 const CROWN_TOP_VIOLET_NEON: Color = Color(0.56, 0.38, 1.0, 1.0)
 const CROWN_CORE_BRIGHT: Color = Color(0.46, 0.98, 0.98, 1.0)
@@ -722,12 +729,14 @@ func compute_crown_lane_rect(p_lane_idx: int, p_bounds: Vector2) -> Rect2:
 
 
 static func get_star_arm_directions() -> PackedVector2Array:
-	var dirs: PackedVector2Array = PackedVector2Array()
-	dirs.resize(4)
-	for i: int in range(4):
-		var angle_rad: float = STAR_ARM_ANGLE_RAD + (float(i) * (PI * 0.5))
-		dirs[i] = Vector2(cos(angle_rad), sin(angle_rad))
-	return dirs
+	if _cached_star_arm_directions.size() != 4:
+		var dirs: PackedVector2Array = PackedVector2Array()
+		dirs.resize(4)
+		for i: int in range(4):
+			var angle_rad: float = STAR_ARM_ANGLE_RAD + (float(i) * (PI * 0.5))
+			dirs[i] = Vector2(cos(angle_rad), sin(angle_rad))
+		_cached_star_arm_directions = dirs
+	return _cached_star_arm_directions
 
 
 func get_aurora_curtain_count() -> int:
@@ -1489,89 +1498,80 @@ func _draw_eclipse_backdrop() -> void:
 	_draw_global_note_hit_flashes(bounds)
 
 
-func _create_nebula_cloud_texture() -> GradientTexture2D:
+static func _build_alpha_gradient_texture(
+	p_offsets: PackedFloat32Array,
+	p_alphas: PackedFloat32Array,
+	p_fill: GradientTexture2D.Fill,
+	p_from: Vector2,
+	p_to: Vector2,
+	p_width: int,
+	p_height: int
+) -> GradientTexture2D:
+	var colors: PackedColorArray = PackedColorArray()
+	var count: int = p_alphas.size()
+	colors.resize(count)
+	for i: int in range(count):
+		colors[i] = Color(1.0, 1.0, 1.0, p_alphas[i])
 	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.54, 0.78, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.56),
-		Color(1.0, 1.0, 1.0, 0.20),
-		Color(1.0, 1.0, 1.0, 0.05),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
+	grad.offsets = p_offsets
+	grad.colors = colors
 	var tex: GradientTexture2D = GradientTexture2D.new()
 	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 64
-	tex.height = 64
+	tex.fill = p_fill
+	tex.fill_from = p_from
+	tex.fill_to = p_to
+	tex.width = p_width
+	tex.height = p_height
 	tex.use_hdr = false
 	return tex
+
+
+func _create_nebula_cloud_texture() -> GradientTexture2D:
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.26, 0.54, 0.78, 1.0]),
+		PackedFloat32Array([1.0, 0.56, 0.20, 0.05, 0.0]),
+		GradientTexture2D.FILL_RADIAL,
+		Vector2(0.5, 0.5),
+		Vector2(0.5, 0.0),
+		64,
+		64
+	)
 
 
 func _create_eclipse_halo_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.34, 0.46, 0.64, 0.82, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.14),
-		Color(1.0, 1.0, 1.0, 0.88),
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.52),
-		Color(1.0, 1.0, 1.0, 0.16),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 64
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.14, 0.34, 0.46, 0.64, 0.82, 1.0]),
+		PackedFloat32Array([0.0, 0.14, 0.88, 1.0, 0.52, 0.16, 0.0]),
+		GradientTexture2D.FILL_RADIAL,
+		Vector2(0.5, 0.5),
+		Vector2(0.5, 0.0),
+		64,
+		64
+	)
 
 
 func _create_eclipse_core_shadow_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.32, 0.62, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.82),
-		Color(1.0, 1.0, 1.0, 0.44),
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 64
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.32, 0.62, 1.0]),
+		PackedFloat32Array([0.82, 0.44, 0.0, 0.0]),
+		GradientTexture2D.FILL_RADIAL,
+		Vector2(0.5, 0.5),
+		Vector2(0.5, 0.0),
+		64,
+		64
+	)
 
 
 func _create_eclipse_core_glow_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.58, 0.84, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.68),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 0.06),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 64
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.28, 0.58, 0.84, 1.0]),
+		PackedFloat32Array([1.0, 0.68, 0.28, 0.06, 0.0]),
+		GradientTexture2D.FILL_RADIAL,
+		Vector2(0.5, 0.5),
+		Vector2(0.5, 0.0),
+		64,
+		64
+	)
 
 
 func _sample_aurora_color(p_phase: float) -> Color:
@@ -1621,25 +1621,18 @@ func _draw_aurora_backdrop() -> void:
 	draw_polygon(_quad_pts_buf, _quad_cols_buf)
 
 	# 7 ethereal vertical curtains in mid-upper region (hit-line area below ~74% stays clean)
-	var x_anchors: PackedFloat32Array = PackedFloat32Array([0.08, 0.22, 0.37, 0.51, 0.65, 0.79, 0.92])
-	var half_widths: PackedFloat32Array = PackedFloat32Array([0.15, 0.18, 0.16, 0.20, 0.17, 0.18, 0.15])
-	var y_starts: PackedFloat32Array = PackedFloat32Array([0.03, 0.06, 0.02, 0.05, 0.03, 0.07, 0.04])
-	var y_spans: PackedFloat32Array = PackedFloat32Array([0.48, 0.54, 0.50, 0.56, 0.52, 0.49, 0.46])
-	var phase_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 0.95, 1.90, 2.85, 3.80, 4.75, 5.70])
-	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.15 * blur_scale, 0.96 * blur_scale])
-	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.52, 1.00])
-
 	var relief_active: bool = _vfx_relief_scale < 0.75
 	for c_idx: int in range(AURORA_CURTAIN_COUNT):
 		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92))
 		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92) + 1.85)
 		var base_alpha: float = clampf((0.10 + (0.025 * float(c_idx % 2))) * bright_mult, 0.0, AURORA_MAX_ALPHA)
+		var phase_offset: float = AURORA_PHASE_OFFSETS[c_idx]
 
-		var breath: float = 1.0 + (0.06 * sin((_aurora_time * 0.85) + phase_offsets[c_idx]))
-		var y_top_px: float = h * y_starts[c_idx]
-		var span_ratio: float = minf(0.68, y_spans[c_idx] * breath * stretch_v)
+		var breath: float = 1.0 + (0.06 * sin((_aurora_time * 0.85) + phase_offset))
+		var y_top_px: float = h * AURORA_Y_STARTS[c_idx]
+		var span_ratio: float = minf(0.68, AURORA_Y_SPANS[c_idx] * breath * stretch_v)
 		var span_y: float = maxf(1.0, h * span_ratio)
-		var base_hw: float = w * half_widths[c_idx]
+		var base_hw: float = w * AURORA_HALF_WIDTHS[c_idx]
 		var sway_amp: float = w * 0.042 * undul_mult
 
 		# Double-layer soft textured curtains (wide diffused neon veil + smooth vertical core, zero hard edges)
@@ -1647,8 +1640,8 @@ func _draw_aurora_backdrop() -> void:
 		for pass_idx: int in range(2):
 			if relief_active and pass_idx == 0:
 				continue
-			var width_scale: float = pass_widths[pass_idx]
-			var pass_alpha_scale: float = pass_alphas[pass_idx]
+			var width_scale: float = (2.15 if pass_idx == 0 else 0.96) * blur_scale
+			var pass_alpha_scale: float = AURORA_PASS_ALPHAS[pass_idx]
 			var pass_top: float = maxf(0.0, y_top_px - (h * 0.03 if pass_idx == 0 else 0.0))
 			var pass_span: float = minf(h * 0.74 - pass_top, span_y * (1.10 if pass_idx == 0 else 1.0))
 			if pass_span <= 4.0:
@@ -1661,11 +1654,11 @@ func _draw_aurora_backdrop() -> void:
 				var y0: float = pass_top + (t0 * pass_span)
 				var y1: float = pass_top + (t1 * pass_span)
 
-				var sway0: float = sin((_aurora_time * 0.72) + (t0 * 2.8) + phase_offsets[c_idx]) * sway_amp
-				var sway1: float = sin((_aurora_time * 0.72) + (t1 * 2.8) + phase_offsets[c_idx]) * sway_amp
+				var sway0: float = sin((_aurora_time * 0.72) + (t0 * 2.8) + phase_offset) * sway_amp
+				var sway1: float = sin((_aurora_time * 0.72) + (t1 * 2.8) + phase_offset) * sway_amp
 
-				var cx0: float = (w * x_anchors[c_idx]) + sway0
-				var cx1: float = (w * x_anchors[c_idx]) + sway1
+				var cx0: float = (w * AURORA_X_ANCHORS[c_idx]) + sway0
+				var cx1: float = (w * AURORA_X_ANCHORS[c_idx]) + sway1
 
 				var hw0: float = base_hw * width_scale * (0.82 + (0.24 * sin(t0 * PI)))
 				var hw1: float = base_hw * width_scale * (0.82 + (0.24 * sin(t1 * PI)))
@@ -1692,45 +1685,27 @@ func _draw_aurora_backdrop() -> void:
 
 
 func _create_aurora_vertical_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.68, 0.86, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.35),
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.45),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_LINEAR
-	tex.fill_from = Vector2(0.5, 0.0)
-	tex.fill_to = Vector2(0.5, 1.0)
-	tex.width = 8
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.28, 0.68, 0.86, 1.0]),
+		PackedFloat32Array([0.0, 0.35, 1.0, 0.45, 0.0]),
+		GradientTexture2D.FILL_LINEAR,
+		Vector2(0.5, 0.0),
+		Vector2(0.5, 1.0),
+		8,
+		64
+	)
 
 
 func _create_aurora_horizontal_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.24, 0.50, 0.76, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.26),
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.26),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_LINEAR
-	tex.fill_from = Vector2(0.0, 0.5)
-	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 64
-	tex.height = 8
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.24, 0.50, 0.76, 1.0]),
+		PackedFloat32Array([0.0, 0.26, 1.0, 0.26, 0.0]),
+		GradientTexture2D.FILL_LINEAR,
+		Vector2(0.0, 0.5),
+		Vector2(1.0, 0.5),
+		64,
+		8
+	)
 
 
 func _ensure_hit_effect_overlay() -> void:
@@ -1791,15 +1766,9 @@ func _draw_classic_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2)
 	var top_y: float = maxf(0.0, hit_zone_y - up_reach)
 	var bottom_y: float = minf(h, hit_zone_y + down_reach)
 	var drop_bright: float = 1.0 + (drop_factor * 0.28)
-	var energies: PackedFloat32Array = PackedFloat32Array([
-		_lane_flashes.x,
-		_lane_flashes.y,
-		_lane_flashes.z,
-		_lane_flashes.w,
-	])
 
 	for lane_idx: int in range(4):
-		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
+		var e: float = clampf(_get_lane_flash_energy(lane_idx), 0.0, 1.0)
 		if e <= 0.004:
 			continue
 
@@ -1883,15 +1852,9 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 
 	# 4 diagonal directions rotated 45 deg forming an X centered on hit_zone_y
 	var diag_dirs: PackedVector2Array = get_star_arm_directions()
-	var energies: PackedFloat32Array = PackedFloat32Array([
-		_lane_flashes.x,
-		_lane_flashes.y,
-		_lane_flashes.z,
-		_lane_flashes.w,
-	])
 
 	for lane_idx: int in range(4):
-		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
+		var e: float = clampf(_get_lane_flash_energy(lane_idx), 0.0, 1.0)
 		if e <= 0.004:
 			continue
 
@@ -1936,15 +1899,9 @@ func _draw_crown_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -
 
 	var drop_factor: float = get_hit_effect_drop_factor()
 	var drop_bright: float = 1.0 + (drop_factor * 0.34)
-	var energies: PackedFloat32Array = PackedFloat32Array([
-		_lane_flashes.x,
-		_lane_flashes.y,
-		_lane_flashes.z,
-		_lane_flashes.w,
-	])
 
 	for lane_idx: int in range(4):
-		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
+		var e: float = clampf(_get_lane_flash_energy(lane_idx), 0.0, 1.0)
 		if e <= 0.004:
 			continue
 
@@ -2115,113 +2072,67 @@ func _draw_vertical_tapered_beam(
 	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
 
 
-func _draw_horizontal_tapered_beam(
-	p_canvas: CanvasItem,
-	p_cy: float,
-	p_hh: float,
-	p_x_left: float,
-	p_x_right: float,
-	p_color: Color,
-	p_alpha_left: float,
-	p_alpha_right: float
-) -> void:
-	if p_x_right <= p_x_left + 0.5:
-		return
-	_quad_pts_buf[0] = Vector2(p_x_left, p_cy - p_hh)
-	_quad_pts_buf[1] = Vector2(p_x_right, p_cy - p_hh)
-	_quad_pts_buf[2] = Vector2(p_x_right, p_cy + p_hh)
-	_quad_pts_buf[3] = Vector2(p_x_left, p_cy + p_hh)
-	_quad_cols_buf[0] = Color(p_color.r, p_color.g, p_color.b, p_alpha_left)
-	_quad_cols_buf[1] = Color(p_color.r, p_color.g, p_color.b, p_alpha_right)
-	_quad_cols_buf[2] = _quad_cols_buf[1]
-	_quad_cols_buf[3] = _quad_cols_buf[0]
-	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_vertical_texture)
+func _get_lane_flash_energy(p_lane_idx: int) -> float:
+	match p_lane_idx:
+		0:
+			return _lane_flashes.x
+		1:
+			return _lane_flashes.y
+		2:
+			return _lane_flashes.z
+		_:
+			return _lane_flashes.w
 
 
 func _create_hit_beam_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.50, 0.75, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_LINEAR
-	tex.fill_from = Vector2(0.0, 0.5)
-	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 64
-	tex.height = 8
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.25, 0.50, 0.75, 1.0]),
+		PackedFloat32Array([0.0, 0.28, 1.0, 0.28, 0.0]),
+		GradientTexture2D.FILL_LINEAR,
+		Vector2(0.0, 0.5),
+		Vector2(1.0, 0.5),
+		64,
+		8
+	)
 
 
 func _create_hit_beam_vertical_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.50, 0.75, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.28),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_LINEAR
-	tex.fill_from = Vector2(0.5, 0.0)
-	tex.fill_to = Vector2(0.5, 1.0)
-	tex.width = 8
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.25, 0.50, 0.75, 1.0]),
+		PackedFloat32Array([0.0, 0.28, 1.0, 0.28, 0.0]),
+		GradientTexture2D.FILL_LINEAR,
+		Vector2(0.5, 0.0),
+		Vector2(0.5, 1.0),
+		8,
+		64
+	)
 
 
 func _create_hit_radial_texture() -> GradientTexture2D:
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.30, 0.65, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.58),
-		Color(1.0, 1.0, 1.0, 0.16),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.5)
-	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 64
-	tex.height = 64
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.30, 0.65, 1.0]),
+		PackedFloat32Array([1.0, 0.58, 0.16, 0.0]),
+		GradientTexture2D.FILL_RADIAL,
+		Vector2(0.5, 0.5),
+		Vector2(0.5, 0.0),
+		64,
+		64
+	)
 
 
 func _create_hit_crown_fan_texture() -> GradientTexture2D:
 	# Horizontal U-shaped inner-wall profile:
 	# max intensity (alpha 1.0) directly on both lane border lines (0.00, 1.00),
 	# decaying smoothly inward toward a dim center valley (0.18 -> 0.55, 0.50 -> 0.14, 0.82 -> 0.55)
-	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.50, 0.82, 1.0])
-	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.55),
-		Color(1.0, 1.0, 1.0, 0.14),
-		Color(1.0, 1.0, 1.0, 0.55),
-		Color(1.0, 1.0, 1.0, 1.0),
-	])
-	var tex: GradientTexture2D = GradientTexture2D.new()
-	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_LINEAR
-	tex.fill_from = Vector2(0.0, 0.5)
-	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 64
-	tex.height = 8
-	tex.use_hdr = false
-	return tex
+	return _build_alpha_gradient_texture(
+		PackedFloat32Array([0.0, 0.18, 0.50, 0.82, 1.0]),
+		PackedFloat32Array([1.0, 0.55, 0.14, 0.55, 1.0]),
+		GradientTexture2D.FILL_LINEAR,
+		Vector2(0.0, 0.5),
+		Vector2(1.0, 0.5),
+		64,
+		8
+	)
 
 
 func _resolve_draw_bounds() -> Vector2:

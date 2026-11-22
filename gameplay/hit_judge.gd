@@ -53,11 +53,14 @@ var danger_ratio: float = 0.0
 var active_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 
 var _chart: ChartData = null
-var _lane_queues: Array[Array] = [[], [], [], []]
+var _lane_queue_0: Array[NoteData] = []
+var _lane_queue_1: Array[NoteData] = []
+var _lane_queue_2: Array[NoteData] = []
+var _lane_queue_3: Array[NoteData] = []
 var _lane_cursors: PackedInt32Array = PackedInt32Array([0, 0, 0, 0])
 var _active_holds: Array[NoteData] = [null, null, null, null]
 var _hold_last_tick_times: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-var _resolved_notes: Dictionary = {}
+var _resolved_notes: Dictionary[NoteData, bool] = {}
 var _judged_count: int = 0
 var _accuracy_weight_sum: float = 0.0
 var _danger_overflow_emitted: bool = false
@@ -79,7 +82,7 @@ func load_chart(p_chart: ChartData) -> bool:
 	for i: int in range(note_count):
 		var note: NoteData = _chart.notes[i]
 		if note != null and note.lane >= NoteData.MIN_LANE and note.lane <= NoteData.MAX_LANE:
-			_lane_queues[note.lane].append(note)
+			_get_lane_queue(note.lane).append(note)
 
 	return true
 
@@ -90,7 +93,7 @@ func reset_state() -> void:
 			_active_holds[lane_idx] = null
 			hold_state_changed.emit(lane_idx, false)
 		_hold_last_tick_times[lane_idx] = 0.0
-		_lane_queues[lane_idx].clear()
+		_get_lane_queue(lane_idx).clear()
 		_lane_cursors[lane_idx] = 0
 
 	_resolved_notes.clear()
@@ -135,12 +138,12 @@ func on_lane_pressed(p_lane: int, p_dsp_time_sec: float) -> void:
 
 	_expire_missed_notes_in_lane(p_lane, p_dsp_time_sec)
 
-	var queue: Array = _lane_queues[p_lane]
+	var queue: Array[NoteData] = _get_lane_queue(p_lane)
 	var cursor: int = _lane_cursors[p_lane]
 	if cursor >= queue.size():
 		return
 
-	var candidate: NoteData = queue[cursor] as NoteData
+	var candidate: NoteData = queue[cursor]
 	var delta_sec: float = p_dsp_time_sec - candidate.time_sec
 	var abs_error_sec: float = absf(delta_sec)
 
@@ -256,13 +259,25 @@ func get_accuracy_percent() -> float:
 	return (_accuracy_weight_sum / float(_judged_count)) * 100.0
 
 
+func _get_lane_queue(p_lane: int) -> Array[NoteData]:
+	match p_lane:
+		0:
+			return _lane_queue_0
+		1:
+			return _lane_queue_1
+		2:
+			return _lane_queue_2
+		_:
+			return _lane_queue_3
+
+
 func _expire_missed_notes_in_lane(p_lane: int, p_dsp_time_sec: float) -> void:
-	var queue: Array = _lane_queues[p_lane]
+	var queue: Array[NoteData] = _get_lane_queue(p_lane)
 	var queue_size: int = queue.size()
 	var cursor: int = _lane_cursors[p_lane]
 
 	while cursor < queue_size:
-		var note: NoteData = queue[cursor] as NoteData
+		var note: NoteData = queue[cursor]
 		if p_dsp_time_sec > note.time_sec + miss_window_sec:
 			cursor += 1
 			_lane_cursors[p_lane] = cursor

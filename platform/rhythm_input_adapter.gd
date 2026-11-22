@@ -14,8 +14,8 @@ const LANE_3: int = 3
 @export var dsp_clock: DSPClock = null
 @export var screen_safe_adapter: ScreenSafeAdapter = null
 
-var _active_touches: Dictionary = {}
-var _active_keys: Dictionary = {}
+var _active_touches: Dictionary[int, int] = {}
+var _active_keys: Dictionary[int, int] = {}
 var _warned_missing_clock: bool = false
 
 
@@ -43,37 +43,27 @@ func reset_input_state() -> void:
 		return
 
 	var timestamp_sec: float = _read_dsp_time_sec()
-	var lanes_to_release: Dictionary = {}
+	var lanes_to_release: Dictionary[int, bool] = {}
 
-	var touch_indices: Array = _active_touches.keys()
-	for i: int in range(touch_indices.size()):
-		var touch_index: int = touch_indices[i] as int
-		var registered_lane: int = _active_touches[touch_index] as int
-		lanes_to_release[registered_lane] = true
+	for touch_index: int in _active_touches:
+		lanes_to_release[_active_touches[touch_index]] = true
 
-	var key_codes: Array = _active_keys.keys()
-	for j: int in range(key_codes.size()):
-		var key_code: int = key_codes[j] as int
-		var key_lane: int = _active_keys[key_code] as int
-		lanes_to_release[key_lane] = true
+	for key_code: int in _active_keys:
+		lanes_to_release[_active_keys[key_code]] = true
 
 	_active_touches.clear()
 	_active_keys.clear()
 
-	var release_lanes: Array = lanes_to_release.keys()
-	for k: int in range(release_lanes.size()):
-		var lane: int = release_lanes[k] as int
+	for lane: int in lanes_to_release:
 		lane_input_released.emit(lane, timestamp_sec)
 
 
 func _is_lane_held_by_any_source(p_lane: int) -> bool:
-	var touch_vals: Array = _active_touches.values()
-	for i: int in range(touch_vals.size()):
-		if (touch_vals[i] as int) == p_lane:
+	for touch_index: int in _active_touches:
+		if _active_touches[touch_index] == p_lane:
 			return true
-	var key_vals: Array = _active_keys.values()
-	for j: int in range(key_vals.size()):
-		if (key_vals[j] as int) == p_lane:
+	for key_code: int in _active_keys:
+		if _active_keys[key_code] == p_lane:
 			return true
 	return false
 
@@ -89,7 +79,7 @@ func _handle_screen_touch(p_touch_event: InputEventScreenTouch) -> void:
 			return
 
 		if _active_touches.has(touch_index):
-			var previous_lane: int = _active_touches[touch_index] as int
+			var previous_lane: int = _active_touches[touch_index]
 			if previous_lane != lane:
 				_active_touches.erase(touch_index)
 				if not _is_lane_held_by_any_source(previous_lane):
@@ -106,7 +96,7 @@ func _handle_screen_touch(p_touch_event: InputEventScreenTouch) -> void:
 		if not _active_touches.has(touch_index):
 			return
 
-		var registered_lane: int = _active_touches[touch_index] as int
+		var registered_lane: int = _active_touches[touch_index]
 		_active_touches.erase(touch_index)
 		if not _is_lane_held_by_any_source(registered_lane):
 			lane_input_released.emit(registered_lane, timestamp_sec)
@@ -117,21 +107,22 @@ func _handle_key_input(p_key_event: InputEventKey) -> void:
 		return
 
 	var code: Key = p_key_event.keycode if p_key_event.keycode != KEY_NONE else p_key_event.physical_keycode
-	var lane: int = _map_key_to_lane(p_key_event)
+	var lane: int = _map_key_code_to_lane(code)
 	if lane == INVALID_LANE:
 		return
 
+	var code_int: int = int(code)
 	var timestamp_sec: float = _read_dsp_time_sec()
 	if p_key_event.pressed:
-		if _active_keys.has(code):
+		if _active_keys.has(code_int):
 			return
-		_active_keys[code] = lane
+		_active_keys[code_int] = lane
 		lane_input_pressed.emit(lane, timestamp_sec)
 	else:
-		if not _active_keys.has(code):
+		if not _active_keys.has(code_int):
 			return
-		var registered_lane: int = _active_keys[code] as int
-		_active_keys.erase(code)
+		var registered_lane: int = _active_keys[code_int]
+		_active_keys.erase(code_int)
 		if not _is_lane_held_by_any_source(registered_lane):
 			lane_input_released.emit(registered_lane, timestamp_sec)
 
@@ -147,9 +138,8 @@ func _resolve_touch_lane(p_viewport_pos: Vector2) -> int:
 	return screen_safe_adapter.get_lane_at_x(p_viewport_pos.x)
 
 
-func _map_key_to_lane(p_key_event: InputEventKey) -> int:
-	var code: Key = p_key_event.keycode if p_key_event.keycode != KEY_NONE else p_key_event.physical_keycode
-	match code:
+func _map_key_code_to_lane(p_code: Key) -> int:
+	match p_code:
 		KEY_D, KEY_LEFT:
 			return LANE_0
 		KEY_F, KEY_DOWN:
