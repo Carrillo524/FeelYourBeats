@@ -3,11 +3,12 @@ extends Control
 
 const DEFAULT_HEAD_HEIGHT_PX: float = 36.0
 const HORIZONTAL_PADDING_PX: float = 8.0
-const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.82
-const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 0.88
-const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.60
-const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 0.66
-const HOLD_TAIL_FADE_MAX_PX: float = 46.0
+const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.86
+const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 0.90
+const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.76
+const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 0.76
+const HOLD_TOP_FADE_RATIO: float = 0.06
+const HOLD_TOP_FADE_MAX_PX: float = 24.0
 const HOLD_PULSE_FREQ_RAD: float = 18.0
 
 const MOTION_FEATHER_MIN_MULTIPLIER: int = 3
@@ -74,82 +75,64 @@ func _draw() -> void:
 
 	var cx: float = lane_width * 0.5
 	var tail_h: float = _current_tail_height_px
-	var cap_fade_h: float = minf(HOLD_TAIL_FADE_MAX_PX, tail_h * 0.44)
-	var main_top_y: float = -(tail_h - cap_fade_h)
+	var top_fade_h: float = minf(HOLD_TOP_FADE_MAX_PX, maxf(3.0, tail_h * HOLD_TOP_FADE_RATIO))
+	var fade_end_y: float = minf(0.0, -(tail_h - top_fade_h))
 	var tail_top_y: float = -tail_h
 	var pulse: float = _hold_pulse_phase if _is_hold_active else 0.0
 
-	var outer_ratio: float = (
-		HOLD_OUTER_BEAM_ACTIVE_RATIO + (pulse * 0.04)
-		if _is_hold_active
-		else HOLD_OUTER_BEAM_IDLE_RATIO
-	)
-	var outer_w: float = minf(lane_width * 0.92, maxf(8.0, lane_width * outer_ratio))
+	var head_w: float = _compute_note_head_width()
+	var ribbon_w: float = head_w
+	var ribbon_hw: float = ribbon_w * 0.5
+
+	var outer_w: float = minf(lane_width - 4.0, maxf(ribbon_w, lane_width * (HOLD_OUTER_BEAM_ACTIVE_RATIO if _is_hold_active else HOLD_OUTER_BEAM_IDLE_RATIO)))
 	var outer_hw: float = outer_w * 0.5
 	var outer_col: Color = HOLD_OUTER_ACTIVE_COLOR if _is_hold_active else HOLD_OUTER_IDLE_COLOR
-	var outer_alpha: float = clampf(outer_col.a + (pulse * 0.08), 0.0, 0.52)
+	var outer_alpha: float = clampf(outer_col.a + (pulse * 0.08), 0.0, 0.48)
 
-	var inner_ratio: float = (
-		HOLD_INNER_BEAM_ACTIVE_RATIO + (pulse * 0.04)
-		if _is_hold_active
-		else HOLD_INNER_BEAM_IDLE_RATIO
-	)
-	var inner_w: float = minf(lane_width * 0.74, maxf(6.0, lane_width * inner_ratio))
-	var inner_hw: float = inner_w * 0.5
 	var inner_col: Color = HOLD_INNER_ACTIVE_COLOR if _is_hold_active else HOLD_INNER_IDLE_COLOR
-	var inner_alpha: float = clampf(inner_col.a + (pulse * 0.10), 0.0, 0.88)
+	var inner_alpha: float = clampf(inner_col.a + (pulse * 0.12), 0.0, 0.88)
 
-	# 1. Wide diffused outer neon veil (zero hard vertical edges)
-	_draw_diffused_beam_body(cx, outer_hw, main_top_y, tail_top_y, outer_col, outer_alpha)
+	# 1. Soft diffused outer neon veil (flat-topped rectangular ribbon, never touches lane dividers)
+	_draw_diffused_beam_body(cx, outer_hw, fade_end_y, tail_top_y, outer_col, outer_alpha)
 
-	# 2. Smooth luminous cyan-turquoise inner energy beam (no solid white stripe)
-	_draw_diffused_beam_body(cx, inner_hw, main_top_y, tail_top_y, inner_col, inner_alpha)
-
-	# 3. Soft radial end cap at tail end so it dissolves smoothly instead of ending in a flat block
-	if _shared_hold_tail_cap_texture != null:
-		var cap_col: Color = HOLD_CAP_ACTIVE_COLOR if _is_hold_active else HOLD_CAP_IDLE_COLOR
-		var cap_rx: float = inner_hw * 1.12
-		var cap_ry: float = maxf(10.0, minf(cap_rx * 0.85, tail_h * 0.55))
-		var cap_cy: float = tail_top_y + (cap_fade_h * 0.38)
-		var cap_rect: Rect2 = Rect2(cx - cap_rx, cap_cy - cap_ry, cap_rx * 2.0, cap_ry * 2.0)
-		var cap_tint: Color = Color(cap_col.r, cap_col.g, cap_col.b, clampf(cap_col.a + (pulse * 0.10), 0.0, 0.85))
-		draw_texture_rect(_shared_hold_tail_cap_texture, cap_rect, false, cap_tint)
+	# 2. Wide luminous flat-topped ribbon matching exact note head width (broad plateau horizontal gradient)
+	_draw_diffused_beam_body(cx, ribbon_hw, fade_end_y, tail_top_y, inner_col, inner_alpha)
 
 
 func _draw_diffused_beam_body(
 	p_cx: float,
 	p_hw: float,
-	p_main_top_y: float,
+	p_fade_end_y: float,
 	p_tail_top_y: float,
 	p_color: Color,
 	p_alpha: float
 ) -> void:
-	var c_solid: Color = Color(p_color.r, p_color.g, p_color.b, p_alpha)
+	var c_bottom: Color = Color(p_color.r, p_color.g, p_color.b, p_alpha)
+	var c_upper_body: Color = Color(p_color.r, p_color.g, p_color.b, p_alpha * 0.95)
 	var c_zero: Color = Color(p_color.r, p_color.g, p_color.b, 0.0)
 
-	# Main continuous body segment (from y = 0 up to p_main_top_y)
-	if p_main_top_y < -0.5:
-		_quad_pts_buf[0] = Vector2(p_cx - p_hw, p_main_top_y)
-		_quad_pts_buf[1] = Vector2(p_cx + p_hw, p_main_top_y)
+	# Main continuous rectangular ribbon body (from y = 0 up to p_fade_end_y, alpha 1.0 -> 0.95)
+	if p_fade_end_y < -0.25:
+		_quad_pts_buf[0] = Vector2(p_cx - p_hw, p_fade_end_y)
+		_quad_pts_buf[1] = Vector2(p_cx + p_hw, p_fade_end_y)
 		_quad_pts_buf[2] = Vector2(p_cx + p_hw, 0.0)
 		_quad_pts_buf[3] = Vector2(p_cx - p_hw, 0.0)
-		_quad_cols_buf[0] = c_solid
-		_quad_cols_buf[1] = c_solid
-		_quad_cols_buf[2] = c_solid
-		_quad_cols_buf[3] = c_solid
+		_quad_cols_buf[0] = c_upper_body
+		_quad_cols_buf[1] = c_upper_body
+		_quad_cols_buf[2] = c_bottom
+		_quad_cols_buf[3] = c_bottom
 		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _shared_hold_beam_texture)
 
-	# Top smooth fade-out taper (from p_main_top_y up to p_tail_top_y)
-	if p_tail_top_y < p_main_top_y - 0.25:
-		var taper_hw: float = p_hw * 0.78
-		_quad_pts_buf[0] = Vector2(p_cx - taper_hw, p_tail_top_y)
-		_quad_pts_buf[1] = Vector2(p_cx + taper_hw, p_tail_top_y)
-		_quad_pts_buf[2] = Vector2(p_cx + p_hw, p_main_top_y)
-		_quad_pts_buf[3] = Vector2(p_cx - p_hw, p_main_top_y)
+	# Short flat-topped vertical fade at the top edge (0.00 -> alpha 0.0, 0.06 -> alpha 0.95, square width)
+	if p_tail_top_y < p_fade_end_y - 0.15:
+		_quad_pts_buf[0] = Vector2(p_cx - p_hw, p_tail_top_y)
+		_quad_pts_buf[1] = Vector2(p_cx + p_hw, p_tail_top_y)
+		_quad_pts_buf[2] = Vector2(p_cx + p_hw, p_fade_end_y)
+		_quad_pts_buf[3] = Vector2(p_cx - p_hw, p_fade_end_y)
 		_quad_cols_buf[0] = c_zero
 		_quad_cols_buf[1] = c_zero
-		_quad_cols_buf[2] = c_solid
-		_quad_cols_buf[3] = c_solid
+		_quad_cols_buf[2] = c_upper_body
+		_quad_cols_buf[3] = c_upper_body
 		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _shared_hold_beam_texture)
 
 
@@ -241,6 +224,20 @@ func get_hold_inner_beam_width_px() -> float:
 	return _current_inner_beam_width_px
 
 
+func get_note_head_width_px() -> float:
+	if _head_rect != null and _head_rect.size.x > 0.0:
+		return _head_rect.size.x
+	return _compute_note_head_width()
+
+
+static func uses_flat_top_hold_ribbon() -> bool:
+	return true
+
+
+func _compute_note_head_width() -> float:
+	return maxf(4.0, lane_width - (HORIZONTAL_PADDING_PX * 2.0))
+
+
 func is_hold_glow_visible() -> bool:
 	return _is_hold_visible and _current_tail_height_px > 0.5
 
@@ -272,15 +269,14 @@ func get_motion_feather_height_px() -> float:
 
 static func _ensure_shared_textures() -> void:
 	if _shared_hold_beam_texture == null:
+		# Broad horizontal plateau gradient (soft lateral blur without hard edges)
 		var beam_grad: Gradient = Gradient.new()
-		beam_grad.offsets = PackedFloat32Array([0.0, 0.16, 0.34, 0.50, 0.66, 0.84, 1.0])
+		beam_grad.offsets = PackedFloat32Array([0.0, 0.14, 0.50, 0.86, 1.0])
 		beam_grad.colors = PackedColorArray([
 			Color(1.0, 1.0, 1.0, 0.0),
-			Color(1.0, 1.0, 1.0, 0.14),
-			Color(1.0, 1.0, 1.0, 0.62),
+			Color(1.0, 1.0, 1.0, 0.88),
 			Color(1.0, 1.0, 1.0, 1.0),
-			Color(1.0, 1.0, 1.0, 0.62),
-			Color(1.0, 1.0, 1.0, 0.14),
+			Color(1.0, 1.0, 1.0, 0.88),
 			Color(1.0, 1.0, 1.0, 0.0),
 		])
 		var beam_tex: GradientTexture2D = GradientTexture2D.new()
@@ -389,16 +385,12 @@ func _update_hold_body_geometry(
 	_is_hold_active = p_is_holding and _is_hold_visible
 	_hold_pulse_phase = clampf(p_pulse_phase, 0.0, 1.0)
 
+	var head_w: float = _compute_note_head_width()
 	var outer_ratio: float = (
-		HOLD_OUTER_BEAM_ACTIVE_RATIO + (_hold_pulse_phase * 0.04)
+		HOLD_OUTER_BEAM_ACTIVE_RATIO
 		if _is_hold_active
 		else HOLD_OUTER_BEAM_IDLE_RATIO
 	)
-	var inner_ratio: float = (
-		HOLD_INNER_BEAM_ACTIVE_RATIO + (_hold_pulse_phase * 0.04)
-		if _is_hold_active
-		else HOLD_INNER_BEAM_IDLE_RATIO
-	)
-	_current_inner_beam_width_px = minf(lane_width * 0.74, maxf(6.0, lane_width * inner_ratio))
-	_current_outer_glow_width_px = minf(lane_width * 0.92, maxf(8.0, lane_width * outer_ratio))
+	_current_inner_beam_width_px = head_w
+	_current_outer_glow_width_px = minf(lane_width - 4.0, maxf(head_w, lane_width * outer_ratio))
 	queue_redraw()
