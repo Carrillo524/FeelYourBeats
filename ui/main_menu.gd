@@ -4017,7 +4017,7 @@ func _build_browser_screen_ui() -> void:
 	_hit_effect_buttons.clear()
 	var hit_fx_row: HBoxContainer = HBoxContainer.new()
 	hit_fx_row.name = "HitEffectRow"
-	hit_fx_row.add_theme_constant_override("separation", 12)
+	hit_fx_row.add_theme_constant_override("separation", 10)
 	settings_vbox.add_child(hit_fx_row)
 
 	for hf_idx: int in range(GameplayEffectsConfig.SUPPORTED_HIT_EFFECTS.size()):
@@ -4026,6 +4026,7 @@ func _build_browser_screen_ui() -> void:
 			"HitEffect_%s" % hf_id,
 			GameplayEffectsConfig.hit_effect_to_label(hf_id)
 		)
+		hf_btn.add_theme_font_size_override("font_size", 28)
 		hf_btn.pressed.connect(_on_hit_effect_selected.bind(hf_id))
 		hit_fx_row.add_child(hf_btn)
 		_hit_effect_buttons[hf_id] = hf_btn
@@ -4040,26 +4041,21 @@ func _build_browser_screen_ui() -> void:
 	settings_vbox.add_child(touch_fx_header)
 
 	_touch_effect_buttons.clear()
-	var touch_fx_rows: Array[PackedStringArray] = [
-		PackedStringArray([GameplayEffectsConfig.TOUCH_WAVE, GameplayEffectsConfig.TOUCH_DOUBLE_DIAMOND]),
-		PackedStringArray([GameplayEffectsConfig.TOUCH_MUSICAL_NOTE]),
-	]
-	for tf_row_idx: int in range(touch_fx_rows.size()):
-		var tf_row: HBoxContainer = HBoxContainer.new()
-		tf_row.name = "TouchEffectRow%d" % (tf_row_idx + 1)
-		tf_row.add_theme_constant_override("separation", 12)
-		settings_vbox.add_child(tf_row)
+	var touch_fx_row: HBoxContainer = HBoxContainer.new()
+	touch_fx_row.name = "TouchEffectRow"
+	touch_fx_row.add_theme_constant_override("separation", 10)
+	settings_vbox.add_child(touch_fx_row)
 
-		var row_touch_ids: PackedStringArray = touch_fx_rows[tf_row_idx]
-		for tf_col_idx: int in range(row_touch_ids.size()):
-			var tf_id: String = row_touch_ids[tf_col_idx]
-			var tf_btn: Button = _create_compact_settings_button(
-				"TouchEffect_%s" % tf_id,
-				GameplayEffectsConfig.touch_effect_to_label(tf_id)
-			)
-			tf_btn.pressed.connect(_on_touch_effect_selected.bind(tf_id))
-			tf_row.add_child(tf_btn)
-			_touch_effect_buttons[tf_id] = tf_btn
+	for tf_idx: int in range(GameplayEffectsConfig.SUPPORTED_TOUCH_EFFECTS.size()):
+		var tf_id: String = GameplayEffectsConfig.SUPPORTED_TOUCH_EFFECTS[tf_idx]
+		var tf_btn: Button = _create_compact_settings_button(
+			"TouchEffect_%s" % tf_id,
+			GameplayEffectsConfig.touch_effect_to_label(tf_id)
+		)
+		tf_btn.add_theme_font_size_override("font_size", 26)
+		tf_btn.pressed.connect(_on_touch_effect_selected.bind(tf_id))
+		touch_fx_row.add_child(tf_btn)
+		_touch_effect_buttons[tf_id] = tf_btn
 
 	settings_vbox.add_child(_create_white_divider("SettingsDivider_6", 0))
 
@@ -4073,7 +4069,7 @@ func _build_browser_screen_ui() -> void:
 	_vanish_effect_buttons.clear()
 	var vanish_fx_row: HBoxContainer = HBoxContainer.new()
 	vanish_fx_row.name = "VanishEffectRow"
-	vanish_fx_row.add_theme_constant_override("separation", 12)
+	vanish_fx_row.add_theme_constant_override("separation", 10)
 	settings_vbox.add_child(vanish_fx_row)
 
 	for vf_idx: int in range(GameplayEffectsConfig.SUPPORTED_VANISH_EFFECTS.size()):

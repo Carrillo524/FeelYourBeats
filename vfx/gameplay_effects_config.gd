@@ -6,6 +6,7 @@ const SETTINGS_SECTION: String = "gameplay_effects"
 
 const HIT_CLASSIC: String = "classic"
 const HIT_STAR: String = "star"
+const HIT_CROWN: String = "crown"
 
 const TOUCH_WAVE: String = "wave"
 const TOUCH_DOUBLE_DIAMOND: String = "double_diamond"
@@ -18,6 +19,7 @@ const VANISH_FRACTURE: String = "fracture"
 const SUPPORTED_HIT_EFFECTS: PackedStringArray = [
 	HIT_CLASSIC,
 	HIT_STAR,
+	HIT_CROWN,
 ]
 
 const SUPPORTED_TOUCH_EFFECTS: PackedStringArray = [
@@ -122,6 +124,8 @@ static func sanitize_hit_effect(p_raw: String) -> String:
 	match lowered:
 		HIT_STAR, "estrella":
 			return HIT_STAR
+		HIT_CROWN, "corona":
+			return HIT_CROWN
 		_:
 			return HIT_CLASSIC
 
@@ -152,6 +156,8 @@ static func hit_effect_to_label(p_style: String) -> String:
 	match sanitize_hit_effect(p_style):
 		HIT_STAR:
 			return "Estrella"
+		HIT_CROWN:
+			return "Corona"
 		_:
 			return "Clásico"
 

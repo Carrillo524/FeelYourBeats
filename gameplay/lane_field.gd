@@ -56,12 +56,13 @@ const MAX_FIREWORK_RAYS: int = 96
 const FIREWORK_RAYS_PERFECT: int = 11
 const FIREWORK_RAYS_GREAT: int = 9
 const FIREWORK_RAYS_GOOD: int = 8
+const FIREWORK_DROPLET_BASE_RADIUS_PX: float = 6.8
 const FIREWORK_NEON_COLORS: Array[Color] = [
-	Color(1.0, 0.94, 0.24, 1.0),
-	Color(0.28, 1.0, 0.56, 1.0),
-	Color(1.0, 0.30, 0.78, 1.0),
-	Color(0.24, 0.96, 1.0, 1.0),
-	Color(0.74, 0.48, 1.0, 1.0),
+	Color(1.0, 0.95, 0.10, 1.0),
+	Color(0.12, 1.0, 0.42, 1.0),
+	Color(1.0, 0.14, 0.76, 1.0),
+	Color(0.08, 0.96, 1.0, 1.0),
+	Color(0.72, 0.36, 1.0, 1.0),
 ]
 
 const MAX_ZOOM_FADE_GHOSTS: int = 24
@@ -72,8 +73,8 @@ const MAX_FRACTURE_SHARDS: int = 84
 const FRACTURE_SHARDS_PERFECT: int = 7
 const FRACTURE_SHARDS_GREAT: int = 6
 const FRACTURE_SHARDS_GOOD: int = 5
-const FRACTURE_DURATION_SEC: float = 0.22
-const FRACTURE_GRAVITY_PX_PER_SEC2: float = 420.0
+const FRACTURE_DURATION_SEC: float = 0.26
+const FRACTURE_GRAVITY_PX_PER_SEC2: float = 560.0
 
 const COLOR_PERFECT_A: Color = Color(0.35, 1.0, 0.96, 1.0)
 const COLOR_PERFECT_B: Color = Color(1.0, 0.88, 0.28, 1.0)
@@ -125,7 +126,7 @@ var _touch_renderer: TouchEffectRenderer = TouchEffectRenderer.new()
 var _hold_contact_halo_texture: GradientTexture2D = null
 var _fx_seed_counter: int = 1
 
-# Preallocated FireWork ray pool (fixed size = MAX_FIREWORK_RAYS)
+# Preallocated FireWork droplet pool (fixed size = MAX_FIREWORK_RAYS)
 var _fw_active: PackedByteArray = PackedByteArray()
 var _fw_age: PackedFloat32Array = PackedFloat32Array()
 var _fw_duration: PackedFloat32Array = PackedFloat32Array()
@@ -134,6 +135,7 @@ var _fw_dir: PackedVector2Array = PackedVector2Array()
 var _fw_max_dist: PackedFloat32Array = PackedFloat32Array()
 var _fw_ray_len: PackedFloat32Array = PackedFloat32Array()
 var _fw_color: PackedColorArray = PackedColorArray()
+var _fw_drop_poly_buf: PackedVector2Array = PackedVector2Array()
 var _fw_cursor: int = 0
 
 # Preallocated Zoom + Fade ghost pool (fixed size = MAX_ZOOM_FADE_GHOSTS)
@@ -722,6 +724,36 @@ func get_active_fracture_shard_count() -> int:
 	return active
 
 
+func get_active_fracture_min_vy() -> float:
+	var has_any: bool = false
+	var min_vy: float = 0.0
+	for i: int in range(_fr_active.size()):
+		if _fr_active[i] == 0:
+			continue
+		var vy: float = _fr_vel[i].y
+		if not has_any or vy < min_vy:
+			min_vy = vy
+			has_any = true
+	return min_vy
+
+
+func get_active_fracture_avg_y() -> float:
+	var count: int = 0
+	var sum_y: float = 0.0
+	for i: int in range(_fr_active.size()):
+		if _fr_active[i] == 0:
+			continue
+		sum_y += _fr_pos[i].y
+		count += 1
+	if count == 0:
+		return 0.0
+	return sum_y / float(count)
+
+
+static func get_firework_droplet_base_radius() -> float:
+	return FIREWORK_DROPLET_BASE_RADIUS_PX
+
+
 static func compute_zoom_fade_scale(p_progress: float) -> float:
 	var t: float = clampf(p_progress, 0.0, 1.0)
 	var eased: float = 1.0 - pow(1.0 - t, 2.2)
@@ -1030,6 +1062,7 @@ func _init_vanish_effect_pools() -> void:
 		_fw_ray_len[i] = 24.0
 		_fw_color[i] = Color.WHITE
 
+	_fw_drop_poly_buf.resize(4)
 	_zf_active.resize(MAX_ZOOM_FADE_GHOSTS)
 	_zf_age.resize(MAX_ZOOM_FADE_GHOSTS)
 	_zf_duration.resize(MAX_ZOOM_FADE_GHOSTS)
@@ -1242,16 +1275,16 @@ func _spawn_fracture_shards(p_lane: int, p_grade: int) -> void:
 		local_poly[3] = Vector2(prev_bot_x - cx, bot_y_l - cy)
 
 		var norm_x: float = clampf(cx / maxf(1.0, half_w), -1.0, 1.0)
-		var vx: float = (norm_x * 165.0) + (_pseudo_rand_signed(_fx_seed_counter * 53) * 55.0)
-		var vy: float = lerpf(-210.0, -75.0, 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 61))
+		var vx: float = (norm_x * 135.0) + (_pseudo_rand_signed(_fx_seed_counter * 53) * 48.0)
+		var vy: float = lerpf(150.0, 310.0, 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 61))
 
 		_fr_active[slot] = 1
 		_fr_age[slot] = 0.0
-		_fr_duration[slot] = FRACTURE_DURATION_SEC * (0.90 + (0.20 * (0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 71))))
-		_fr_pos[slot] = origin + Vector2(cx, cy)
+		_fr_duration[slot] = FRACTURE_DURATION_SEC * (0.90 + (0.18 * (0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 71))))
+		_fr_pos[slot] = origin + Vector2(cx, cy + 4.0)
 		_fr_vel[slot] = Vector2(vx, vy)
 		_fr_angle[slot] = 0.0
-		_fr_ang_vel[slot] = _pseudo_rand_signed(_fx_seed_counter * 79) * 4.8
+		_fr_ang_vel[slot] = _pseudo_rand_signed(_fx_seed_counter * 79) * 5.2
 		_fr_color[slot] = tint.lerp(Color(0.84, 0.99, 1.0, 1.0), 0.28 if (i % 2) == 0 else 0.0)
 
 		prev_top_x = next_top_x
@@ -1259,32 +1292,52 @@ func _spawn_fracture_shards(p_lane: int, p_grade: int) -> void:
 
 
 func _draw_vanish_effects() -> void:
-	# 1. FireWork radial neon streaks
+	# 1. FireWork thick elongated neon droplets (rounded glowing head + short tapered conical tail)
 	for i: int in range(_fw_active.size()):
 		if _fw_active[i] == 0:
 			continue
 		var dur: float = maxf(0.01, _fw_duration[i])
 		var t: float = clampf(_fw_age[i] / dur, 0.0, 1.0)
-		var eased_head: float = 1.0 - pow(1.0 - t, 2.5)
+		var eased_head: float = 1.0 - pow(1.0 - t, 2.4)
 		var head_dist: float = _fw_max_dist[i] * eased_head
-		var curr_len: float = _fw_ray_len[i] * (1.0 - (t * 0.72))
-		var tail_dist: float = maxf(0.0, head_dist - curr_len)
+		var tail_len: float = _fw_ray_len[i] * (1.0 - (t * 0.58))
+		var tail_dist: float = maxf(0.0, head_dist - tail_len)
 		var dir: Vector2 = _fw_dir[i]
+		var perp: Vector2 = Vector2(-dir.y, dir.x)
 		var origin: Vector2 = _fw_origin[i]
 		var p_tail: Vector2 = origin + (dir * tail_dist)
 		var p_head: Vector2 = origin + (dir * head_dist)
-		var fade: float = (1.0 - t) * (1.0 - (t * 0.25))
+		var fade: float = (1.0 - t) * (1.0 - (t * 0.22))
+		var head_r: float = lerpf(FIREWORK_DROPLET_BASE_RADIUS_PX, 2.8, t)
 		var base_col: Color = _fw_color[i]
-		var halo_col: Color = Color(base_col.r, base_col.g, base_col.b, fade * 0.32)
+		var halo_col: Color = Color(base_col.r, base_col.g, base_col.b, fade * 0.30)
+		var body_col: Color = Color(base_col.r, base_col.g, base_col.b, fade * 0.96)
 		var core_col: Color = Color(
-			lerpf(base_col.r, 1.0, 0.32),
-			lerpf(base_col.g, 1.0, 0.32),
-			lerpf(base_col.b, 1.0, 0.32),
-			fade * 0.96
+			lerpf(base_col.r, 1.0, 0.62),
+			lerpf(base_col.g, 1.0, 0.62),
+			lerpf(base_col.b, 1.0, 0.62),
+			fade * 0.98
 		)
-		var stroke_w: float = lerpf(3.6, 1.4, t)
-		draw_line(p_tail, p_head, halo_col, stroke_w * 2.8, true)
-		draw_line(p_tail, p_head, core_col, stroke_w, true)
+
+		# Outer neon halo (teardrop cone + rounded glow)
+		var halo_r: float = head_r * 1.72
+		_fw_drop_poly_buf[0] = p_tail
+		_fw_drop_poly_buf[1] = p_head + (perp * halo_r)
+		_fw_drop_poly_buf[2] = p_head + (dir * (halo_r * 0.65))
+		_fw_drop_poly_buf[3] = p_head - (perp * halo_r)
+		draw_colored_polygon(_fw_drop_poly_buf, halo_col)
+		draw_circle(p_head, head_r * 2.05, halo_col)
+
+		# Saturated neon elongated droplet body (tapered conical wake + rounded head)
+		_fw_drop_poly_buf[0] = p_tail
+		_fw_drop_poly_buf[1] = p_head + (perp * head_r)
+		_fw_drop_poly_buf[2] = p_head + (dir * (head_r * 0.55))
+		_fw_drop_poly_buf[3] = p_head - (perp * head_r)
+		draw_colored_polygon(_fw_drop_poly_buf, body_col)
+		draw_circle(p_head, head_r, body_col)
+
+		# Bright specular highlight inside the rounded droplet head
+		draw_circle(p_head, head_r * 0.48, core_col)
 
 	# 2. Zoom + Fade expanding ghosts (scale 1.0 -> 1.35, alpha 1.0 -> 0.0)
 	for j: int in range(_zf_active.size()):

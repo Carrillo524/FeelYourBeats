@@ -12,6 +12,9 @@ signal bass_kick_pulsed(p_strength: float)
 const SHADER_PATH: String = "res://vfx/reactive_backdrop.gdshader"
 const HIT_EFFECT_CLASSIC: String = GameplayEffectsConfig.HIT_CLASSIC
 const HIT_EFFECT_STAR: String = GameplayEffectsConfig.HIT_STAR
+const HIT_EFFECT_CROWN: String = GameplayEffectsConfig.HIT_CROWN
+const STAR_ARM_ANGLE_RAD: float = PI * 0.25
+const CROWN_MAX_ALPHA: float = 0.30
 const DEFAULT_HIT_LINE_NORMALIZED_Y: float = 0.75
 const BEAT_DECAY_PER_SEC: float = 4.5
 const LANE_FLASH_DECAY_PER_SEC: float = 5.5
@@ -140,6 +143,7 @@ var _hit_effect_overlay: Control = null
 var _hit_beam_texture: GradientTexture2D = null
 var _hit_beam_vertical_texture: GradientTexture2D = null
 var _hit_radial_texture: GradientTexture2D = null
+var _hit_crown_fan_texture: GradientTexture2D = null
 var _quad_pts_buf: PackedVector2Array = PackedVector2Array()
 var _quad_cols_buf: PackedColorArray = PackedColorArray()
 var _quad_uvs_buf: PackedVector2Array = PackedVector2Array([
@@ -163,6 +167,7 @@ func _init() -> void:
 	_hit_beam_texture = _create_hit_beam_texture()
 	_hit_beam_vertical_texture = _create_hit_beam_vertical_texture()
 	_hit_radial_texture = _create_hit_radial_texture()
+	_hit_crown_fan_texture = _create_hit_crown_fan_texture()
 
 
 func _ready() -> void:
@@ -396,6 +401,7 @@ func is_custom_hit_flash_rendering() -> bool:
 		or is_aurora_style_active()
 		or is_eclipse_style_active()
 		or _hit_effect_style == HIT_EFFECT_STAR
+		or _hit_effect_style == HIT_EFFECT_CROWN
 	)
 
 
@@ -445,6 +451,27 @@ func get_hit_beam_vertical_texture() -> GradientTexture2D:
 
 func get_hit_radial_texture() -> GradientTexture2D:
 	return _hit_radial_texture
+
+
+func get_hit_crown_fan_texture() -> GradientTexture2D:
+	return _hit_crown_fan_texture
+
+
+func get_crown_max_alpha() -> float:
+	return CROWN_MAX_ALPHA
+
+
+func get_crown_fan_spread_multiplier() -> float:
+	return 1.0 + (get_hit_effect_drop_factor() * 0.42)
+
+
+static func get_star_arm_directions() -> PackedVector2Array:
+	var dirs: PackedVector2Array = PackedVector2Array()
+	dirs.resize(4)
+	for i: int in range(4):
+		var angle_rad: float = STAR_ARM_ANGLE_RAD + (float(i) * (PI * 0.5))
+		dirs[i] = Vector2(cos(angle_rad), sin(angle_rad))
+	return dirs
 
 
 func get_aurora_curtain_count() -> int:
@@ -982,7 +1009,8 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("beat_pulse", _beat_pulse)
 	_shader_material.set_shader_parameter("energy_level", _current_energy)
 	_shader_material.set_shader_parameter("intensity_tier", _current_tier)
-	var shader_lane_flashes: Vector4 = Vector4.ZERO if _hit_effect_style == HIT_EFFECT_STAR else _lane_flashes
+	var uses_custom_overlay_hit: bool = _hit_effect_style == HIT_EFFECT_STAR or _hit_effect_style == HIT_EFFECT_CROWN
+	var shader_lane_flashes: Vector4 = Vector4.ZERO if uses_custom_overlay_hit else _lane_flashes
 	_shader_material.set_shader_parameter("lane_hit_energies", shader_lane_flashes)
 	_shader_material.set_shader_parameter("bass_energy", _smoothed_bass)
 	_shader_material.set_shader_parameter("mid_energy", _smoothed_mid)
@@ -1420,12 +1448,15 @@ func _on_hit_effect_overlay_draw() -> void:
 	if get_global_hit_flash_energy() <= 0.004:
 		return
 	var bounds: Vector2 = _resolve_draw_bounds()
-	if _hit_effect_style == HIT_EFFECT_STAR:
-		_draw_star_diffused_hit_flashes(_hit_effect_overlay, bounds)
-	else:
-		var drop_factor: float = get_hit_effect_drop_factor()
-		if drop_factor > 0.05:
-			_draw_classic_drop_bidirectional_boost(_hit_effect_overlay, bounds, drop_factor)
+	match _hit_effect_style:
+		HIT_EFFECT_STAR:
+			_draw_star_diffused_hit_flashes(_hit_effect_overlay, bounds)
+		HIT_EFFECT_CROWN:
+			_draw_crown_diffused_hit_flashes(_hit_effect_overlay, bounds)
+		_:
+			var drop_factor: float = get_hit_effect_drop_factor()
+			if drop_factor > 0.05:
+				_draw_classic_drop_bidirectional_boost(_hit_effect_overlay, bounds, drop_factor)
 
 
 func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:
@@ -1435,6 +1466,8 @@ func _draw_global_note_hit_flashes(p_bounds: Vector2) -> void:
 	match _hit_effect_style:
 		HIT_EFFECT_STAR:
 			_draw_star_diffused_hit_flashes(self, p_bounds)
+		HIT_EFFECT_CROWN:
+			_draw_crown_diffused_hit_flashes(self, p_bounds)
 		HIT_EFFECT_CLASSIC, _:
 			_draw_classic_diffused_hit_flashes(self, p_bounds)
 
@@ -1533,7 +1566,7 @@ func _draw_classic_drop_bidirectional_boost(
 
 
 func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -> void:
-	if p_canvas == null or _hit_beam_texture == null or _hit_beam_vertical_texture == null:
+	if p_canvas == null or _hit_beam_texture == null:
 		return
 
 	var w: float = p_bounds.x
@@ -1544,9 +1577,10 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 	var reach_mult: float = get_hit_effect_reach_multiplier()
 	var drop_bright: float = 1.0 + (drop_factor * 0.30)
 
-	var v_arm_up: float = h * 0.30 * reach_mult
-	var v_arm_down: float = h * 0.19 * reach_mult
-	var h_arm_span: float = lane_w * 1.48 * reach_mult
+	# 4 diagonal directions rotated 45 deg forming an X centered on hit_zone_y
+	var diag_dirs: PackedVector2Array = get_star_arm_directions()
+	var arm_len_upper: float = lane_w * 2.15 * reach_mult
+	var arm_len_lower: float = lane_w * 1.45 * reach_mult
 	var energies: PackedFloat32Array = PackedFloat32Array([
 		_lane_flashes.x,
 		_lane_flashes.y,
@@ -1562,49 +1596,142 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 		var perfect_boost: float = smoothstep(0.75, 1.0, e)
 		var base_col: Color = Color(0.22, 0.88, 1.0, 1.0)
 		var star_col: Color = base_col.lerp(
-			Color(0.68, 1.0, 0.98, 1.0),
+			Color(0.70, 1.0, 0.98, 1.0),
 			clampf((perfect_boost * 0.52) + (drop_factor * 0.25), 0.0, 0.82)
 		)
-		var cx: float = (float(lane_idx) + 0.5) * lane_w
+		var origin: Vector2 = Vector2((float(lane_idx) + 0.5) * lane_w, hit_zone_y)
+		var outer_hw: float = lane_w * lerpf(0.48, 0.62, drop_factor)
+		var outer_alpha: float = clampf(e * 0.40 * drop_bright, 0.0, 0.50)
+		var core_hw: float = lane_w * lerpf(0.18, 0.25, drop_factor)
+		var core_alpha: float = clampf((e * 0.32 + perfect_boost * 0.22) * drop_bright, 0.0, 0.52)
 
-		var up_y: float = maxf(0.0, hit_zone_y - v_arm_up)
-		var down_y: float = minf(h, hit_zone_y + v_arm_down)
-		var left_x: float = maxf(0.0, cx - h_arm_span)
-		var right_x: float = minf(w, cx + h_arm_span)
+		for dir_idx: int in range(4):
+			var dir: Vector2 = diag_dirs[dir_idx]
+			var arm_len: float = arm_len_upper if dir.y < 0.0 else arm_len_lower
+			_draw_oriented_tapered_beam(p_canvas, origin, dir, arm_len, outer_hw, star_col, outer_alpha, 0.0)
+			_draw_oriented_tapered_beam(p_canvas, origin, dir, arm_len * 0.72, core_hw, star_col, core_alpha, 0.0)
 
-		# 1. Vertical star arms (up & down) - outer diffused + luminous inner core
-		var v_outer_hw: float = lane_w * lerpf(0.66, 0.80, drop_factor)
-		var v_outer_alpha: float = clampf(e * 0.42 * drop_bright, 0.0, 0.52)
-		_draw_vertical_tapered_beam(p_canvas, cx, v_outer_hw, up_y, hit_zone_y, star_col, 0.0, v_outer_alpha)
-		_draw_vertical_tapered_beam(p_canvas, cx, v_outer_hw, hit_zone_y, down_y, star_col, v_outer_alpha, 0.0)
-
-		var v_core_hw: float = lane_w * lerpf(0.26, 0.34, drop_factor)
-		var v_core_alpha: float = clampf((e * 0.34 + perfect_boost * 0.24) * drop_bright, 0.0, 0.54)
-		_draw_vertical_tapered_beam(p_canvas, cx, v_core_hw, maxf(up_y, hit_zone_y - (v_arm_up * 0.72)), hit_zone_y, star_col, 0.0, v_core_alpha)
-		_draw_vertical_tapered_beam(p_canvas, cx, v_core_hw, hit_zone_y, minf(down_y, hit_zone_y + (v_arm_down * 0.72)), star_col, v_core_alpha, 0.0)
-
-		# 2. Horizontal star arms (left & right) centered at hit_zone_y
-		var h_outer_hh: float = lane_w * lerpf(0.46, 0.58, drop_factor)
-		var h_outer_alpha: float = clampf(e * 0.40 * drop_bright, 0.0, 0.50)
-		_draw_horizontal_tapered_beam(p_canvas, hit_zone_y, h_outer_hh, left_x, cx, star_col, 0.0, h_outer_alpha)
-		_draw_horizontal_tapered_beam(p_canvas, hit_zone_y, h_outer_hh, cx, right_x, star_col, h_outer_alpha, 0.0)
-
-		var h_core_hh: float = lane_w * lerpf(0.18, 0.24, drop_factor)
-		var h_core_alpha: float = clampf((e * 0.32 + perfect_boost * 0.22) * drop_bright, 0.0, 0.52)
-		_draw_horizontal_tapered_beam(p_canvas, hit_zone_y, h_core_hh, maxf(left_x, cx - (h_arm_span * 0.72)), cx, star_col, 0.0, h_core_alpha)
-		_draw_horizontal_tapered_beam(p_canvas, hit_zone_y, h_core_hh, cx, minf(right_x, cx + (h_arm_span * 0.72)), star_col, h_core_alpha, 0.0)
-
-		# 3. Soft radial star core uniting all 4 arms
+		# Soft radial star core uniting all 4 diagonal arms
 		if _hit_radial_texture != null:
-			var core_r: float = lane_w * (0.68 + (perfect_boost * 0.20) + (drop_factor * 0.26))
-			var core_alpha: float = clampf(((e * 0.42) + (perfect_boost * 0.22)) * drop_bright, 0.0, 0.64)
-			var core_rect: Rect2 = Rect2(cx - core_r, hit_zone_y - core_r, core_r * 2.0, core_r * 2.0)
+			var core_r: float = lane_w * (0.64 + (perfect_boost * 0.20) + (drop_factor * 0.26))
+			var core_alpha_rad: float = clampf(((e * 0.40) + (perfect_boost * 0.20)) * drop_bright, 0.0, 0.60)
+			var core_rect: Rect2 = Rect2(origin.x - core_r, origin.y - core_r, core_r * 2.0, core_r * 2.0)
 			p_canvas.draw_texture_rect(
 				_hit_radial_texture,
 				core_rect,
 				false,
-				Color(star_col.r, star_col.g, star_col.b, core_alpha)
+				Color(star_col.r, star_col.g, star_col.b, core_alpha_rad)
 			)
+
+
+func _draw_crown_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -> void:
+	if p_canvas == null or _hit_beam_texture == null or _hit_crown_fan_texture == null:
+		return
+
+	var w: float = p_bounds.x
+	var h: float = p_bounds.y
+	var lane_w: float = w * 0.25
+	var hit_zone_y: float = h * _hit_line_normalized_y
+	var drop_factor: float = get_hit_effect_drop_factor()
+	var spread_mult: float = get_crown_fan_spread_multiplier()
+	var reach_mult: float = get_hit_effect_reach_multiplier()
+	var drop_bright: float = 1.0 + (drop_factor * 0.26)
+	var fan_height: float = h * 0.34 * reach_mult
+	var top_y: float = maxf(0.0, hit_zone_y - fan_height)
+	var base_y: float = minf(h, hit_zone_y + (lane_w * 0.14))
+	var energies: PackedFloat32Array = PackedFloat32Array([
+		_lane_flashes.x,
+		_lane_flashes.y,
+		_lane_flashes.z,
+		_lane_flashes.w,
+	])
+
+	for lane_idx: int in range(4):
+		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
+		if e <= 0.004:
+			continue
+
+		var perfect_boost: float = smoothstep(0.75, 1.0, e)
+		var base_col: Color = Color(0.20, 0.86, 1.0, 1.0)
+		var crown_col: Color = base_col.lerp(
+			Color(0.66, 1.0, 0.96, 1.0),
+			clampf((perfect_boost * 0.45) + (drop_factor * 0.28), 0.0, 0.78)
+		)
+		var cx: float = (float(lane_idx) + 0.5) * lane_w
+
+		# 1. Ascending wide diffused fan / bell opening upward & outward (strict alpha <= CROWN_MAX_ALPHA)
+		var fan_bot_hw: float = lane_w * 0.62 * spread_mult
+		var fan_top_hw: float = lane_w * 1.95 * spread_mult
+		var fan_alpha: float = clampf(e * 0.22 * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		_draw_crown_tapered_fan(p_canvas, cx, fan_bot_hw, fan_top_hw, top_y, hit_zone_y, crown_col, 0.0, fan_alpha)
+
+		# 2. Inner ascending soft crown veil
+		var inner_top_y: float = maxf(top_y, hit_zone_y - (fan_height * 0.68))
+		var inner_bot_hw: float = lane_w * 0.42 * spread_mult
+		var inner_top_hw: float = lane_w * 1.18 * spread_mult
+		var inner_alpha: float = clampf((e * 0.16 + perfect_boost * 0.08) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		_draw_crown_tapered_fan(p_canvas, cx, inner_bot_hw, inner_top_hw, inner_top_y, hit_zone_y, crown_col, 0.0, inner_alpha)
+
+		# 3. Bell dome glow precreated via _hit_crown_fan_texture anchored on the hit line (alpha <= 0.30)
+		var dome_rx: float = lane_w * (1.28 + (perfect_boost * 0.18)) * spread_mult
+		var dome_h: float = h * 0.24 * reach_mult
+		var dome_alpha: float = clampf(((e * 0.24) + (perfect_boost * 0.06)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		var dome_rect: Rect2 = Rect2(cx - dome_rx, base_y - dome_h, dome_rx * 2.0, dome_h)
+		p_canvas.draw_texture_rect(
+			_hit_crown_fan_texture,
+			dome_rect,
+			false,
+			Color(crown_col.r, crown_col.g, crown_col.b, dome_alpha)
+		)
+
+
+func _draw_oriented_tapered_beam(
+	p_canvas: CanvasItem,
+	p_origin: Vector2,
+	p_dir: Vector2,
+	p_length: float,
+	p_half_width: float,
+	p_color: Color,
+	p_alpha_origin: float,
+	p_alpha_tip: float
+) -> void:
+	if p_length <= 0.5 or p_half_width <= 0.5:
+		return
+	var perp: Vector2 = Vector2(-p_dir.y, p_dir.x) * p_half_width
+	var tip: Vector2 = p_origin + (p_dir * p_length)
+	_quad_pts_buf[0] = p_origin - perp
+	_quad_pts_buf[1] = p_origin + perp
+	_quad_pts_buf[2] = tip + perp
+	_quad_pts_buf[3] = tip - perp
+	_quad_cols_buf[0] = Color(p_color.r, p_color.g, p_color.b, p_alpha_origin)
+	_quad_cols_buf[1] = _quad_cols_buf[0]
+	_quad_cols_buf[2] = Color(p_color.r, p_color.g, p_color.b, p_alpha_tip)
+	_quad_cols_buf[3] = _quad_cols_buf[2]
+	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
+
+
+func _draw_crown_tapered_fan(
+	p_canvas: CanvasItem,
+	p_cx: float,
+	p_bottom_hw: float,
+	p_top_hw: float,
+	p_y_top: float,
+	p_y_bottom: float,
+	p_color: Color,
+	p_alpha_top: float,
+	p_alpha_bottom: float
+) -> void:
+	if p_y_bottom <= p_y_top + 0.5:
+		return
+	_quad_pts_buf[0] = Vector2(p_cx - p_top_hw, p_y_top)
+	_quad_pts_buf[1] = Vector2(p_cx + p_top_hw, p_y_top)
+	_quad_pts_buf[2] = Vector2(p_cx + p_bottom_hw, p_y_bottom)
+	_quad_pts_buf[3] = Vector2(p_cx - p_bottom_hw, p_y_bottom)
+	_quad_cols_buf[0] = Color(p_color.r, p_color.g, p_color.b, minf(p_alpha_top, CROWN_MAX_ALPHA))
+	_quad_cols_buf[1] = _quad_cols_buf[0]
+	_quad_cols_buf[2] = Color(p_color.r, p_color.g, p_color.b, minf(p_alpha_bottom, CROWN_MAX_ALPHA))
+	_quad_cols_buf[3] = _quad_cols_buf[2]
+	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
 
 
 func _draw_vertical_tapered_beam(
@@ -1709,6 +1836,27 @@ func _create_hit_radial_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
+
+
+func _create_hit_crown_fan_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.60, 0.86, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.64),
+		Color(1.0, 1.0, 1.0, 0.24),
+		Color(1.0, 1.0, 1.0, 0.05),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.94)
+	tex.fill_to = Vector2(0.5, 0.02)
 	tex.width = 128
 	tex.height = 128
 	tex.use_hdr = false
