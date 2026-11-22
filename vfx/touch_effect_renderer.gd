@@ -178,9 +178,7 @@ func _fill_rotated_diamond_line(
 	p_radius: float,
 	p_angle: float
 ) -> void:
-	for i: int in range(4):
-		var a: float = p_angle + (float(i) * (PI * 0.5))
-		p_buf[i] = p_center + Vector2(cos(a) * p_radius, sin(a) * p_radius)
+	_fill_rotated_diamond_poly(p_buf, p_center, p_radius, p_angle)
 	p_buf[4] = p_buf[0]
 
 

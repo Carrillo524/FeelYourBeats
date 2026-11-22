@@ -19,10 +19,6 @@ const MAX_PARTICLES_LOW: int = 28
 const MAX_PARTICLES_MEDIUM: int = 48
 const MAX_PARTICLES_HIGH: int = 72
 
-const MAX_MIST_LOW: int = 8
-const MAX_MIST_MEDIUM: int = 14
-const MAX_MIST_HIGH: int = 20
-
 const MAX_SHOOTING_STARS_LOW: int = 3
 const MAX_SHOOTING_STARS_MEDIUM: int = 6
 const MAX_SHOOTING_STARS_HIGH: int = 10
