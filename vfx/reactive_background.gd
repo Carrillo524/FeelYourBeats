@@ -47,17 +47,20 @@ const EDGE_EPSILON: float = 0.004
 const NEBULA_CLOUD_COUNT: int = 6
 const NEBULA_BEAT_DECAY_RATE: float = 3.8
 const NEBULA_DROP_DECAY_RATE: float = 2.0
-const NEBULA_MAX_ALPHA: float = 0.26
-const NEBULA_MAX_RGB_CHANNEL: float = 0.91
+const NEBULA_MIN_ALPHA: float = 0.18
+const NEBULA_MAX_ALPHA: float = 0.34
+const NEBULA_MAX_RGB_CHANNEL: float = 0.92
 const NEBULA_BASE_TOP_COLOR: Color = Color(0.026, 0.022, 0.088, 1.0)
 const NEBULA_BASE_BOTTOM_COLOR: Color = Color(0.068, 0.022, 0.128, 1.0)
-const NEBULA_COLOR_VIOLET: Color = Color(0.42, 0.18, 0.86, 1.0)
-const NEBULA_COLOR_INDIGO: Color = Color(0.22, 0.24, 0.84, 1.0)
-const NEBULA_COLOR_CYAN: Color = Color(0.10, 0.78, 0.91, 1.0)
+const NEBULA_COLOR_TURQUOISE: Color = Color(0.10, 0.90, 0.78, 1.0)
+const NEBULA_COLOR_CYAN: Color = Color(0.10, 0.86, 0.92, 1.0)
+const NEBULA_COLOR_BLUE: Color = Color(0.22, 0.48, 0.92, 1.0)
+const NEBULA_COLOR_VIOLET: Color = Color(0.56, 0.22, 0.92, 1.0)
+const NEBULA_COLOR_MAGENTA: Color = Color(0.90, 0.20, 0.76, 1.0)
 const NEBULA_CLOUD_ANCHORS_X: PackedFloat32Array = [0.22, 0.78, 0.48, 0.26, 0.74, 0.50]
 const NEBULA_CLOUD_ANCHORS_Y: PackedFloat32Array = [0.22, 0.28, 0.46, 0.62, 0.66, 0.36]
-const NEBULA_CLOUD_RADII_X: PackedFloat32Array = [0.60, 0.64, 0.72, 0.58, 0.60, 0.54]
-const NEBULA_CLOUD_RADII_Y: PackedFloat32Array = [0.34, 0.38, 0.42, 0.32, 0.34, 0.30]
+const NEBULA_CLOUD_RADII_X: PackedFloat32Array = [0.70, 0.74, 0.84, 0.68, 0.72, 0.66]
+const NEBULA_CLOUD_RADII_Y: PackedFloat32Array = [0.40, 0.44, 0.48, 0.38, 0.42, 0.36]
 const NEBULA_CLOUD_PHASES: PackedFloat32Array = [0.0, 1.15, 2.30, 3.45, 4.60, 5.45]
 
 const ECLIPSE_BEAT_DECAY_RATE: float = 4.6
@@ -130,6 +133,7 @@ var _spectrum_update_count: int = 0
 
 # Diffused nebula, aurora & eclipse procedural state (0 heap allocations per frame)
 var _nebula_time: float = 0.0
+var _nebula_color_phase: float = 0.0
 var _nebula_beat_boost: float = 0.0
 var _nebula_drop_boost: float = 0.0
 var _nebula_pulse_count: int = 0
@@ -362,6 +366,48 @@ func get_nebula_core_boost() -> float:
 
 func get_nebula_pulse_count() -> int:
 	return _nebula_pulse_count
+
+
+func get_nebula_color_phase() -> float:
+	return _nebula_color_phase
+
+
+func _sample_nebula_neon_color(p_phase: float) -> Color:
+	var norm: float = fposmod(p_phase / TAU, 1.0)
+	var col: Color = NEBULA_COLOR_TURQUOISE
+	if norm < 0.20:
+		col = NEBULA_COLOR_TURQUOISE.lerp(NEBULA_COLOR_CYAN, smoothstep(0.0, 0.20, norm))
+	elif norm < 0.40:
+		col = NEBULA_COLOR_CYAN.lerp(NEBULA_COLOR_BLUE, smoothstep(0.20, 0.40, norm))
+	elif norm < 0.60:
+		col = NEBULA_COLOR_BLUE.lerp(NEBULA_COLOR_VIOLET, smoothstep(0.40, 0.60, norm))
+	elif norm < 0.80:
+		col = NEBULA_COLOR_VIOLET.lerp(NEBULA_COLOR_MAGENTA, smoothstep(0.60, 0.80, norm))
+	else:
+		col = NEBULA_COLOR_MAGENTA.lerp(NEBULA_COLOR_TURQUOISE, smoothstep(0.80, 1.0, norm))
+	return Color(
+		minf(col.r, NEBULA_MAX_RGB_CHANNEL),
+		minf(col.g, NEBULA_MAX_RGB_CHANNEL),
+		minf(col.b, NEBULA_MAX_RGB_CHANNEL),
+		1.0
+	)
+
+
+func get_nebula_cloud_color(p_cloud_idx: int = 0) -> Color:
+	var idx: int = posmod(p_cloud_idx, NEBULA_CLOUD_COUNT)
+	return _sample_nebula_neon_color(_nebula_color_phase + NEBULA_CLOUD_PHASES[idx])
+
+
+func get_nebula_cloud_alpha(p_cloud_idx: int = 0) -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var tier_drop: float = 0.72 if _current_tier >= 3 else (0.46 if _current_tier >= 2 else 0.0)
+	var energy_drive: float = clampf(
+		((_smoothed_bass * 0.42) + (_nebula_beat_boost * 0.50) + maxf(_nebula_drop_boost * 0.58, tier_drop)) * react_mult,
+		0.0,
+		1.25
+	)
+	var cloud_var: float = 0.018 * float(posmod(p_cloud_idx, 2))
+	return clampf(NEBULA_MIN_ALPHA + cloud_var + (energy_drive * 0.13), NEBULA_MIN_ALPHA, NEBULA_MAX_ALPHA)
 
 
 func get_eclipse_halo_texture() -> GradientTexture2D:
@@ -658,6 +704,7 @@ func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_by
 		_nebula_beat_boost = maxf(_nebula_beat_boost, s)
 		if p_is_drop:
 			_nebula_drop_boost = maxf(_nebula_drop_boost, s)
+		_nebula_color_phase = wrapf(_nebula_color_phase + (0.68 if p_is_drop else 0.32), 0.0, TAU)
 		_nebula_pulse_count += 1
 		queue_redraw()
 	elif is_aurora_style_active():
@@ -690,6 +737,8 @@ func step_nebula(p_delta: float) -> void:
 
 	var drift_speed: float = 0.48 + (_compute_nebula_musical_drive() * 0.22)
 	_nebula_time += dt * drift_speed
+	var color_speed: float = 0.42 + (_nebula_beat_boost * 0.65) + (_nebula_drop_boost * 0.95) + (_smoothed_bass * 0.35)
+	_nebula_color_phase = wrapf(_nebula_color_phase + (dt * color_speed), 0.0, TAU)
 	queue_redraw()
 
 
@@ -1200,11 +1249,10 @@ func _draw_nebula_backdrop() -> void:
 		_draw_global_note_hit_flashes(bounds)
 		return
 
-	var bright_mult: float = get_nebula_brightness_multiplier()
 	var breath_scale: float = get_nebula_breath_scale()
 	var core_boost: float = get_nebula_core_boost()
 
-	# 6 wide overlapping elliptical radial clouds (deep violet, indigo, subtle cyan accents, zero lines)
+	# 6 wide overlapping elliptical radial clouds cycling continuously through the full neon palette
 	for i: int in range(NEBULA_CLOUD_COUNT):
 		var phase: float = NEBULA_CLOUD_PHASES[i]
 		var drift_x: float = sin((_nebula_time * 0.42) + phase) * (w * 0.065)
@@ -1212,18 +1260,12 @@ func _draw_nebula_backdrop() -> void:
 		var cx: float = (w * NEBULA_CLOUD_ANCHORS_X[i]) + drift_x
 		var cy: float = (h * NEBULA_CLOUD_ANCHORS_Y[i]) + drift_y
 
-		var local_swell: float = 1.0 + (0.06 * sin((_nebula_time * 0.65) + phase))
+		var local_swell: float = 1.0 + (0.065 * sin((_nebula_time * 0.65) + phase))
 		var rx: float = w * NEBULA_CLOUD_RADII_X[i] * breath_scale * local_swell
 		var ry: float = h * NEBULA_CLOUD_RADII_Y[i] * breath_scale * local_swell
 
-		var base_col: Color = NEBULA_COLOR_VIOLET
-		var mod_idx: int = i % 3
-		if mod_idx == 1:
-			base_col = NEBULA_COLOR_INDIGO
-		elif mod_idx == 2:
-			base_col = NEBULA_COLOR_INDIGO.lerp(NEBULA_COLOR_CYAN, clampf(0.42 + (core_boost * 0.25), 0.0, 0.85))
-
-		var cloud_alpha: float = clampf((0.115 + (0.02 * float(i % 2))) * bright_mult, 0.0, NEBULA_MAX_ALPHA)
+		var base_col: Color = get_nebula_cloud_color(i)
+		var cloud_alpha: float = get_nebula_cloud_alpha(i)
 		var cloud_tint: Color = Color(
 			minf(base_col.r, NEBULA_MAX_RGB_CHANNEL),
 			minf(base_col.g, NEBULA_MAX_RGB_CHANNEL),
@@ -1233,15 +1275,15 @@ func _draw_nebula_backdrop() -> void:
 		var cloud_rect: Rect2 = Rect2(cx - rx, cy - ry, rx * 2.0, ry * 2.0)
 		draw_texture_rect(_nebula_cloud_texture, cloud_rect, false, cloud_tint)
 
-	# Centered cosmic core glow that blooms smoothly during Drops
+	# Centered cosmic neon core glow that intensifies and shifts chroma during beats & Drops
 	var core_center: Vector2 = Vector2(
 		(w * 0.5) + (sin(_nebula_time * 0.30) * w * 0.025),
 		(h * 0.46) + (cos(_nebula_time * 0.26) * h * 0.02)
 	)
-	var core_rx: float = w * lerpf(0.38, 0.64, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
-	var core_ry: float = h * lerpf(0.22, 0.36, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
-	var core_col: Color = NEBULA_COLOR_VIOLET.lerp(NEBULA_COLOR_CYAN, clampf(0.35 + (core_boost * 0.42), 0.0, 0.88))
-	var core_alpha: float = clampf(0.08 + (core_boost * 0.14), 0.0, NEBULA_MAX_ALPHA)
+	var core_rx: float = w * lerpf(0.46, 0.72, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
+	var core_ry: float = h * lerpf(0.26, 0.42, clampf(core_boost * 0.65, 0.0, 1.0)) * breath_scale
+	var core_col: Color = _sample_nebula_neon_color(_nebula_color_phase + 2.20 + (core_boost * 0.55))
+	var core_alpha: float = clampf(NEBULA_MIN_ALPHA + (core_boost * 0.12), NEBULA_MIN_ALPHA, NEBULA_MAX_ALPHA)
 	var core_tint: Color = Color(
 		minf(core_col.r, NEBULA_MAX_RGB_CHANNEL),
 		minf(core_col.g, NEBULA_MAX_RGB_CHANNEL),

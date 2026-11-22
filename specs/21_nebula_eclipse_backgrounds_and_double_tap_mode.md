@@ -60,8 +60,8 @@
 - **Textura radial precreada en `_init()` (`_nebula_cloud_texture`):** `GradientTexture2D` `FILL_RADIAL` (`128×128`), caída gaussiana ultra suave (`alpha: 1.0 → 0.56 → 0.20 → 0.05 → 0.0` en `[0.0, 0.26, 0.54, 0.78, 1.0]`).
 - **Composición visual (0 asignaciones en heap por frame):**
   - Fondo base vertical cósmico oscuro (`#070616` → `#110620`).
-  - `NEBULA_CLOUD_COUNT = 6` nubes amplias elípticas solapadas con deriva orgánica lenta (`sin`/`cos`) en paleta controlada de violeta profundo, índigo y destellos cian (RGB acotado `<= 0.92`, alpha por nube acotado `<= NEBULA_MAX_ALPHA = 0.26`).
-  - **Reacción musical:** respiración radial suave impulsada por graves (`_smoothed_bass`) y beat (`_nebula_beat_boost`), más un núcleo luminoso central cian-violeta que se enciende progresivamente durante Drops (`_nebula_drop_boost` / `_current_tier >= 2`).
+  - `NEBULA_CLOUD_COUNT = 6` nubes amplias elípticas solapadas con deriva orgánica lenta (`sin`/`cos`), mayor presencia luminosa (`alpha` en el rango `0.18..0.34` según graves/beat/Drop, RGB acotado `<= 0.92` para no saturar a blanco) y rotación cromática continua desfasada entre nubes por toda la paleta neón (**turquesa neón**, **cian eléctrico**, **azul neón**, **violeta eléctrico** y **magenta neón**).
+  - **Reacción musical:** respiración radial suave impulsada por graves (`_smoothed_bass`) y beat (`_nebula_beat_boost`), aceleración suave de la rotación de color y mayor brillo del núcleo cósmico central durante beats y Drops (`_nebula_drop_boost` / `_current_tier >= 2`).
 - **Resplandor de acierto de nota:** invoca `_draw_global_note_hit_flashes(bounds)` al final.
 
 #### C. `Eclipse` (`STYLE_ECLIPSE` en `vfx/reactive_background.gd`)
