@@ -721,6 +721,14 @@ func _on_restart_requested() -> void:
 
 
 func _on_main_menu_requested() -> void:
+	# Ensure persistent root click SFX is already playing before scene change
+	# (without duplicating if a wired button already fired it)
+	var global_sfx: UiSfxPlayer = get_node_or_null("/root/GlobalUiSfx") as UiSfxPlayer
+	if global_sfx == null and safe_hud != null:
+		global_sfx = safe_hud.ui_sfx_player
+	if global_sfx != null and not global_sfx.is_click_playing():
+		global_sfx.play_button_click()
+
 	if dsp_clock != null:
 		dsp_clock.stop()
 	if audio_analyzer != null:
@@ -732,7 +740,7 @@ func _on_main_menu_requested() -> void:
 
 	var tree: SceneTree = get_tree()
 	if tree != null and ResourceLoader.exists(MAIN_MENU_SCENE_PATH):
-		tree.change_scene_to_file(MAIN_MENU_SCENE_PATH)
+		tree.call_deferred(&"change_scene_to_file", MAIN_MENU_SCENE_PATH)
 
 
 func _generate_metronome_stream(p_duration_sec: float, p_bpm: float) -> AudioStreamWAV:

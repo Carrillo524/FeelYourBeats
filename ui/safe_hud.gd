@@ -1184,8 +1184,9 @@ func _ensure_ui_nodes() -> void:
 	_pause_menu_button.custom_minimum_size = Vector2(0.0, 84.0)
 	_pause_menu_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_pause_menu_button.add_theme_font_size_override("font_size", MODAL_BUTTON_FONT_SIZE)
-	_pause_menu_button.pressed.connect(request_main_menu)
 	_pause_vbox.add_child(_pause_menu_button)
+	ui_sfx_player.bind_button(_pause_menu_button)
+	_pause_menu_button.pressed.connect(request_main_menu)
 
 	_build_results_styles()
 
@@ -1272,8 +1273,9 @@ func _ensure_ui_nodes() -> void:
 	_results_retry_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
 	_results_retry_button.add_theme_color_override("font_color", Color(0.98, 1.0, 1.0, 1.0))
 	_apply_results_button_style(_results_retry_button, _style_results_retry)
-	_results_retry_button.pressed.connect(request_restart)
 	_results_vbox.add_child(_results_retry_button)
+	ui_sfx_player.bind_button(_results_retry_button)
+	_results_retry_button.pressed.connect(request_restart)
 
 	_results_menu_button = Button.new()
 	_results_menu_button.name = "ResultsMenuButton"
@@ -1283,8 +1285,9 @@ func _ensure_ui_nodes() -> void:
 	_results_menu_button.add_theme_font_size_override("font_size", RESULTS_BUTTON_FONT_SIZE)
 	_results_menu_button.add_theme_color_override("font_color", Color(0.96, 0.99, 1.0, 1.0))
 	_apply_results_button_style(_results_menu_button, _style_results_menu)
-	_results_menu_button.pressed.connect(request_main_menu)
 	_results_vbox.add_child(_results_menu_button)
+	ui_sfx_player.bind_button(_results_menu_button)
+	_results_menu_button.pressed.connect(request_main_menu)
 
 	ui_sfx_player.enable_global_button_wiring()
 	ui_sfx_player.bind_buttons_in_tree(self)

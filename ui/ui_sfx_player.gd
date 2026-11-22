@@ -9,6 +9,7 @@ const SUPPORTED_EXTENSIONS: PackedStringArray = ["ogg", "wav", "mp3"]
 const DEFAULT_AUDIO_BUS: StringName = &"Master"
 const DEFAULT_VOLUME_DB: float = 0.0
 const DEFAULT_TRANSITION_DURATION_SEC: float = 2.5
+const ROOT_CLICK_PLAYER_NAME: StringName = &"PersistentUiClickPlayer"
 const META_CLICK_WIRED: StringName = &"ui_click_wired"
 const META_CLICK_EXCLUDED: StringName = &"ui_click_excluded"
 
@@ -40,6 +41,7 @@ static func mark_button_excluded(p_button: BaseButton) -> void:
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_ensure_players()
 	reload_sfx()
 	var tree: SceneTree = get_tree()
@@ -86,10 +88,20 @@ func play_button_click() -> void:
 	var bus_idx: int = AudioServer.get_bus_index(DEFAULT_AUDIO_BUS)
 	if bus_idx >= 0 and AudioServer.is_bus_mute(bus_idx):
 		return
+	_click_player.process_mode = Node.PROCESS_MODE_ALWAYS
 	_click_player.bus = DEFAULT_AUDIO_BUS
 	_click_player.volume_db = DEFAULT_VOLUME_DB
 	_click_player.stream = _button_click_stream
-	_click_player.play()
+	_click_player.play(0.0)
+
+
+func get_persistent_click_player() -> AudioStreamPlayer:
+	_ensure_players()
+	return _click_player
+
+
+func is_click_playing() -> bool:
+	return _click_player != null and is_instance_valid(_click_player) and _click_player.playing
 
 
 func get_click_play_count() -> int:
@@ -194,19 +206,71 @@ func get_cassette_transition_delay_sec() -> float:
 
 
 func _ensure_players() -> void:
-	if _click_player == null:
-		_click_player = AudioStreamPlayer.new()
-		_click_player.name = "UiClickPlayer"
-		_click_player.bus = DEFAULT_AUDIO_BUS
-		_click_player.volume_db = DEFAULT_VOLUME_DB
-		add_child(_click_player)
+	var tree: SceneTree = get_tree()
+	var root_window: Window = tree.root if tree != null else null
 
-	if _cassette_player == null:
+	if _click_player == null or not is_instance_valid(_click_player):
+		_click_player = null
+		if root_window != null:
+			_click_player = root_window.get_node_or_null(NodePath(String(ROOT_CLICK_PLAYER_NAME))) as AudioStreamPlayer
+
+		if _click_player == null:
+			_click_player = AudioStreamPlayer.new()
+			_click_player.name = ROOT_CLICK_PLAYER_NAME
+			_click_player.process_mode = Node.PROCESS_MODE_ALWAYS
+			_click_player.bus = DEFAULT_AUDIO_BUS
+			_click_player.volume_db = DEFAULT_VOLUME_DB
+			if root_window != null:
+				if root_window.is_node_ready():
+					root_window.add_child(_click_player)
+				else:
+					add_child(_click_player)
+					call_deferred(&"_reparent_click_player_to_root")
+			else:
+				add_child(_click_player)
+	else:
+		_click_player.process_mode = Node.PROCESS_MODE_ALWAYS
+		if root_window != null and _click_player.get_parent() != root_window:
+			if root_window.is_node_ready():
+				_reparent_click_player_to_root()
+			else:
+				call_deferred(&"_reparent_click_player_to_root")
+
+	if _cassette_player == null or not is_instance_valid(_cassette_player):
 		_cassette_player = AudioStreamPlayer.new()
 		_cassette_player.name = "UiCassettePlayer"
+		_cassette_player.process_mode = Node.PROCESS_MODE_ALWAYS
 		_cassette_player.bus = DEFAULT_AUDIO_BUS
 		_cassette_player.volume_db = DEFAULT_VOLUME_DB
 		add_child(_cassette_player)
+
+
+func _reparent_click_player_to_root() -> void:
+	var tree: SceneTree = get_tree()
+	if tree == null or tree.root == null:
+		return
+	var existing_root_player: AudioStreamPlayer = tree.root.get_node_or_null(NodePath(String(ROOT_CLICK_PLAYER_NAME))) as AudioStreamPlayer
+	if existing_root_player != null:
+		if _click_player != null and is_instance_valid(_click_player) and _click_player != existing_root_player:
+			var old_player: AudioStreamPlayer = _click_player
+			if old_player.get_parent() != null:
+				old_player.get_parent().remove_child(old_player)
+			old_player.queue_free()
+		_click_player = existing_root_player
+		_click_player.process_mode = Node.PROCESS_MODE_ALWAYS
+		if _button_click_stream != null and _click_player.stream == null:
+			_click_player.stream = _button_click_stream
+		return
+
+	if _click_player == null or not is_instance_valid(_click_player):
+		return
+	_click_player.process_mode = Node.PROCESS_MODE_ALWAYS
+	var cur_parent: Node = _click_player.get_parent()
+	if cur_parent == tree.root:
+		return
+	if cur_parent != null:
+		cur_parent.remove_child(_click_player)
+	tree.root.add_child(_click_player)
 
 
 func _find_and_load_sfx(p_exact_stem: String, p_prefix_fallback: String) -> AudioStream:
