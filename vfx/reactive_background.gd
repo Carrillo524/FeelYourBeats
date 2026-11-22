@@ -60,14 +60,22 @@ const NEBULA_CLOUD_RADII_X: PackedFloat32Array = [0.60, 0.64, 0.72, 0.58, 0.60, 
 const NEBULA_CLOUD_RADII_Y: PackedFloat32Array = [0.34, 0.38, 0.42, 0.32, 0.34, 0.30]
 const NEBULA_CLOUD_PHASES: PackedFloat32Array = [0.0, 1.15, 2.30, 3.45, 4.60, 5.45]
 
-const ECLIPSE_BEAT_DECAY_RATE: float = 4.2
-const ECLIPSE_DROP_DECAY_RATE: float = 2.2
+const ECLIPSE_BEAT_DECAY_RATE: float = 4.6
+const ECLIPSE_DROP_DECAY_RATE: float = 2.0
+const ECLIPSE_SCALE_IDLE: float = 0.64
+const ECLIPSE_SCALE_MIN: float = 0.58
+const ECLIPSE_SCALE_MAX: float = 1.50
+const ECLIPSE_SCALE_ATTACK_RATE: float = 18.0
+const ECLIPSE_SCALE_RELEASE_RATE: float = 4.8
 const ECLIPSE_MAX_ALPHA: float = 0.34
-const ECLIPSE_MAX_RGB_CHANNEL: float = 0.91
+const ECLIPSE_CORE_GLOW_MAX_ALPHA: float = 0.34
+const ECLIPSE_MAX_RGB_CHANNEL: float = 0.92
 const ECLIPSE_BASE_TOP_COLOR: Color = Color(0.020, 0.026, 0.072, 1.0)
 const ECLIPSE_BASE_BOTTOM_COLOR: Color = Color(0.044, 0.022, 0.098, 1.0)
-const ECLIPSE_COLOR_CYAN: Color = Color(0.10, 0.82, 0.91, 1.0)
-const ECLIPSE_COLOR_VIOLET: Color = Color(0.54, 0.24, 0.91, 1.0)
+const ECLIPSE_COLOR_TURQUOISE: Color = Color(0.14, 0.90, 0.80, 1.0)
+const ECLIPSE_COLOR_CYAN: Color = Color(0.14, 0.86, 0.92, 1.0)
+const ECLIPSE_COLOR_BLUE: Color = Color(0.24, 0.54, 0.92, 1.0)
+const ECLIPSE_COLOR_VIOLET: Color = Color(0.76, 0.24, 0.92, 1.0)
 
 const AURORA_CURTAIN_COUNT: int = 7
 const AURORA_RIBBON_SEGMENTS: int = 16
@@ -131,9 +139,11 @@ var _eclipse_time: float = 0.0
 var _eclipse_color_phase: float = 0.0
 var _eclipse_beat_boost: float = 0.0
 var _eclipse_drop_boost: float = 0.0
+var _eclipse_pulse_scale: float = ECLIPSE_SCALE_IDLE
 var _eclipse_pulse_count: int = 0
 var _eclipse_halo_texture: GradientTexture2D = null
 var _eclipse_core_shadow_texture: GradientTexture2D = null
+var _eclipse_core_glow_texture: GradientTexture2D = null
 
 var _aurora_time: float = 0.0
 var _aurora_color_phase: float = 0.0
@@ -170,6 +180,7 @@ func _init() -> void:
 	_nebula_cloud_texture = _create_nebula_cloud_texture()
 	_eclipse_halo_texture = _create_eclipse_halo_texture()
 	_eclipse_core_shadow_texture = _create_eclipse_core_shadow_texture()
+	_eclipse_core_glow_texture = _create_eclipse_core_glow_texture()
 	_aurora_vertical_texture = _create_aurora_vertical_texture()
 	_aurora_horizontal_texture = _create_aurora_horizontal_texture()
 	_hit_beam_texture = _create_hit_beam_texture()
@@ -361,20 +372,28 @@ func get_eclipse_core_shadow_texture() -> GradientTexture2D:
 	return _eclipse_core_shadow_texture
 
 
+func get_eclipse_core_glow_texture() -> GradientTexture2D:
+	return _eclipse_core_glow_texture
+
+
 func _compute_eclipse_musical_drive() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
-	var tier_drop: float = 0.75 if _current_tier >= 3 else (0.48 if _current_tier >= 2 else 0.0)
+	var tier_drop: float = 0.85 if _current_tier >= 3 else (0.55 if _current_tier >= 2 else 0.0)
 	return clampf(
-		((_eclipse_beat_boost * 0.90) + maxf(_eclipse_drop_boost * 0.82, tier_drop) + (_smoothed_bass * 0.56)) * react_mult,
+		((_eclipse_beat_boost * 1.05) + maxf(_eclipse_drop_boost * 0.90, tier_drop) + (_smoothed_bass * 0.65)) * react_mult,
 		0.0,
-		2.15
+		2.30
 	)
 
 
-func get_eclipse_breath_scale() -> float:
+func _compute_eclipse_target_scale() -> float:
 	var drive: float = _compute_eclipse_musical_drive()
-	var ambient_swell: float = sin(_eclipse_time * 0.90) * 0.03
-	return clampf(1.0 + ambient_swell + (drive * 0.14), 0.94, 1.36)
+	var ambient_swell: float = sin(_eclipse_time * 1.05) * 0.035
+	return clampf(ECLIPSE_SCALE_IDLE + ambient_swell + (drive * 0.42), ECLIPSE_SCALE_MIN, ECLIPSE_SCALE_MAX)
+
+
+func get_eclipse_breath_scale() -> float:
+	return clampf(_eclipse_pulse_scale, ECLIPSE_SCALE_MIN, ECLIPSE_SCALE_MAX)
 
 
 func get_eclipse_color_mix() -> float:
@@ -383,12 +402,37 @@ func get_eclipse_color_mix() -> float:
 	return clampf(lerpf(slow_wave, 1.0 - slow_wave, beat_push), 0.0, 1.0)
 
 
-func get_eclipse_current_color() -> Color:
-	var col: Color = ECLIPSE_COLOR_CYAN.lerp(ECLIPSE_COLOR_VIOLET, get_eclipse_color_mix())
+func _sample_eclipse_neon_color(p_phase: float) -> Color:
+	var norm: float = fposmod(p_phase / TAU, 1.0)
+	var col: Color = ECLIPSE_COLOR_TURQUOISE
+	if norm < 0.25:
+		col = ECLIPSE_COLOR_TURQUOISE.lerp(ECLIPSE_COLOR_CYAN, smoothstep(0.0, 0.25, norm))
+	elif norm < 0.50:
+		col = ECLIPSE_COLOR_CYAN.lerp(ECLIPSE_COLOR_BLUE, smoothstep(0.25, 0.50, norm))
+	elif norm < 0.75:
+		col = ECLIPSE_COLOR_BLUE.lerp(ECLIPSE_COLOR_VIOLET, smoothstep(0.50, 0.75, norm))
+	else:
+		col = ECLIPSE_COLOR_VIOLET.lerp(ECLIPSE_COLOR_TURQUOISE, smoothstep(0.75, 1.0, norm))
 	return Color(
 		minf(col.r, ECLIPSE_MAX_RGB_CHANNEL),
 		minf(col.g, ECLIPSE_MAX_RGB_CHANNEL),
 		minf(col.b, ECLIPSE_MAX_RGB_CHANNEL),
+		1.0
+	)
+
+
+func get_eclipse_current_color() -> Color:
+	return _sample_eclipse_neon_color(_eclipse_color_phase)
+
+
+func get_eclipse_core_neon_color() -> Color:
+	var drive: float = clampf(_compute_eclipse_musical_drive() * 0.45, 0.0, 1.0)
+	var base: Color = _sample_eclipse_neon_color(_eclipse_color_phase + 0.55 + (drive * 0.40))
+	var lifted: Color = base.lerp(Color(0.86, 0.91, 0.92, 1.0), 0.26 + (drive * 0.14))
+	return Color(
+		minf(lifted.r, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(lifted.g, ECLIPSE_MAX_RGB_CHANNEL),
+		minf(lifted.b, ECLIPSE_MAX_RGB_CHANNEL),
 		1.0
 	)
 
@@ -522,9 +566,10 @@ func compute_crown_lane_rect(p_lane_idx: int, p_bounds: Vector2) -> Rect2:
 		var lane_rect: Rect2 = _lane_local_rects[clamped_lane]
 		var judgment_y: float = _judgment_line_local_y if _judgment_line_local_y >= 0.0 else (p_bounds.y * _hit_line_normalized_y)
 		var top_y: float = maxf(0.0, judgment_y - crown_height)
+		var bottom_y: float = maxf(judgment_y, lane_rect.end.y)
 		var x_left: float = lane_rect.position.x
 		var x_right: float = maxf(x_left + 1.0, lane_rect.end.x)
-		return Rect2(x_left, top_y, x_right - x_left, maxf(0.0, judgment_y - top_y))
+		return Rect2(x_left, top_y, x_right - x_left, maxf(0.0, bottom_y - top_y))
 
 	var lane_w: float = maxf(4.0, p_bounds.x * 0.25)
 	var lane_left: float = float(clamped_lane) * lane_w
@@ -533,7 +578,8 @@ func compute_crown_lane_rect(p_lane_idx: int, p_bounds: Vector2) -> Rect2:
 	var draw_right: float = maxf(draw_left + 1.0, lane_right - CROWN_LANE_INSET_PX)
 	var hit_zone_y: float = p_bounds.y * _hit_line_normalized_y
 	var fallback_top_y: float = maxf(0.0, hit_zone_y - crown_height)
-	return Rect2(draw_left, fallback_top_y, draw_right - draw_left, maxf(0.0, hit_zone_y - fallback_top_y))
+	var fallback_bottom_y: float = maxf(hit_zone_y, p_bounds.y)
+	return Rect2(draw_left, fallback_top_y, draw_right - draw_left, maxf(0.0, fallback_bottom_y - fallback_top_y))
 
 
 static func get_star_arm_directions() -> PackedVector2Array:
@@ -624,7 +670,9 @@ func trigger_wave_pulse(p_strength: float = 0.85, p_is_drop: bool = false, _p_by
 		_eclipse_beat_boost = maxf(_eclipse_beat_boost, s)
 		if p_is_drop:
 			_eclipse_drop_boost = maxf(_eclipse_drop_boost, s)
-		_eclipse_color_phase = wrapf(_eclipse_color_phase + (0.62 if p_is_drop else 0.34), 0.0, TAU)
+		_eclipse_color_phase = wrapf(_eclipse_color_phase + (0.92 if p_is_drop else 0.52), 0.0, TAU)
+		var target_scale: float = _compute_eclipse_target_scale()
+		_eclipse_pulse_scale = lerpf(_eclipse_pulse_scale, target_scale, 0.55)
 		_eclipse_pulse_count += 1
 		queue_redraw()
 
@@ -656,9 +704,13 @@ func step_eclipse(p_delta: float) -> void:
 	if _eclipse_drop_boost < 0.002:
 		_eclipse_drop_boost = 0.0
 
-	_eclipse_time += dt * (0.72 + (_eclipse_drop_boost * 0.35))
+	var target_scale: float = _compute_eclipse_target_scale()
+	var scale_rate: float = ECLIPSE_SCALE_ATTACK_RATE if target_scale > _eclipse_pulse_scale else ECLIPSE_SCALE_RELEASE_RATE
+	_eclipse_pulse_scale = lerpf(_eclipse_pulse_scale, target_scale, clampf(scale_rate * dt, 0.0, 1.0))
+
+	_eclipse_time += dt * (0.78 + (_eclipse_drop_boost * 0.45))
 	_eclipse_color_phase = wrapf(
-		_eclipse_color_phase + (dt * (0.36 + (_eclipse_drop_boost * 0.55) + (_eclipse_beat_boost * 0.30))),
+		_eclipse_color_phase + (dt * (0.48 + (_eclipse_drop_boost * 0.85) + (_eclipse_beat_boost * 0.50))),
 		0.0,
 		TAU
 	)
@@ -1220,14 +1272,15 @@ func _draw_eclipse_backdrop() -> void:
 	var drive: float = _compute_eclipse_musical_drive()
 	var breath_scale: float = get_eclipse_breath_scale()
 	var primary_col: Color = get_eclipse_current_color()
-	var secondary_col: Color = ECLIPSE_COLOR_VIOLET.lerp(ECLIPSE_COLOR_CYAN, get_eclipse_color_mix())
+	var secondary_col: Color = _sample_eclipse_neon_color(_eclipse_color_phase + 1.55)
+	var core_glow_col: Color = get_eclipse_core_neon_color()
 	var center: Vector2 = Vector2(w * 0.5, h * 0.47)
 	var min_dim: float = minf(w, h)
 
-	# 1. Wide outer atmospheric nebula veil behind the eclipse
+	# 1. Wide outer atmospheric nebula veil behind the eclipse (pulses small -> large)
 	if _nebula_cloud_texture != null:
-		var outer_r: float = min_dim * 0.72 * breath_scale
-		var outer_alpha: float = clampf(0.11 + (drive * 0.09), 0.0, 0.24)
+		var outer_r: float = min_dim * 0.68 * breath_scale
+		var outer_alpha: float = clampf(0.10 + (drive * 0.095), 0.0, 0.25)
 		var outer_tint: Color = Color(
 			minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
 			minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
@@ -1242,8 +1295,8 @@ func _draw_eclipse_backdrop() -> void:
 		cos(_eclipse_time * 0.55) * (min_dim * 0.018),
 		sin(_eclipse_time * 0.48) * (min_dim * 0.018)
 	)
-	var sec_r: float = min_dim * 0.56 * breath_scale
-	var sec_alpha: float = clampf(0.10 + (drive * 0.085), 0.0, 0.24)
+	var sec_r: float = min_dim * 0.52 * breath_scale
+	var sec_alpha: float = clampf(0.10 + (drive * 0.09), 0.0, 0.25)
 	var sec_tint: Color = Color(
 		minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
 		minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
@@ -1258,9 +1311,9 @@ func _draw_eclipse_backdrop() -> void:
 	)
 	draw_texture_rect(_eclipse_halo_texture, sec_rect, false, sec_tint)
 
-	# 3. Main centered wide diffused circular halo (smooth radial falloff, zero hard ring)
-	var main_r: float = min_dim * 0.50 * breath_scale
-	var main_alpha: float = clampf(0.17 + (drive * 0.11), 0.0, ECLIPSE_MAX_ALPHA)
+	# 3. Main centered wide diffused circular halo pulsing small -> large with beat & Drop
+	var main_r: float = min_dim * 0.46 * breath_scale
+	var main_alpha: float = clampf(0.16 + (drive * 0.12), 0.0, ECLIPSE_MAX_ALPHA)
 	var main_tint: Color = Color(
 		minf(primary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
 		minf(primary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
@@ -1272,10 +1325,23 @@ func _draw_eclipse_backdrop() -> void:
 
 	# 4. Soft dark center umbra giving depth without any hard circle contour
 	if _eclipse_core_shadow_texture != null:
-		var umbra_r: float = min_dim * 0.24 * lerpf(1.0, 1.06, clampf(drive * 0.35, 0.0, 1.0))
-		var umbra_tint: Color = Color(0.025, 0.022, 0.070, 0.72)
+		var umbra_r: float = min_dim * 0.22 * breath_scale
+		var umbra_tint: Color = Color(0.025, 0.022, 0.070, 0.58)
 		var umbra_rect: Rect2 = Rect2(center.x - umbra_r, center.y - umbra_r, umbra_r * 2.0, umbra_r * 2.0)
 		draw_texture_rect(_eclipse_core_shadow_texture, umbra_rect, false, umbra_tint)
+
+	# 5. Luminous lighter-neon radial core blur cycling neon palette (alpha <= 0.34, RGB <= 0.92)
+	if _eclipse_core_glow_texture != null:
+		var core_r: float = min_dim * 0.27 * breath_scale
+		var core_alpha: float = clampf(0.14 + (drive * 0.12), 0.0, ECLIPSE_CORE_GLOW_MAX_ALPHA)
+		var core_tint: Color = Color(
+			minf(core_glow_col.r, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(core_glow_col.g, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(core_glow_col.b, ECLIPSE_MAX_RGB_CHANNEL),
+			core_alpha
+		)
+		var core_rect: Rect2 = Rect2(center.x - core_r, center.y - core_r, core_r * 2.0, core_r * 2.0)
+		draw_texture_rect(_eclipse_core_glow_texture, core_rect, false, core_tint)
 
 	_draw_global_note_hit_flashes(bounds)
 
@@ -1331,6 +1397,27 @@ func _create_eclipse_core_shadow_texture() -> GradientTexture2D:
 		Color(1.0, 1.0, 1.0, 0.82),
 		Color(1.0, 1.0, 1.0, 0.44),
 		Color(1.0, 1.0, 1.0, 0.0),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
+
+
+func _create_eclipse_core_glow_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.58, 0.84, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.68),
+		Color(1.0, 1.0, 1.0, 0.28),
+		Color(1.0, 1.0, 1.0, 0.06),
 		Color(1.0, 1.0, 1.0, 0.0),
 	])
 	var tex: GradientTexture2D = GradientTexture2D.new()
@@ -1723,59 +1810,89 @@ func _draw_crown_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -
 			clampf(0.58 + (drop_factor * 0.30), 0.0, 0.90)
 		)
 
-		# Strict lane clipping [lane_left + 1.0, lane_right - 1.0] (0 px outside lane lines)
+		# Exact lane bounds [lane_rect.position.x, lane_rect.end.x] and [top_y .. lane_rect.end.y]
 		var crown_rect: Rect2 = compute_crown_lane_rect(lane_idx, p_bounds)
 		var x_left: float = crown_rect.position.x
 		var x_right: float = crown_rect.end.x
 		var y_top: float = crown_rect.position.y
 		var y_bottom: float = crown_rect.end.y
-		var crown_h: float = crown_rect.size.y
-		if crown_h <= 0.5 or x_right <= x_left + 0.5:
+		var y_judgment: float = clampf(get_synced_judgment_line_local_y(), y_top, y_bottom)
+		var upper_h: float = maxf(0.0, y_judgment - y_top)
+		var lower_h: float = maxf(0.0, y_bottom - y_judgment)
+		if (upper_h + lower_h) <= 0.5 or x_right <= x_left + 0.5:
 			continue
 
-		# 1. Full ascending M-shaped dual-pillar glow (bright inner lane walls, dim center)
+		# 1. Full ascending dual-pillar glow above judgment_y (alpha 0.0 at top -> peak at judgment_y)
 		var main_alpha: float = clampf(e * 0.52 * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		_draw_crown_m_pillar_rect(
-			p_canvas,
-			x_left,
-			x_right,
-			y_top,
-			y_bottom,
-			upper_col,
-			base_col,
-			0.0,
-			main_alpha
-		)
+		if upper_h > 0.5:
+			_draw_crown_m_pillar_rect(
+				p_canvas,
+				x_left,
+				x_right,
+				y_top,
+				y_judgment,
+				upper_col,
+				base_col,
+				0.0,
+				main_alpha
+			)
 
-		# 2. Mid-height turquoise-cyan neon boost along both inner lane edges
-		var mid_top_y: float = maxf(y_top, y_bottom - (crown_h * 0.62))
-		var mid_alpha: float = clampf(((e * 0.42) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		_draw_crown_m_pillar_rect(
-			p_canvas,
-			x_left,
-			x_right,
-			mid_top_y,
-			y_bottom,
-			upper_col,
-			CROWN_CORE_BRIGHT,
-			0.0,
-			mid_alpha
-		)
+			# 2. Mid-height turquoise-cyan neon boost along both inner lane edges
+			var mid_top_y: float = maxf(y_top, y_judgment - (upper_h * 0.62))
+			var mid_alpha: float = clampf(((e * 0.42) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+			_draw_crown_m_pillar_rect(
+				p_canvas,
+				x_left,
+				x_right,
+				mid_top_y,
+				y_judgment,
+				upper_col,
+				CROWN_CORE_BRIGHT,
+				0.0,
+				mid_alpha
+			)
 
-		# 3. Luminous M-shaped base crest anchored cleanly on the hit line (bright corners, dim center)
-		var base_top_y: float = maxf(y_top, y_bottom - (crown_h * 0.22))
-		var base_alpha: float = clampf(((e * 0.44) + (perfect_boost * 0.18)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		_draw_crown_m_pillar_rect(
-			p_canvas,
-			x_left,
-			x_right,
-			base_top_y,
-			y_bottom,
-			base_col,
-			CROWN_CORE_BRIGHT,
-			0.0,
-			base_alpha
-		)
+			# 3. Luminous base crest anchored cleanly on the judgment band
+			var base_top_y: float = maxf(y_top, y_judgment - (upper_h * 0.22))
+			var base_alpha: float = clampf(((e * 0.44) + (perfect_boost * 0.18)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+			_draw_crown_m_pillar_rect(
+				p_canvas,
+				x_left,
+				x_right,
+				base_top_y,
+				y_judgment,
+				base_col,
+				CROWN_CORE_BRIGHT,
+				0.0,
+				base_alpha
+			)
+
+		# 4. Full lower-lane coverage from judgment_y down to exact lane_rect.end.y (peak at judgment_y -> alpha 0.0 at lane_rect.end.y)
+		if lower_h > 0.5:
+			_draw_crown_m_pillar_rect(
+				p_canvas,
+				x_left,
+				x_right,
+				y_judgment,
+				y_bottom,
+				base_col,
+				upper_col,
+				main_alpha,
+				0.0
+			)
+			var lower_mid_y: float = minf(y_bottom, y_judgment + (lower_h * 0.65))
+			var lower_core_alpha: float = clampf(((e * 0.40) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+			_draw_crown_m_pillar_rect(
+				p_canvas,
+				x_left,
+				x_right,
+				y_judgment,
+				lower_mid_y,
+				CROWN_CORE_BRIGHT,
+				base_col,
+				lower_core_alpha,
+				0.0
+			)
 
 
 func _draw_oriented_tapered_beam(

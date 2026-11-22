@@ -65,13 +65,14 @@
 - **Resplandor de acierto de nota:** invoca `_draw_global_note_hit_flashes(bounds)` al final.
 
 #### C. `Eclipse` (`STYLE_ECLIPSE` en `vfx/reactive_background.gd`)
-- **0 líneas, 0 anillos duros:** precrea una sola vez en `_init()` dos `GradientTexture2D` radiales (`FILL_RADIAL`):
-  1. `_eclipse_halo_texture` (`256×256`): corona radial difuminada amplia con caída suave tanto hacia el núcleo oscuro interior como hacia el borde exterior (`alpha: 0.0 → 0.14 → 0.88 → 1.0 → 0.52 → 0.16 → 0.0` en `[0.0, 0.14, 0.34, 0.46, 0.64, 0.82, 1.0]`), sin ningún corte o línea fina.
-  2. `_eclipse_core_shadow_texture` (`128×128`): sombra central suave nocturna (`alpha: 0.82 → 0.45 → 0.0` en `[0.0, 0.32, 0.62]`) para dar profundidad de eclipse sin contornos rígidos.
+- **0 líneas, 0 anillos duros:** precrea una sola vez en `_init()` tres `GradientTexture2D` radiales (`FILL_RADIAL`):
+  1. `_eclipse_halo_texture` (`256×256`): corona radial difuminada amplia con caída suave tanto hacia el núcleo interior como hacia el borde exterior (`alpha: 0.0 → 0.14 → 0.88 → 1.0 → 0.52 → 0.16 → 0.0` en `[0.0, 0.14, 0.34, 0.46, 0.64, 0.82, 1.0]`), sin ningún corte o línea fina.
+  2. `_eclipse_core_shadow_texture` (`128×128`): sombra central suave nocturna para dar profundidad sin contornos rígidos.
+  3. `_eclipse_core_glow_texture` (`128×128`): resplandor radial difuminado central (`alpha <= 0.34`, RGB `<= 0.92`) que ilumina el núcleo con tono neón claro sin saturar a blanco ni tapar notas.
 - **Composición visual:**
   - Base vertical nocturna oscura (`#050712` → `#0B0618`).
-  - Halo amplio centrado en pantalla (`bounds.x * 0.5`, `bounds.y * 0.47`) compuesto por un velo atmosférico exterior, la corona radial principal difusa y la umbra suave interior.
-  - **Reacción musical:** respira en radio y luminosidad con graves/beats (`_eclipse_beat_boost`, `_smoothed_bass`) y transiciona suavemente entre **cian** (`Color(0.10, 0.82, 0.92)`) y **violeta** (`Color(0.56, 0.24, 0.92)`) al compás del beat y Drop (`_eclipse_drop_boost`, `_current_tier >= 2`), respetando `ECLIPSE_MAX_ALPHA = 0.34` y RGB `<= 0.92`.
+  - Halo amplio centrado en pantalla (`bounds.x * 0.5`, `bounds.y * 0.47`) con velo atmosférico exterior, corona radial principal, umbra suave y núcleo central con blur neón claro.
+  - **Reacción musical:** pulsa dinámicamente **de pequeño (`~0.64x`) a grande (`~1.50x`)** en sincronía con graves/beats y Drops (ataque rápido y contracción suave tipo estelas de partículas) y cicla dinámicamente entre los 4 colores de la paleta neón (**turquesa neón**, **cian eléctrico**, **azul neón** y **violeta/magenta neón**) respetando `alpha <= 0.34` y RGB `<= 0.92`.
 - **Resplandor de acierto de nota:** invoca `_draw_global_note_hit_flashes(bounds)` al final.
 
 #### D. `Clásico` y `Aurora`

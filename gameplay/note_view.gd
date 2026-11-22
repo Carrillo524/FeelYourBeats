@@ -3,10 +3,10 @@ extends Control
 
 const DEFAULT_HEAD_HEIGHT_PX: float = 36.0
 const HORIZONTAL_PADDING_PX: float = 8.0
-const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.76
-const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 0.90
-const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.44
-const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 0.54
+const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.82
+const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 0.88
+const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.60
+const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 0.66
 const HOLD_TAIL_FADE_MAX_PX: float = 46.0
 const HOLD_PULSE_FREQ_RAD: float = 18.0
 
@@ -39,6 +39,7 @@ var _is_hold_visible: bool = false
 var _is_hold_active: bool = false
 var _hold_pulse_phase: float = 0.0
 var _current_tail_height_px: float = 0.0
+var _current_inner_beam_width_px: float = 0.0
 var _current_outer_glow_width_px: float = 0.0
 var _current_motion_feather_height_px: float = 0.0
 
@@ -79,21 +80,21 @@ func _draw() -> void:
 	var pulse: float = _hold_pulse_phase if _is_hold_active else 0.0
 
 	var outer_ratio: float = (
-		HOLD_OUTER_BEAM_ACTIVE_RATIO + (pulse * 0.08)
+		HOLD_OUTER_BEAM_ACTIVE_RATIO + (pulse * 0.04)
 		if _is_hold_active
 		else HOLD_OUTER_BEAM_IDLE_RATIO
 	)
-	var outer_w: float = minf(lane_width * 0.98, maxf(8.0, lane_width * outer_ratio))
+	var outer_w: float = minf(lane_width * 0.92, maxf(8.0, lane_width * outer_ratio))
 	var outer_hw: float = outer_w * 0.5
 	var outer_col: Color = HOLD_OUTER_ACTIVE_COLOR if _is_hold_active else HOLD_OUTER_IDLE_COLOR
 	var outer_alpha: float = clampf(outer_col.a + (pulse * 0.08), 0.0, 0.52)
 
 	var inner_ratio: float = (
-		HOLD_INNER_BEAM_ACTIVE_RATIO + (pulse * 0.06)
+		HOLD_INNER_BEAM_ACTIVE_RATIO + (pulse * 0.04)
 		if _is_hold_active
 		else HOLD_INNER_BEAM_IDLE_RATIO
 	)
-	var inner_w: float = minf(lane_width * 0.72, maxf(6.0, lane_width * inner_ratio))
+	var inner_w: float = minf(lane_width * 0.74, maxf(6.0, lane_width * inner_ratio))
 	var inner_hw: float = inner_w * 0.5
 	var inner_col: Color = HOLD_INNER_ACTIVE_COLOR if _is_hold_active else HOLD_INNER_IDLE_COLOR
 	var inner_alpha: float = clampf(inner_col.a + (pulse * 0.10), 0.0, 0.88)
@@ -236,6 +237,10 @@ func get_hold_glow_width_px() -> float:
 	return _current_outer_glow_width_px
 
 
+func get_hold_inner_beam_width_px() -> float:
+	return _current_inner_beam_width_px
+
+
 func is_hold_glow_visible() -> bool:
 	return _is_hold_visible and _current_tail_height_px > 0.5
 
@@ -338,6 +343,7 @@ func _hide_and_clear_hold_layers() -> void:
 	_is_hold_active = false
 	_hold_pulse_phase = 0.0
 	_current_tail_height_px = 0.0
+	_current_inner_beam_width_px = 0.0
 	_current_outer_glow_width_px = 0.0
 	queue_redraw()
 
@@ -384,9 +390,15 @@ func _update_hold_body_geometry(
 	_hold_pulse_phase = clampf(p_pulse_phase, 0.0, 1.0)
 
 	var outer_ratio: float = (
-		HOLD_OUTER_BEAM_ACTIVE_RATIO + (_hold_pulse_phase * 0.08)
+		HOLD_OUTER_BEAM_ACTIVE_RATIO + (_hold_pulse_phase * 0.04)
 		if _is_hold_active
 		else HOLD_OUTER_BEAM_IDLE_RATIO
 	)
-	_current_outer_glow_width_px = minf(lane_width * 0.98, maxf(8.0, lane_width * outer_ratio))
+	var inner_ratio: float = (
+		HOLD_INNER_BEAM_ACTIVE_RATIO + (_hold_pulse_phase * 0.04)
+		if _is_hold_active
+		else HOLD_INNER_BEAM_IDLE_RATIO
+	)
+	_current_inner_beam_width_px = minf(lane_width * 0.74, maxf(6.0, lane_width * inner_ratio))
+	_current_outer_glow_width_px = minf(lane_width * 0.92, maxf(8.0, lane_width * outer_ratio))
 	queue_redraw()

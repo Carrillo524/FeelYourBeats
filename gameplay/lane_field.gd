@@ -778,6 +778,10 @@ func get_hold_contact_halo_texture() -> GradientTexture2D:
 	return _hold_contact_halo_texture
 
 
+static func get_hold_beam_width_ratio() -> float:
+	return NoteView.HOLD_INNER_BEAM_IDLE_RATIO
+
+
 func get_lane_hold_energy(p_lane: int) -> float:
 	if p_lane < 0 or p_lane >= _lane_hold_energy.size():
 		return 0.0
