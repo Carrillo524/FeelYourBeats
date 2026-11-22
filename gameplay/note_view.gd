@@ -9,6 +9,9 @@ const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.74
 const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 1.0
 const HOLD_TOP_FADE_PX: float = 22.0
 const HOLD_TOP_SOFT_TAPER: float = 0.88
+const HOLD_ELASTIC_PULSE_HZ: float = 14.0
+const HOLD_ACTIVE_WIDTH_CENTER_RATIO: float = 0.94
+const HOLD_ACTIVE_WIDTH_AMPLITUDE_RATIO: float = 0.06
 const HOLD_PULSE_FREQ_RAD: float = 18.0
 
 const MOTION_FEATHER_MIN_MULTIPLIER: int = 3
@@ -81,13 +84,13 @@ func _draw() -> void:
 	var top_fade_h: float = minf(HOLD_TOP_FADE_PX, tail_h * 0.45)
 	var fade_end_y: float = minf(0.0, -(tail_h - top_fade_h))
 	var tail_top_y: float = -tail_h
-	var pulse: float = _hold_pulse_phase if _is_hold_active else 0.0
 
 	# Idle: narrower (~74% of lane_width, centered) with softer 3-tier glow.
-	# Holding: expands cleanly to 100% of lane_width ([0.0, lane_width]) with radiant white-cyan core.
-	var ribbon_w: float = lane_width if _is_hold_active else (lane_width * HOLD_INNER_BEAM_IDLE_RATIO)
+	# Holding: elastic horizontal zoom-pulse oscillating 88%..100% of lane_width at ~14 Hz
+	# centered on lane_center_x, preserving full neon alpha without attenuation.
+	var ribbon_w: float = _compute_current_hold_ribbon_width()
 	var ribbon_hw: float = ribbon_w * 0.5
-	var alpha_mod: float = clampf(0.92 + (pulse * 0.08), 0.92, 1.0) if _is_hold_active else 1.0
+	var alpha_mod: float = get_active_hold_alpha_mod()
 
 	_draw_diffused_beam_body(cx, ribbon_hw, fade_end_y, tail_top_y, active_tex, alpha_mod)
 
@@ -177,7 +180,7 @@ func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: b
 		return
 
 	position.x = float(note_data.lane) * lane_width
-	var pulse_phase: float = (sin(p_dsp_time_sec * HOLD_PULSE_FREQ_RAD) * 0.5 + 0.5) if p_is_holding else 0.0
+	var pulse_signed: float = sin(p_dsp_time_sec * TAU * HOLD_ELASTIC_PULSE_HZ) if p_is_holding else 0.0
 	var visual_width: float = maxf(4.0, lane_width - (HORIZONTAL_PADDING_PX * 2.0))
 
 	if p_is_holding and note_data.is_hold():
@@ -186,7 +189,7 @@ func update_position(p_dsp_time_sec: float, p_hit_line_y: float, p_is_holding: b
 		var remaining_sec: float = maxf(0.0, end_time_sec - p_dsp_time_sec)
 		var remaining_tail_height_px: float = remaining_sec * scroll_speed_px_per_sec
 		_head_rect.color = HEAD_HOLD_ACTIVE_COLOR
-		_update_hold_body_geometry(remaining_tail_height_px, true, pulse_phase)
+		_update_hold_body_geometry(remaining_tail_height_px, true, pulse_signed)
 		_update_motion_feather(visual_width, true)
 	else:
 		position.y = p_hit_line_y - (note_data.time_sec - p_dsp_time_sec) * scroll_speed_px_per_sec
@@ -216,6 +219,21 @@ func get_hold_glow_width_px() -> float:
 
 func get_hold_inner_beam_width_px() -> float:
 	return _current_inner_beam_width_px
+
+
+func get_active_hold_alpha_mod() -> float:
+	return 1.0
+
+
+func _compute_current_hold_ribbon_width() -> float:
+	if not _is_hold_active:
+		return lane_width * HOLD_INNER_BEAM_IDLE_RATIO
+	var active_ratio: float = clampf(
+		HOLD_ACTIVE_WIDTH_CENTER_RATIO + (HOLD_ACTIVE_WIDTH_AMPLITUDE_RATIO * _hold_pulse_phase),
+		0.88,
+		1.0
+	)
+	return lane_width * active_ratio
 
 
 func get_note_head_width_px() -> float:
@@ -411,9 +429,9 @@ func _update_hold_body_geometry(
 	_current_tail_height_px = maxf(0.0, p_tail_height_px)
 	_is_hold_visible = _current_tail_height_px > 0.5
 	_is_hold_active = p_is_holding and _is_hold_visible
-	_hold_pulse_phase = clampf(p_pulse_phase, 0.0, 1.0)
+	_hold_pulse_phase = clampf(p_pulse_phase, -1.0, 1.0)
 
-	var ribbon_w: float = lane_width if _is_hold_active else (lane_width * HOLD_INNER_BEAM_IDLE_RATIO)
+	var ribbon_w: float = _compute_current_hold_ribbon_width()
 	_current_inner_beam_width_px = ribbon_w
 	_current_outer_glow_width_px = ribbon_w
 	queue_redraw()
