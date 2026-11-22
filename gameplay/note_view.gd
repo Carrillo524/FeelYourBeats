@@ -308,7 +308,7 @@ static func _ensure_shared_textures() -> void:
 		idle_tex.fill = GradientTexture2D.FILL_LINEAR
 		idle_tex.fill_from = Vector2(0.0, 0.5)
 		idle_tex.fill_to = Vector2(1.0, 0.5)
-		idle_tex.width = 128
+		idle_tex.width = 64
 		idle_tex.height = 8
 		idle_tex.use_hdr = false
 		_shared_hold_idle_texture = idle_tex
@@ -332,7 +332,7 @@ static func _ensure_shared_textures() -> void:
 		active_tex.fill = GradientTexture2D.FILL_LINEAR
 		active_tex.fill_from = Vector2(0.0, 0.5)
 		active_tex.fill_to = Vector2(1.0, 0.5)
-		active_tex.width = 128
+		active_tex.width = 64
 		active_tex.height = 8
 		active_tex.use_hdr = false
 		_shared_hold_active_texture = active_tex
@@ -351,8 +351,8 @@ static func _ensure_shared_textures() -> void:
 		cap_tex.fill = GradientTexture2D.FILL_RADIAL
 		cap_tex.fill_from = Vector2(0.5, 0.5)
 		cap_tex.fill_to = Vector2(0.5, 0.0)
-		cap_tex.width = 96
-		cap_tex.height = 96
+		cap_tex.width = 64
+		cap_tex.height = 64
 		cap_tex.use_hdr = false
 		_shared_hold_tail_cap_texture = cap_tex
 

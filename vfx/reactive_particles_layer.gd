@@ -105,6 +105,7 @@ var _audio_active: bool = true
 var _beat_trigger_count: int = 0
 var _shooting_star_lane_cursor: int = 0
 var _needs_clear_draw: bool = false
+var _vfx_relief_scale: float = 1.0
 
 # Pre-allocated typed parallel arrays (0 heap allocations per frame)
 var _active_count: int = 0
@@ -177,6 +178,18 @@ func is_effectively_active() -> bool:
 
 func get_active_particle_count() -> int:
 	return _active_count
+
+
+func set_vfx_relief_scale(p_scale: float) -> void:
+	var clamped: float = clampf(p_scale, 0.5, 1.0)
+	if is_equal_approx(_vfx_relief_scale, clamped):
+		return
+	_vfx_relief_scale = clamped
+	_rebuild_pool()
+
+
+func get_vfx_relief_scale() -> float:
+	return _vfx_relief_scale
 
 
 func get_beat_impulse() -> float:
@@ -449,7 +462,8 @@ func _rebuild_pool() -> void:
 		queue_redraw()
 		return
 
-	var target_count: int = _config.get_effective_particle_count()
+	var base_target: int = _config.get_effective_particle_count()
+	var target_count: int = maxi(1, int(round(float(base_target) * _vfx_relief_scale))) if base_target > 0 else 0
 	_active_count = target_count
 	_resize_arrays(target_count)
 
@@ -1038,8 +1052,8 @@ func _create_soft_radial_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 

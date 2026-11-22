@@ -157,6 +157,7 @@ var _aurora_pulse_count: int = 0
 var _aurora_vertical_texture: GradientTexture2D = null
 var _aurora_horizontal_texture: GradientTexture2D = null
 var _hit_effect_style: String = HIT_EFFECT_CLASSIC
+var _vfx_relief_scale: float = 1.0
 var _hit_line_normalized_y: float = DEFAULT_HIT_LINE_NORMALIZED_Y
 var _lane_local_rects: Array[Rect2] = []
 var _has_synced_lane_geometry: bool = false
@@ -562,6 +563,17 @@ func get_synced_judgment_line_local_y() -> float:
 
 func get_hit_effect_style() -> String:
 	return _hit_effect_style
+
+
+func set_vfx_relief_scale(p_scale: float) -> void:
+	_vfx_relief_scale = clampf(p_scale, 0.5, 1.0)
+	queue_redraw()
+	if _hit_effect_overlay != null:
+		_hit_effect_overlay.queue_redraw()
+
+
+func get_vfx_relief_scale() -> float:
+	return _vfx_relief_scale
 
 
 func get_hit_effect_drop_factor() -> float:
@@ -1252,8 +1264,9 @@ func _draw_nebula_backdrop() -> void:
 	var breath_scale: float = get_nebula_breath_scale()
 	var core_boost: float = get_nebula_core_boost()
 
-	# 6 wide overlapping elliptical radial clouds cycling continuously through the full neon palette
-	for i: int in range(NEBULA_CLOUD_COUNT):
+	# Wide overlapping elliptical radial clouds (reduced count under low-FPS relief)
+	var cloud_limit: int = maxi(2, int(ceil(float(NEBULA_CLOUD_COUNT) * _vfx_relief_scale)))
+	for i: int in range(cloud_limit):
 		var phase: float = NEBULA_CLOUD_PHASES[i]
 		var drift_x: float = sin((_nebula_time * 0.42) + phase) * (w * 0.065)
 		var drift_y: float = cos((_nebula_time * 0.34) + (phase * 1.18)) * (h * 0.042)
@@ -1319,8 +1332,10 @@ func _draw_eclipse_backdrop() -> void:
 	var center: Vector2 = Vector2(w * 0.5, h * 0.47)
 	var min_dim: float = minf(w, h)
 
-	# 1. Wide outer atmospheric nebula veil behind the eclipse (pulses small -> large)
-	if _nebula_cloud_texture != null:
+	var skip_secondary_halos: bool = _vfx_relief_scale < 0.75
+
+	# 1. Wide outer atmospheric nebula veil behind the eclipse (skipped under VFX relief)
+	if not skip_secondary_halos and _nebula_cloud_texture != null:
 		var outer_r: float = min_dim * 0.68 * breath_scale
 		var outer_alpha: float = clampf(0.10 + (drive * 0.095), 0.0, 0.25)
 		var outer_tint: Color = Color(
@@ -1332,26 +1347,27 @@ func _draw_eclipse_backdrop() -> void:
 		var outer_rect: Rect2 = Rect2(center.x - outer_r, center.y - outer_r, outer_r * 2.0, outer_r * 2.0)
 		draw_texture_rect(_nebula_cloud_texture, outer_rect, false, outer_tint)
 
-	# 2. Secondary counter-hue diffused halo slightly shifted for chromatic depth
-	var shift_vec: Vector2 = Vector2(
-		cos(_eclipse_time * 0.55) * (min_dim * 0.018),
-		sin(_eclipse_time * 0.48) * (min_dim * 0.018)
-	)
-	var sec_r: float = min_dim * 0.52 * breath_scale
-	var sec_alpha: float = clampf(0.10 + (drive * 0.09), 0.0, 0.25)
-	var sec_tint: Color = Color(
-		minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
-		minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
-		minf(secondary_col.b, ECLIPSE_MAX_RGB_CHANNEL),
-		sec_alpha
-	)
-	var sec_rect: Rect2 = Rect2(
-		center.x + shift_vec.x - sec_r,
-		center.y + shift_vec.y - sec_r,
-		sec_r * 2.0,
-		sec_r * 2.0
-	)
-	draw_texture_rect(_eclipse_halo_texture, sec_rect, false, sec_tint)
+	# 2. Secondary counter-hue diffused halo slightly shifted (skipped under VFX relief)
+	if not skip_secondary_halos:
+		var shift_vec: Vector2 = Vector2(
+			cos(_eclipse_time * 0.55) * (min_dim * 0.018),
+			sin(_eclipse_time * 0.48) * (min_dim * 0.018)
+		)
+		var sec_r: float = min_dim * 0.52 * breath_scale
+		var sec_alpha: float = clampf(0.10 + (drive * 0.09), 0.0, 0.25)
+		var sec_tint: Color = Color(
+			minf(secondary_col.r, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(secondary_col.g, ECLIPSE_MAX_RGB_CHANNEL),
+			minf(secondary_col.b, ECLIPSE_MAX_RGB_CHANNEL),
+			sec_alpha
+		)
+		var sec_rect: Rect2 = Rect2(
+			center.x + shift_vec.x - sec_r,
+			center.y + shift_vec.y - sec_r,
+			sec_r * 2.0,
+			sec_r * 2.0
+		)
+		draw_texture_rect(_eclipse_halo_texture, sec_rect, false, sec_tint)
 
 	# 3. Main centered wide diffused circular halo pulsing small -> large with beat & Drop
 	var main_r: float = min_dim * 0.46 * breath_scale
@@ -1403,8 +1419,8 @@ func _create_nebula_cloud_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1426,8 +1442,8 @@ func _create_eclipse_halo_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 256
-	tex.height = 256
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1446,8 +1462,8 @@ func _create_eclipse_core_shadow_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1467,8 +1483,8 @@ func _create_eclipse_core_glow_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1528,6 +1544,7 @@ func _draw_aurora_backdrop() -> void:
 	var pass_widths: PackedFloat32Array = PackedFloat32Array([2.15 * blur_scale, 0.96 * blur_scale])
 	var pass_alphas: PackedFloat32Array = PackedFloat32Array([0.52, 1.00])
 
+	var relief_active: bool = _vfx_relief_scale < 0.75
 	for c_idx: int in range(AURORA_CURTAIN_COUNT):
 		var col_top: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92))
 		var col_bot: Color = _sample_aurora_color(_aurora_color_phase + (float(c_idx) * 0.92) + 1.85)
@@ -1541,7 +1558,10 @@ func _draw_aurora_backdrop() -> void:
 		var sway_amp: float = w * 0.042 * undul_mult
 
 		# Double-layer soft textured curtains (wide diffused neon veil + smooth vertical core, zero hard edges)
+		# Under adaptive VFX relief, skip secondary outer halo pass (pass_idx == 0) to halve GPU overdraw.
 		for pass_idx: int in range(2):
+			if relief_active and pass_idx == 0:
+				continue
 			var width_scale: float = pass_widths[pass_idx]
 			var pass_alpha_scale: float = pass_alphas[pass_idx]
 			var pass_top: float = maxf(0.0, y_top_px - (h * 0.03 if pass_idx == 0 else 0.0))
@@ -1602,7 +1622,7 @@ func _create_aurora_vertical_texture() -> GradientTexture2D:
 	tex.fill_from = Vector2(0.5, 0.0)
 	tex.fill_to = Vector2(0.5, 1.0)
 	tex.width = 8
-	tex.height = 128
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1622,7 +1642,7 @@ func _create_aurora_horizontal_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_LINEAR
 	tex.fill_from = Vector2(0.0, 0.5)
 	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 128
+	tex.width = 64
 	tex.height = 8
 	tex.use_hdr = false
 	return tex
@@ -2047,7 +2067,7 @@ func _create_hit_beam_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_LINEAR
 	tex.fill_from = Vector2(0.0, 0.5)
 	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 128
+	tex.width = 64
 	tex.height = 8
 	tex.use_hdr = false
 	return tex
@@ -2069,7 +2089,7 @@ func _create_hit_beam_vertical_texture() -> GradientTexture2D:
 	tex.fill_from = Vector2(0.5, 0.0)
 	tex.fill_to = Vector2(0.5, 1.0)
 	tex.width = 8
-	tex.height = 128
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -2088,8 +2108,8 @@ func _create_hit_radial_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -2112,7 +2132,7 @@ func _create_hit_crown_fan_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_LINEAR
 	tex.fill_from = Vector2(0.0, 0.5)
 	tex.fill_to = Vector2(1.0, 0.5)
-	tex.width = 128
+	tex.width = 64
 	tex.height = 8
 	tex.use_hdr = false
 	return tex

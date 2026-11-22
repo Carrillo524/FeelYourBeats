@@ -522,15 +522,37 @@ static func load_external_audio_stream_data(p_path: String) -> AudioStream:
 
 	match ext:
 		"wav":
-			return AudioStreamWAV.load_from_buffer(raw_bytes)
+			var wav_stream: AudioStream = AudioStreamWAV.load_from_buffer(raw_bytes)
+			raw_bytes = PackedByteArray()
+			return wav_stream
 		"ogg":
-			return AudioStreamOggVorbis.load_from_buffer(raw_bytes)
+			var ogg_stream: AudioStream = AudioStreamOggVorbis.load_from_buffer(raw_bytes)
+			raw_bytes = PackedByteArray()
+			return ogg_stream
 		"mp3":
 			var mp3_stream: AudioStreamMP3 = AudioStreamMP3.new()
 			mp3_stream.data = raw_bytes
+			raw_bytes = PackedByteArray()
 			return mp3_stream
 		_:
+			raw_bytes = PackedByteArray()
 			return null
+
+
+static func release_analysis_buffers(p_analysis: Dictionary) -> void:
+	if p_analysis.is_empty():
+		return
+	var keys: Array = p_analysis.keys()
+	for i: int in range(keys.size()):
+		var k: Variant = keys[i]
+		var val: Variant = p_analysis[k]
+		if val is PackedFloat32Array:
+			p_analysis[k] = PackedFloat32Array()
+		elif val is PackedByteArray:
+			p_analysis[k] = PackedByteArray()
+		elif val is Array:
+			(val as Array).clear()
+	p_analysis.clear()
 
 
 func analyze_audio_stream(p_stream: AudioStream, p_hop_sec: float = DEFAULT_HOP_SEC) -> Dictionary:
@@ -783,6 +805,7 @@ static func analyze_wav_stream_data(
 				last_reported_pct = pct
 				p_progress_cb.call(pct)
 
+	raw_bytes = PackedByteArray()
 	return _finalize_analysis_buffers(
 		duration_sec,
 		safe_hop_sec,

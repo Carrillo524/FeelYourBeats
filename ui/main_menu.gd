@@ -1909,6 +1909,7 @@ func _run_song_processing_worker(p_job: Dictionary) -> void:
 		difficulty,
 		note_type_mode
 	)
+	AudioAnalyzer.release_analysis_buffers(analysis)
 	var validation: Dictionary = chart.validate()
 	if not (validation.get("valid", false) as bool):
 		call_deferred(

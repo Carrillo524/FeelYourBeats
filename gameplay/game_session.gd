@@ -12,6 +12,10 @@ const SMOOTH_CLOCK_DRIFT_CORRECTION_RATE: float = 4.0
 const SMOOTH_CLOCK_MAX_CORRECTION_ALPHA: float = 0.08
 const SMOOTH_CLOCK_SNAP_THRESHOLD_SEC: float = 0.080
 const SMOOTH_CLOCK_MAX_DELTA_SEC: float = 0.05
+const ADAPTIVE_VFX_WARMUP_SEC: float = 2.0
+const ADAPTIVE_VFX_LOW_FPS_THRESHOLD: float = 52.0
+const ADAPTIVE_VFX_TRIGGER_DURATION_SEC: float = 1.5
+const ADAPTIVE_VFX_RELIEF_SCALE: float = 0.5
 
 static var pending_session_config: Dictionary = {}
 
@@ -48,6 +52,9 @@ var _is_app_backgrounded: bool = false
 var _master_was_muted_before_bg: bool = false
 var smooth_song_time: float = 0.0
 var _smooth_song_time_initialized: bool = false
+var vfx_relief_scale: float = 1.0
+var _adaptive_vfx_elapsed_sec: float = 0.0
+var _adaptive_vfx_low_fps_accum_sec: float = 0.0
 
 
 static func set_pending_session(p_config: Dictionary) -> void:
@@ -98,6 +105,44 @@ func _process(p_delta: float) -> void:
 	step_smooth_song_time_for_test(p_delta, target_audio_time)
 	if lane_field != null:
 		lane_field.set_smooth_visual_time(smooth_song_time)
+	step_adaptive_vfx_monitor(p_delta, float(Engine.get_frames_per_second()))
+
+
+func get_vfx_relief_scale() -> float:
+	return vfx_relief_scale
+
+
+func reset_adaptive_vfx_relief() -> void:
+	vfx_relief_scale = 1.0
+	_adaptive_vfx_elapsed_sec = 0.0
+	_adaptive_vfx_low_fps_accum_sec = 0.0
+	_apply_vfx_relief_scale(vfx_relief_scale)
+
+
+func step_adaptive_vfx_monitor(p_delta: float, p_fps: float) -> float:
+	var dt: float = clampf(p_delta, 0.0, 0.25)
+	_adaptive_vfx_elapsed_sec += dt
+	if _adaptive_vfx_elapsed_sec < ADAPTIVE_VFX_WARMUP_SEC:
+		return vfx_relief_scale
+
+	if p_fps > 0.0 and p_fps < ADAPTIVE_VFX_LOW_FPS_THRESHOLD:
+		_adaptive_vfx_low_fps_accum_sec += dt
+		if _adaptive_vfx_low_fps_accum_sec >= ADAPTIVE_VFX_TRIGGER_DURATION_SEC and vfx_relief_scale > ADAPTIVE_VFX_RELIEF_SCALE:
+			vfx_relief_scale = ADAPTIVE_VFX_RELIEF_SCALE
+			_apply_vfx_relief_scale(vfx_relief_scale)
+	elif p_fps >= ADAPTIVE_VFX_LOW_FPS_THRESHOLD:
+		_adaptive_vfx_low_fps_accum_sec = maxf(0.0, _adaptive_vfx_low_fps_accum_sec - (dt * 2.0))
+	return vfx_relief_scale
+
+
+func _apply_vfx_relief_scale(p_scale: float) -> void:
+	var clamped: float = clampf(p_scale, ADAPTIVE_VFX_RELIEF_SCALE, 1.0)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.set_vfx_relief_scale(clamped)
+	if reactive_background != null:
+		reactive_background.set_vfx_relief_scale(clamped)
+	if lane_field != null:
+		lane_field.set_vfx_relief_scale(clamped)
 
 
 func get_smooth_song_time() -> float:
@@ -313,6 +358,7 @@ func start_audio_file_session(
 			p_difficulty,
 			p_note_type_mode
 		)
+		AudioAnalyzer.release_analysis_buffers(analysis)
 
 		var validation: Dictionary = chart.validate()
 		if not (validation.get("valid", false) as bool):
@@ -375,6 +421,7 @@ func start_chart_session(p_chart: ChartData) -> bool:
 	if dsp_clock != null:
 		dsp_clock.start()
 		reset_smooth_song_time(dsp_clock.get_current_dsp_time())
+	reset_adaptive_vfx_relief()
 
 	return true
 
@@ -716,6 +763,7 @@ func _present_results(p_is_failed: bool = false) -> void:
 
 
 func _on_restart_requested() -> void:
+	reset_adaptive_vfx_relief()
 	if _active_chart != null:
 		start_chart_session(_active_chart)
 	else:
@@ -723,6 +771,7 @@ func _on_restart_requested() -> void:
 
 
 func _on_main_menu_requested() -> void:
+	reset_adaptive_vfx_relief()
 	# Ensure persistent root click SFX is already playing before scene change
 	# (without duplicating if a wired button already fired it)
 	var global_sfx: UiSfxPlayer = get_node_or_null("/root/GlobalUiSfx") as UiSfxPlayer

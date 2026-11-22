@@ -155,6 +155,7 @@ var _hold_ring_accumulator_sec: float = 0.0
 var _hit_effect_style: String = GameplayEffectsConfig.HIT_CLASSIC
 var _touch_effect_style: String = GameplayEffectsConfig.TOUCH_WAVE
 var _vanish_effect_style: String = GameplayEffectsConfig.VANISH_FIREWORK
+var _vfx_relief_scale: float = 1.0
 var _touch_renderer: TouchEffectRenderer = TouchEffectRenderer.new()
 var _hold_contact_halo_texture: GradientTexture2D = null
 var _fx_seed_counter: int = 1
@@ -438,17 +439,18 @@ func _draw_classic_hold_consumption_effects(p_lane_count: int) -> void:
 				clampf((pulse * 0.55) + (flare * 0.45), 0.0, 1.0)
 			)
 
-			# Outer pulsing cyan-turquoise radial halo centered on contact point
-			var outer_rx: float = _lane_width * (0.58 + (pulse * 0.14) + (flare * 0.28))
-			var outer_ry: float = outer_rx * 0.64
-			var outer_alpha: float = clampf((energy * 0.36) + (flare * 0.42), 0.0, 0.56)
-			var outer_rect: Rect2 = Rect2(cx - outer_rx, _hit_line_y - outer_ry, outer_rx * 2.0, outer_ry * 2.0)
-			draw_texture_rect(
-				_hold_contact_halo_texture,
-				outer_rect,
-				false,
-				Color(halo_col.r, halo_col.g, halo_col.b, outer_alpha)
-			)
+			# Outer pulsing cyan-turquoise radial halo (skipped under low-FPS VFX relief)
+			if _vfx_relief_scale >= 0.75:
+				var outer_rx: float = _lane_width * (0.58 + (pulse * 0.14) + (flare * 0.28))
+				var outer_ry: float = outer_rx * 0.64
+				var outer_alpha: float = clampf((energy * 0.36) + (flare * 0.42), 0.0, 0.56)
+				var outer_rect: Rect2 = Rect2(cx - outer_rx, _hit_line_y - outer_ry, outer_rx * 2.0, outer_ry * 2.0)
+				draw_texture_rect(
+					_hold_contact_halo_texture,
+					outer_rect,
+					false,
+					Color(halo_col.r, halo_col.g, halo_col.b, outer_alpha)
+				)
 
 			# Inner concentrated absorption core at hit line
 			var inner_rx: float = _lane_width * (0.28 + (pulse * 0.08) + (flare * 0.18))
@@ -773,6 +775,15 @@ func get_vanish_effect_style() -> String:
 	return _vanish_effect_style
 
 
+func set_vfx_relief_scale(p_scale: float) -> void:
+	_vfx_relief_scale = clampf(p_scale, 0.5, 1.0)
+	queue_redraw()
+
+
+func get_vfx_relief_scale() -> float:
+	return _vfx_relief_scale
+
+
 func get_active_firework_ray_count() -> int:
 	var active: int = 0
 	for i: int in range(_fw_active.size()):
@@ -1087,8 +1098,8 @@ func _create_hold_contact_halo_texture() -> GradientTexture2D:
 	tex.fill = GradientTexture2D.FILL_RADIAL
 	tex.fill_from = Vector2(0.5, 0.5)
 	tex.fill_to = Vector2(0.5, 0.0)
-	tex.width = 128
-	tex.height = 128
+	tex.width = 64
+	tex.height = 64
 	tex.use_hdr = false
 	return tex
 
@@ -1450,14 +1461,15 @@ func _draw_vanish_effects() -> void:
 			fade * 0.98
 		)
 
-		# Outer neon halo (teardrop cone + rounded glow)
-		var halo_r: float = head_r * 1.72
-		_fw_drop_poly_buf[0] = p_tail
-		_fw_drop_poly_buf[1] = p_head + (perp * halo_r)
-		_fw_drop_poly_buf[2] = p_head + (dir * (halo_r * 0.65))
-		_fw_drop_poly_buf[3] = p_head - (perp * halo_r)
-		draw_colored_polygon(_fw_drop_poly_buf, halo_col)
-		draw_circle(p_head, head_r * 2.05, halo_col)
+		# Outer neon halo (skipped under low-FPS VFX relief to save GPU fill-rate)
+		if _vfx_relief_scale >= 0.75:
+			var halo_r: float = head_r * 1.72
+			_fw_drop_poly_buf[0] = p_tail
+			_fw_drop_poly_buf[1] = p_head + (perp * halo_r)
+			_fw_drop_poly_buf[2] = p_head + (dir * (halo_r * 0.65))
+			_fw_drop_poly_buf[3] = p_head - (perp * halo_r)
+			draw_colored_polygon(_fw_drop_poly_buf, halo_col)
+			draw_circle(p_head, head_r * 2.05, halo_col)
 
 		# Saturated neon elongated droplet body (tapered conical wake + rounded head)
 		_fw_drop_poly_buf[0] = p_tail
