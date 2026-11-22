@@ -6,11 +6,13 @@
 android/
 builds/
 export/
+scratch/
 *.apk
 *.aab
 *.ap_
 *.keystore
 *.jks
+*.exe
 
 # Imported translations and mono/tmp
 *.translation

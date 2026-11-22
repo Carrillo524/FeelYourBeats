@@ -79,6 +79,17 @@ const TAB_SLIDE_OVERSHOOT_PX: float = 10.0
 const TAB_INDICATOR_HEIGHT_PX: float = 5.0
 const MENU_LANDSCAPE_MAX_WIDTH_RATIO: float = 0.50
 const MENU_MAX_CONTENT_WIDTH_BASE_PX: float = 960.0
+const GITHUB_REPO_SLUG: String = "Carrillo524/FeelYourBeats"
+const GITHUB_LATEST_RELEASE_URL_FMT: String = "https://api.github.com/repos/%s/releases/latest"
+const GITHUB_HTTP_USER_AGENT: String = "User-Agent: FeelYourBeats-Client"
+const GITHUB_HTTP_ACCEPT: String = "Accept: application/vnd.github+json"
+const RELEASE_BELL_SIZE_PX: float = 78.0
+const RELEASE_MODAL_Z_INDEX: int = 80
+const RELEASE_WELCOME_TITLE_FMT: String = "¡Bienvenido a FeelYourBeats v%s!"
+const RELEASE_WELCOME_GUIDE_TEXT: String = "• Importa tu propia música desde el selector de canciones.\n• Cambia entre los 4 modos de juego.\n• Personaliza velocidad, fondo reactivo y efectos en Ajustes.\n• Si juegas en PC, los controles de los 4 carriles son las teclas D, F, J, K."
+const DEFAULT_RELEASE_NOTES_SUMMARY: String = "Resumen de novedades de v1.1.0:\n• Pantalla completa responsiva para PC y rotación vertical/horizontal en Android.\n• Controles de teclado en PC (D, F, J, K y flechas) compatibles con Tap y Hold.\n• Efectos de acierto, toque y desaparición sincronizados exactamente con la pista centrada.\n• Optimización de rendimiento a 60/120 Hz y compatibilidad gráfica universal en Android.\n• Aviso inicial de fotosensibilidad y mejoras de audio en segundo plano."
+const COLOR_UPDATE_BADGE: Color = Color(1.0, 0.34, 0.56, 1.0)
+const COLOR_UPDATE_BADGE_GLOW: Color = Color(1.0, 0.34, 0.56, 0.38)
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -138,6 +149,7 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 @export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var background_settings_path: String = ReactiveBackgroundConfig.DEFAULT_SETTINGS_PATH
 @export var effects_settings_path: String = GameplayEffectsConfig.DEFAULT_SETTINGS_PATH
+@export var enable_remote_release_check: bool = true
 @export var allow_scene_change: bool = true
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
@@ -244,6 +256,28 @@ var _exit_confirm_panel: PanelContainer = null
 var _exit_confirm_title: Label = null
 var _exit_cancel_button: Button = null
 var _exit_confirm_button: Button = null
+
+# Release Notes & Notification Bell UI
+var _release_bell_button: Button = null
+var _release_bell_icon: Control = null
+var _release_modal_backdrop: ColorRect = null
+var _release_modal_panel: Panel = null
+var _release_modal_scroll: ScrollContainer = null
+var _release_modal_vbox: VBoxContainer = null
+var _release_modal_title_label: Label = null
+var _release_modal_close_button: Button = null
+var _release_welcome_title_label: Label = null
+var _release_welcome_body_label: Label = null
+var _release_notes_heading_label: Label = null
+var _release_notes_body_label: Label = null
+var _release_download_button: Button = null
+var _release_http_request: HTTPRequest = null
+var _has_remote_update: bool = false
+var _remote_release_tag: String = ""
+var _remote_release_body: String = ""
+var _remote_apk_download_url: String = ""
+var _style_bell_normal: StyleBoxFlat = null
+var _style_bell_hover: StyleBoxFlat = null
 
 # Non-blocking Song Processing Loading Overlay
 var _loading_overlay: ColorRect = null
@@ -373,6 +407,8 @@ func _ready() -> void:
 
 	_connect_viewport_resize()
 	sync_responsive_viewport_layout()
+	_refresh_release_notes_modal_content()
+	_start_silent_release_check()
 
 	if returning_to_selector:
 		_has_played_startup_intro = true
@@ -431,10 +467,15 @@ func _process(p_delta: float) -> void:
 	if _loading_overlay != null and _loading_overlay.visible:
 		_step_loading_overlay_animation(dt)
 
+	if _has_remote_update and _release_bell_icon != null and _release_bell_icon.is_visible_in_tree():
+		_release_bell_icon.queue_redraw()
+
 	_step_touch_preview_pool(dt)
 
 
 func _exit_tree() -> void:
+	if _release_http_request != null and is_instance_valid(_release_http_request):
+		_release_http_request.cancel_request()
 	var vp: Viewport = get_viewport()
 	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
 		vp.size_changed.disconnect(_on_viewport_size_changed)
@@ -739,6 +780,9 @@ func handle_back_request(p_now_msec: int = -1) -> void:
 	if is_exit_confirm_modal_open():
 		close_exit_confirm_modal()
 		return
+	if is_release_notes_modal_open():
+		close_release_notes_modal()
+		return
 	if _file_dialog != null and _file_dialog.visible:
 		_file_dialog.hide()
 		return
@@ -914,11 +958,44 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_exit_confirm_backdrop.position = full_offset
 		_exit_confirm_backdrop.size = vp_size
 
+	_layout_release_bell_and_modal(safe_w, safe_h, vp_size, ui_scale, full_offset)
 	_layout_exit_confirm_panel(safe_w, safe_h)
 	_layout_loading_overlay(safe_w, safe_h)
 	if not _is_tab_transitioning:
 		_sync_all_tab_panel_geometries()
 		call_deferred(&"_snap_tab_indicator_to_active")
+
+
+func _layout_release_bell_and_modal(
+	p_safe_w: float,
+	p_safe_h: float,
+	p_vp_size: Vector2,
+	p_ui_scale: float,
+	p_full_offset: Vector2
+) -> void:
+	if _release_bell_button != null:
+		var bell_sz: float = clampf(RELEASE_BELL_SIZE_PX * p_ui_scale, 56.0, RELEASE_BELL_SIZE_PX)
+		_release_bell_button.size = Vector2(bell_sz, bell_sz)
+		_release_bell_button.position = Vector2(maxf(8.0, p_safe_w - bell_sz - 12.0), 14.0)
+		if _release_bell_icon != null:
+			_release_bell_icon.queue_redraw()
+
+	if _release_modal_backdrop != null:
+		_release_modal_backdrop.position = p_full_offset
+		_release_modal_backdrop.size = p_vp_size
+
+	if _release_modal_panel != null:
+		var modal_w: float = minf(900.0, p_safe_w - 24.0)
+		var modal_h: float = minf(1180.0, p_safe_h - 48.0)
+		_release_modal_panel.size = Vector2(modal_w, modal_h)
+		_release_modal_panel.position = Vector2((p_vp_size.x - modal_w) * 0.5, (p_vp_size.y - modal_h) * 0.5)
+		if _release_modal_scroll != null:
+			var inner_w: float = maxf(240.0, modal_w - 52.0)
+			var inner_h: float = maxf(320.0, modal_h - 48.0)
+			_release_modal_scroll.position = Vector2(26.0, 24.0)
+			_release_modal_scroll.size = Vector2(inner_w, inner_h)
+			if _release_modal_vbox != null:
+				_release_modal_vbox.custom_minimum_size = Vector2(inner_w - 8.0, 0.0)
 
 
 func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
@@ -953,6 +1030,8 @@ func show_title_screen() -> void:
 	_title_screen_container.visible = true
 	_browser_screen_container.visible = false
 	_song_modal_backdrop.visible = false
+	if _release_modal_backdrop != null:
+		_release_modal_backdrop.visible = false
 	if _exit_confirm_backdrop != null:
 		_exit_confirm_backdrop.visible = false
 
@@ -964,6 +1043,8 @@ func show_browser_screen(p_tab: int = MenuTab.SONGS) -> void:
 	_title_screen_container.visible = false
 	_browser_screen_container.visible = true
 	_song_modal_backdrop.visible = false
+	if _release_modal_backdrop != null:
+		_release_modal_backdrop.visible = false
 	if _exit_confirm_backdrop != null:
 		_exit_confirm_backdrop.visible = false
 	select_tab(p_tab, false)
@@ -3101,6 +3182,263 @@ func _on_exit_confirm_quit_pressed() -> void:
 		tree.quit()
 
 
+static func get_local_app_version() -> String:
+	var raw_ver: String = str(ProjectSettings.get_setting("application/config/version", "1.1.0")).strip_edges()
+	if raw_ver.begins_with("v") or raw_ver.begins_with("V"):
+		raw_ver = raw_ver.substr(1)
+	return raw_ver if not raw_ver.is_empty() else "1.1.0"
+
+
+static func parse_semver_tuple(p_version_text: String) -> PackedInt32Array:
+	var cleaned: String = p_version_text.strip_edges()
+	if cleaned.begins_with("v") or cleaned.begins_with("V"):
+		cleaned = cleaned.substr(1)
+	var dash_idx: int = cleaned.find("-")
+	if dash_idx >= 0:
+		cleaned = cleaned.substr(0, dash_idx)
+	var plus_idx: int = cleaned.find("+")
+	if plus_idx >= 0:
+		cleaned = cleaned.substr(0, plus_idx)
+
+	var parts: PackedStringArray = cleaned.split(".", false)
+	var result: PackedInt32Array = PackedInt32Array([0, 0, 0])
+	for i: int in range(mini(3, parts.size())):
+		var seg: String = parts[i].strip_edges()
+		if seg.is_valid_int():
+			result[i] = maxi(0, seg.to_int())
+	return result
+
+
+static func compare_semver(p_version_a: String, p_version_b: String) -> int:
+	var a: PackedInt32Array = parse_semver_tuple(p_version_a)
+	var b: PackedInt32Array = parse_semver_tuple(p_version_b)
+	for i: int in range(3):
+		if a[i] > b[i]:
+			return 1
+		if a[i] < b[i]:
+			return -1
+	return 0
+
+
+static func is_remote_version_newer(p_remote_tag: String, p_local_version: String) -> bool:
+	return compare_semver(p_remote_tag, p_local_version) > 0
+
+
+func has_remote_update_available() -> bool:
+	return _has_remote_update
+
+
+func get_remote_apk_download_url() -> String:
+	return _remote_apk_download_url
+
+
+func get_release_bell_button() -> Button:
+	return _release_bell_button
+
+
+func is_release_notes_modal_open() -> bool:
+	return _release_modal_backdrop != null and _release_modal_backdrop.visible
+
+
+func open_release_notes_modal() -> void:
+	_ensure_ui_nodes()
+	if _is_launching or _is_processing_song or _is_playing_startup_intro or _is_showing_photosensitivity_warning:
+		return
+	_refresh_release_notes_modal_content()
+	if _release_modal_backdrop != null:
+		_release_modal_backdrop.visible = true
+		_release_modal_backdrop.move_to_front()
+	if _release_modal_scroll != null:
+		_release_modal_scroll.scroll_vertical = 0
+
+
+func close_release_notes_modal() -> void:
+	if _release_modal_backdrop != null:
+		_release_modal_backdrop.visible = false
+
+
+func apply_release_payload_dict(p_payload: Dictionary) -> void:
+	var remote_tag: String = str(p_payload.get("tag_name", "")).strip_edges()
+	var remote_body: String = str(p_payload.get("body", "")).strip_edges()
+	var apk_url: String = ""
+
+	var assets_val: Variant = p_payload.get("assets", [])
+	if assets_val is Array:
+		var assets_arr: Array = assets_val as Array
+		for i: int in range(assets_arr.size()):
+			var entry: Variant = assets_arr[i]
+			if entry is Dictionary:
+				var asset_dict: Dictionary = entry as Dictionary
+				var asset_name: String = str(asset_dict.get("name", "")).to_lower()
+				var dl_url: String = str(asset_dict.get("browser_download_url", "")).strip_edges()
+				if asset_name.ends_with(".apk") and not dl_url.is_empty():
+					apk_url = dl_url
+					break
+
+	var local_ver: String = get_local_app_version()
+	_remote_release_tag = remote_tag
+	_remote_release_body = remote_body
+	_remote_apk_download_url = apk_url
+	_has_remote_update = (not remote_tag.is_empty()) and is_remote_version_newer(remote_tag, local_ver)
+
+	if _release_bell_icon != null:
+		_release_bell_icon.queue_redraw()
+	_refresh_release_notes_modal_content()
+
+
+func _start_silent_release_check() -> void:
+	if not enable_remote_release_check:
+		return
+	if _release_http_request == null:
+		_release_http_request = HTTPRequest.new()
+		_release_http_request.name = "ReleaseCheckHttpRequest"
+		_release_http_request.use_threads = true
+		_release_http_request.timeout = 8.0
+		_release_http_request.request_completed.connect(_on_release_http_completed)
+		add_child(_release_http_request)
+
+	var url: String = GITHUB_LATEST_RELEASE_URL_FMT % GITHUB_REPO_SLUG
+	var headers: PackedStringArray = PackedStringArray([
+		GITHUB_HTTP_USER_AGENT,
+		GITHUB_HTTP_ACCEPT,
+	])
+	var req_err: Error = _release_http_request.request(url, headers, HTTPClient.METHOD_GET)
+	if req_err != OK:
+		return
+
+
+func _on_release_http_completed(
+	p_result: int,
+	p_response_code: int,
+	_p_headers: PackedStringArray,
+	p_body: PackedByteArray
+) -> void:
+	if p_result != HTTPRequest.RESULT_SUCCESS or p_response_code != 200:
+		return
+	if p_body.is_empty():
+		return
+	var json_text: String = p_body.get_string_from_utf8()
+	var parsed: Variant = JSON.parse_string(json_text)
+	if parsed is Dictionary:
+		apply_release_payload_dict(parsed as Dictionary)
+
+
+func _refresh_release_notes_modal_content() -> void:
+	var local_ver: String = get_local_app_version()
+	if _release_welcome_title_label != null:
+		_release_welcome_title_label.text = RELEASE_WELCOME_TITLE_FMT % local_ver
+	if _release_welcome_body_label != null:
+		_release_welcome_body_label.text = RELEASE_WELCOME_GUIDE_TEXT
+
+	var display_tag: String = _remote_release_tag
+	if not display_tag.is_empty() and not display_tag.begins_with("v") and not display_tag.begins_with("V"):
+		display_tag = "v" + display_tag
+
+	if _release_notes_heading_label != null:
+		if _has_remote_update and not display_tag.is_empty():
+			_release_notes_heading_label.text = "NUEVA ACTUALIZACIÓN DISPONIBLE (%s)" % display_tag
+			_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+		else:
+			var label_tag: String = display_tag if not display_tag.is_empty() else ("v" + local_ver)
+			_release_notes_heading_label.text = "NOTAS DE LA VERSIÓN (%s)" % label_tag
+			_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+
+	if _release_notes_body_label != null:
+		if not _remote_release_body.is_empty():
+			_release_notes_body_label.text = _remote_release_body
+		else:
+			_release_notes_body_label.text = DEFAULT_RELEASE_NOTES_SUMMARY
+
+	if _release_download_button != null:
+		var can_download: bool = _has_remote_update and not _remote_apk_download_url.is_empty()
+		_release_download_button.visible = can_download
+
+
+func _on_release_bell_pressed() -> void:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro or _is_showing_photosensitivity_warning:
+		return
+	open_release_notes_modal()
+
+
+func _on_release_download_pressed() -> void:
+	if _remote_apk_download_url.is_empty():
+		return
+	OS.shell_open(_remote_apk_download_url)
+
+
+func _on_release_modal_backdrop_gui_input(p_event: InputEvent) -> void:
+	if p_event is InputEventMouseButton:
+		var mb: InputEventMouseButton = p_event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if _release_modal_panel != null and not _release_modal_panel.get_rect().has_point(mb.position):
+				close_release_notes_modal()
+	elif p_event is InputEventScreenTouch:
+		var st: InputEventScreenTouch = p_event as InputEventScreenTouch
+		if st.pressed:
+			if _release_modal_panel != null and not _release_modal_panel.get_rect().has_point(st.position):
+				close_release_notes_modal()
+
+
+func _draw_release_bell_icon() -> void:
+	if _release_bell_icon == null:
+		return
+	var sz: Vector2 = _release_bell_icon.size
+	var min_d: float = minf(sz.x, sz.y)
+	if min_d <= 4.0:
+		return
+	var c: Vector2 = sz * 0.5
+	var s: float = min_d * 0.31
+
+	# Classic clean vector notification bell silhouette (top loop, flared dome, rim, clapper)
+	var bell_pts: PackedVector2Array = PackedVector2Array([
+		c + Vector2(0.0, -s * 0.96),
+		c + Vector2(s * 0.44, -s * 0.84),
+		c + Vector2(s * 0.66, -s * 0.40),
+		c + Vector2(s * 0.72, s * 0.18),
+		c + Vector2(s * 0.98, s * 0.56),
+		c + Vector2(-s * 0.98, s * 0.56),
+		c + Vector2(-s * 0.72, s * 0.18),
+		c + Vector2(-s * 0.66, -s * 0.40),
+		c + Vector2(-s * 0.44, -s * 0.84),
+		c + Vector2(0.0, -s * 0.96),
+	])
+	var halo_col: Color = Color(0.28, 0.92, 1.0, 0.34)
+	var fill_col: Color = Color(0.26, 0.88, 1.0, 0.16)
+	var stroke_col: Color = Color(0.88, 0.99, 1.0, 0.96)
+
+	_release_bell_icon.draw_colored_polygon(bell_pts, fill_col)
+	_release_bell_icon.draw_polyline(bell_pts, halo_col, maxf(4.0, s * 0.24), true)
+	_release_bell_icon.draw_polyline(bell_pts, stroke_col, maxf(2.2, s * 0.12), true)
+
+	# Top bell handle knob
+	_release_bell_icon.draw_circle(c + Vector2(0.0, -s * 1.08), maxf(2.4, s * 0.13), stroke_col)
+
+	# Bottom clapper arc
+	_release_bell_icon.draw_arc(
+		c + Vector2(0.0, s * 0.60),
+		maxf(3.0, s * 0.28),
+		0.15,
+		PI - 0.15,
+		14,
+		stroke_col,
+		maxf(2.2, s * 0.12),
+		true
+	)
+
+	# Luminous notification dot when a newer GitHub release is available
+	if _has_remote_update:
+		var pulse: float = 0.78 + (0.22 * (sin(_pulse_phase * 1.4) * 0.5 + 0.5))
+		var dot_pos: Vector2 = c + Vector2(s * 0.86, -s * 0.86)
+		var dot_r: float = maxf(4.8, s * 0.28)
+		_release_bell_icon.draw_circle(
+			dot_pos,
+			dot_r * (1.75 * pulse),
+			Color(COLOR_UPDATE_BADGE_GLOW.r, COLOR_UPDATE_BADGE_GLOW.g, COLOR_UPDATE_BADGE_GLOW.b, 0.42 * pulse)
+		)
+		_release_bell_icon.draw_circle(dot_pos, dot_r, COLOR_UPDATE_BADGE)
+		_release_bell_icon.draw_circle(dot_pos, dot_r * 0.44, Color(1.0, 0.94, 0.96, 0.98))
+
+
 func _on_safe_play_rect_changed(_p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	apply_hud_safe_rect(p_hud_safe_rect)
 
@@ -4113,6 +4451,20 @@ func _build_theme_styles() -> void:
 	_style_tab_indicator.shadow_color = Color(0.22, 0.92, 1.0, 0.65)
 	_style_tab_indicator.shadow_size = 8
 
+	_style_bell_normal = StyleBoxFlat.new()
+	_style_bell_normal.bg_color = Color(0.06, 0.10, 0.20, 0.72)
+	_style_bell_normal.border_color = Color(0.36, 0.92, 1.0, 0.62)
+	_style_bell_normal.set_border_width_all(2)
+	_style_bell_normal.set_corner_radius_all(39)
+
+	_style_bell_hover = StyleBoxFlat.new()
+	_style_bell_hover.bg_color = Color(0.10, 0.18, 0.32, 0.88)
+	_style_bell_hover.border_color = Color(0.56, 0.98, 1.0, 0.95)
+	_style_bell_hover.set_border_width_all(2)
+	_style_bell_hover.set_corner_radius_all(39)
+	_style_bell_hover.shadow_color = Color(0.24, 0.92, 1.0, 0.40)
+	_style_bell_hover.shadow_size = 8
+
 
 func _apply_external_fonts() -> void:
 	if _font_registry == null:
@@ -4128,6 +4480,13 @@ func _apply_external_fonts() -> void:
 	_font_registry.apply_global_font_override(_loading_title_label, 3)
 	_font_registry.apply_global_font_override(_loading_stage_label, 2)
 	_font_registry.apply_global_font_override(_loading_percent_label, 2)
+	_font_registry.apply_global_font_override(_release_modal_title_label, 3)
+	_font_registry.apply_global_font_override(_release_modal_close_button, 2)
+	_font_registry.apply_global_font_override(_release_welcome_title_label, 2)
+	_font_registry.apply_global_font_override(_release_welcome_body_label, 0)
+	_font_registry.apply_global_font_override(_release_notes_heading_label, 2)
+	_font_registry.apply_global_font_override(_release_notes_body_label, 0)
+	_font_registry.apply_global_font_override(_release_download_button, 3)
 
 
 func _ensure_ui_nodes() -> void:
@@ -4141,6 +4500,7 @@ func _ensure_ui_nodes() -> void:
 
 	_build_title_screen_ui()
 	_build_browser_screen_ui()
+	_build_release_bell_and_modal_ui()
 	_build_song_setup_modal_ui()
 	_build_exit_confirm_modal_ui()
 	_build_loading_overlay_ui()
@@ -4666,6 +5026,127 @@ func _build_browser_screen_ui() -> void:
 		_vanish_effect_buttons[vf_id] = vf_btn
 
 	_configure_touch_scroll_container(_settings_scroll)
+
+
+func _build_release_bell_and_modal_ui() -> void:
+	_release_bell_button = Button.new()
+	_release_bell_button.name = "ReleaseNotesBellButton"
+	_release_bell_button.text = ""
+	_release_bell_button.tooltip_text = "Notas de versión"
+	_release_bell_button.focus_mode = Control.FOCUS_NONE
+	_release_bell_button.add_theme_stylebox_override("normal", _style_bell_normal)
+	_release_bell_button.add_theme_stylebox_override("hover", _style_bell_hover)
+	_release_bell_button.add_theme_stylebox_override("pressed", _style_bell_hover)
+	_release_bell_button.pressed.connect(_on_release_bell_pressed)
+	_safe_container.add_child(_release_bell_button)
+
+	_release_bell_icon = Control.new()
+	_release_bell_icon.name = "ReleaseBellVectorIcon"
+	_release_bell_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_release_bell_icon.draw.connect(_draw_release_bell_icon)
+	_release_bell_button.add_child(_release_bell_icon)
+	_release_bell_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	_release_modal_backdrop = ColorRect.new()
+	_release_modal_backdrop.name = "ReleaseNotesModalBackdrop"
+	_release_modal_backdrop.color = Color(0.01, 0.02, 0.05, 0.82)
+	_release_modal_backdrop.visible = false
+	_release_modal_backdrop.z_index = RELEASE_MODAL_Z_INDEX
+	_release_modal_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_release_modal_backdrop.gui_input.connect(_on_release_modal_backdrop_gui_input)
+	_safe_container.add_child(_release_modal_backdrop)
+
+	_release_modal_panel = Panel.new()
+	_release_modal_panel.name = "ReleaseNotesModalPanel"
+	_release_modal_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_release_modal_panel.add_theme_stylebox_override("panel", _style_modal_panel)
+	_release_modal_backdrop.add_child(_release_modal_panel)
+
+	_release_modal_scroll = ScrollContainer.new()
+	_release_modal_scroll.name = "ReleaseNotesModalScroll"
+	_release_modal_panel.add_child(_release_modal_scroll)
+
+	_release_modal_vbox = VBoxContainer.new()
+	_release_modal_vbox.name = "ReleaseNotesModalVBox"
+	_release_modal_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_vbox.add_theme_constant_override("separation", 22)
+	_release_modal_scroll.add_child(_release_modal_vbox)
+
+	var header_row: HBoxContainer = HBoxContainer.new()
+	header_row.name = "ReleaseNotesHeaderRow"
+	header_row.add_theme_constant_override("separation", 12)
+	_release_modal_vbox.add_child(header_row)
+
+	_release_modal_title_label = Label.new()
+	_release_modal_title_label.name = "ReleaseNotesTitleLabel"
+	_release_modal_title_label.text = "NOTAS DE VERSIÓN"
+	_release_modal_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_release_modal_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_modal_title_label.add_theme_font_size_override("font_size", MODAL_TITLE_FONT_SIZE)
+	_release_modal_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	header_row.add_child(_release_modal_title_label)
+
+	_release_modal_close_button = Button.new()
+	_release_modal_close_button.name = "ReleaseNotesCloseButton"
+	_release_modal_close_button.text = "CERRAR"
+	_release_modal_close_button.custom_minimum_size = Vector2(168.0, 72.0)
+	_release_modal_close_button.add_theme_font_size_override("font_size", 30)
+	_apply_stylebox_to_button(_release_modal_close_button, _style_option_inactive)
+	_release_modal_close_button.pressed.connect(close_release_notes_modal)
+	header_row.add_child(_release_modal_close_button)
+
+	_release_modal_vbox.add_child(_create_white_divider("ReleaseNotesDivider_0", 0))
+
+	_release_welcome_title_label = Label.new()
+	_release_welcome_title_label.name = "ReleaseWelcomeTitleLabel"
+	_release_welcome_title_label.text = RELEASE_WELCOME_TITLE_FMT % get_local_app_version()
+	_release_welcome_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_welcome_title_label.add_theme_font_size_override("font_size", 36)
+	_release_welcome_title_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
+	_release_modal_vbox.add_child(_release_welcome_title_label)
+
+	_release_welcome_body_label = Label.new()
+	_release_welcome_body_label.name = "ReleaseWelcomeBodyLabel"
+	_release_welcome_body_label.text = RELEASE_WELCOME_GUIDE_TEXT
+	_release_welcome_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_welcome_body_label.add_theme_font_size_override("font_size", 30)
+	_release_welcome_body_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_release_welcome_body_label.add_theme_constant_override("line_spacing", 8)
+	_release_modal_vbox.add_child(_release_welcome_body_label)
+
+	_release_modal_vbox.add_child(_create_white_divider("ReleaseNotesDivider_1", 0))
+
+	_release_notes_heading_label = Label.new()
+	_release_notes_heading_label.name = "ReleaseNotesHeadingLabel"
+	_release_notes_heading_label.text = "NOTAS DE LA VERSIÓN (v%s)" % get_local_app_version()
+	_release_notes_heading_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_notes_heading_label.add_theme_font_size_override("font_size", 34)
+	_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_release_modal_vbox.add_child(_release_notes_heading_label)
+
+	_release_notes_body_label = Label.new()
+	_release_notes_body_label.name = "ReleaseNotesBodyLabel"
+	_release_notes_body_label.text = DEFAULT_RELEASE_NOTES_SUMMARY
+	_release_notes_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_notes_body_label.add_theme_font_size_override("font_size", 28)
+	_release_notes_body_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	_release_notes_body_label.add_theme_constant_override("line_spacing", 8)
+	_release_modal_vbox.add_child(_release_notes_body_label)
+
+	_release_download_button = Button.new()
+	_release_download_button.name = "ReleaseDownloadUpdateButton"
+	_release_download_button.text = "DESCARGAR ACTUALIZACIÓN"
+	_release_download_button.visible = false
+	_release_download_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_download_button.custom_minimum_size = Vector2(0.0, PLAY_BUTTON_HEIGHT_PX)
+	_release_download_button.add_theme_font_size_override("font_size", 36)
+	_release_download_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_release_download_button, _style_play_cta)
+	_release_download_button.pressed.connect(_on_release_download_pressed)
+	_release_modal_vbox.add_child(_release_download_button)
+
+	_configure_touch_scroll_container(_release_modal_scroll)
 
 
 func _build_song_setup_modal_ui() -> void:
