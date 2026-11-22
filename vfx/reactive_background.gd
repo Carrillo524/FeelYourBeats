@@ -16,7 +16,7 @@ const HIT_EFFECT_CROWN: String = GameplayEffectsConfig.HIT_CROWN
 const STAR_ARM_ANGLE_RAD: float = PI * 0.25
 const CROWN_MAX_ALPHA: float = 0.62
 const CROWN_MAX_LANE_WIDTH_RATIO: float = 1.0
-const CROWN_LANE_INSET_PX: float = 1.0
+const CROWN_LANE_INSET_PX: float = 0.0
 const CROWN_BASE_CYAN_TURQUOISE: Color = Color(0.22, 0.94, 0.96, 1.0)
 const CROWN_TOP_VIOLET_NEON: Color = Color(0.56, 0.38, 1.0, 1.0)
 const CROWN_CORE_BRIGHT: Color = Color(0.46, 0.98, 0.98, 1.0)
@@ -1936,18 +1936,17 @@ func _create_hit_radial_texture() -> GradientTexture2D:
 
 
 func _create_hit_crown_fan_texture() -> GradientTexture2D:
-	# Horizontal M-shaped / dual-crest profile:
-	# alpha 0.0 at lane lines (0.00, 1.00), luminous peaks near inner walls (0.14, 0.86), dim center valley (0.22 at 0.50)
+	# Horizontal U-shaped inner-wall profile:
+	# max intensity (alpha 1.0) directly on both lane border lines (0.00, 1.00),
+	# decaying smoothly inward toward a dim center valley (0.18 -> 0.55, 0.50 -> 0.14, 0.82 -> 0.55)
 	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.30, 0.50, 0.70, 0.86, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.50, 0.82, 1.0])
 	grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.0),
 		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.42),
-		Color(1.0, 1.0, 1.0, 0.22),
-		Color(1.0, 1.0, 1.0, 0.42),
+		Color(1.0, 1.0, 1.0, 0.55),
+		Color(1.0, 1.0, 1.0, 0.14),
+		Color(1.0, 1.0, 1.0, 0.55),
 		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.0),
 	])
 	var tex: GradientTexture2D = GradientTexture2D.new()
 	tex.gradient = grad
