@@ -39,6 +39,26 @@ const STARTUP_INTRO_PRIMARY_DURATION_SEC: float = 1.08
 const STARTUP_INTRO_SECONDARY_DELAY_SEC: float = 1.64
 const STARTUP_INTRO_TOTAL_SEC: float = 3.00
 const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
+const PHOTOSENSITIVITY_Z_INDEX: int = 110
+const PHOTOSENSITIVITY_FADE_IN_SEC: float = 0.45
+const PHOTOSENSITIVITY_HOLD_SEC: float = 3.95
+const PHOTOSENSITIVITY_FADE_OUT_SEC: float = 0.60
+const PHOTOSENSITIVITY_TOTAL_SEC: float = 5.00
+const PHOTOSENSITIVITY_TAP_ENABLE_SEC: float = 1.50
+const PHOTOSENSITIVITY_SKIP_FADE_SEC: float = 0.25
+const PHOTOSENSITIVITY_HINT_FADE_SEC: float = 0.35
+const PHOTOSENSITIVITY_SIDE_MARGIN_PX: float = 48.0
+const PHOTOSENSITIVITY_TITLE_FONT_SIZE: int = 50
+const PHOTOSENSITIVITY_BODY_FONT_SIZE: int = 34
+const PHOTOSENSITIVITY_HINT_FONT_SIZE: int = 28
+const PHOTOSENSITIVITY_ICON_HEIGHT_PX: float = 176.0
+const PHOTOSENSITIVITY_TITLE_TEXT: String = "AVISO DE FOTOSENSIBILIDAD"
+const PHOTOSENSITIVITY_BODY_TEXT: String = "Este juego contiene destellos luminosos, patrones de alto contraste y efectos visuales rítmicos que pueden provocar molestias o crisis en personas con epilepsia fotosensible. Si experimentas mareos, alteraciones visuales o malestar, detén el juego de inmediato."
+const PHOTOSENSITIVITY_HINT_TEXT: String = "Toca para continuar"
+const COLOR_PHOTOSENSITIVITY_AMBER: Color = Color(1.0, 0.78, 0.32, 1.0)
+const COLOR_PHOTOSENSITIVITY_CYAN_GLOW: Color = Color(0.38, 0.92, 1.0, 0.22)
+const COLOR_PHOTOSENSITIVITY_BODY: Color = Color(0.88, 0.92, 0.98, 1.0)
+const COLOR_PHOTOSENSITIVITY_HINT: Color = Color(0.58, 0.62, 0.68, 1.0)
 const LOADING_OVERLAY_Z_INDEX: int = 90
 const TOUCH_PREVIEW_Z_INDEX: int = 85
 const MAX_MENU_TOUCH_PREVIEWS: int = 12
@@ -75,10 +95,16 @@ const MARQUEE_INITIAL_PAUSE_SEC: float = 1.2
 
 static var open_directly_to_selector: bool = false
 static var _has_played_startup_intro: bool = false
+static var _has_shown_photosensitivity_warning: bool = false
 
 
 static func reset_startup_intro_for_tests() -> void:
 	_has_played_startup_intro = false
+	_has_shown_photosensitivity_warning = false
+
+
+static func has_shown_photosensitivity_warning() -> bool:
+	return _has_shown_photosensitivity_warning
 
 
 static func has_played_startup_intro() -> bool:
@@ -262,6 +288,16 @@ var _tab_transition_outgoing: Control = null
 var _tab_transition_incoming: Control = null
 var _intro_wave_progress: float = 0.0
 var _intro_wave_center: Vector2 = Vector2.ZERO
+var _is_showing_photosensitivity_warning: bool = false
+var _is_skipping_photosensitivity_warning: bool = false
+var _photosensitivity_elapsed_sec: float = 0.0
+var _photosensitivity_hint_revealed: bool = false
+var _photosensitivity_overlay: Control = null
+var _photosensitivity_content: VBoxContainer = null
+var _photosensitivity_icon: Control = null
+var _photosensitivity_hint_label: Label = null
+var _photosensitivity_tween: Tween = null
+var _photosensitivity_hint_tween: Tween = null
 var _pending_import_after_permission: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 var _active_worker_task_id: int = -1
@@ -327,12 +363,19 @@ func _ready() -> void:
 
 	if returning_to_selector:
 		_has_played_startup_intro = true
+		_has_shown_photosensitivity_warning = true
 	elif not _has_played_startup_intro:
-		_start_startup_intro()
+		if not _has_shown_photosensitivity_warning:
+			# Initial app launch only: black photosensitivity warning holds the 3.0s intro
+			_start_photosensitivity_warning()
+		else:
+			_start_startup_intro()
 
 
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
+	if _is_showing_photosensitivity_warning:
+		_step_photosensitivity_warning(dt)
 	_pulse_phase += dt * 2.8
 	_title_bass_boost = maxf(0.0, _title_bass_boost - (4.8 * dt))
 	_live_menu_bass = maxf(0.0, _live_menu_bass - (3.8 * dt))
@@ -382,6 +425,7 @@ func _exit_tree() -> void:
 	if _active_worker_task_id != -1:
 		WorkerThreadPool.wait_for_task_completion(_active_worker_task_id)
 		_active_worker_task_id = -1
+	_kill_photosensitivity_tweens()
 	if _intro_tween != null:
 		_intro_tween.kill()
 		_intro_tween = null
@@ -474,6 +518,10 @@ func _input(p_event: InputEvent) -> void:
 				if vp != null:
 					vp.set_input_as_handled()
 				handle_back_request()
+		return
+
+	if _is_showing_photosensitivity_warning:
+		_handle_photosensitivity_input(p_event)
 		return
 
 	if not _is_playing_startup_intro:
@@ -665,7 +713,7 @@ func _consume_back_debounce(p_now_msec: int = -1) -> bool:
 
 
 func handle_back_request(p_now_msec: int = -1) -> void:
-	if _is_launching or _is_processing_song or _is_playing_startup_intro:
+	if _is_launching or _is_processing_song or _is_playing_startup_intro or _is_showing_photosensitivity_warning:
 		return
 	if not _consume_back_debounce(p_now_msec):
 		return
@@ -1500,6 +1548,251 @@ func _on_hero_play_pressed() -> void:
 	if _is_playing_startup_intro:
 		return
 	show_browser_screen(MenuTab.SONGS)
+
+
+func is_showing_photosensitivity_warning() -> bool:
+	return _is_showing_photosensitivity_warning
+
+
+func get_photosensitivity_elapsed_sec() -> float:
+	return _photosensitivity_elapsed_sec
+
+
+func get_photosensitivity_overlay() -> Control:
+	return _photosensitivity_overlay
+
+
+func can_skip_photosensitivity_warning() -> bool:
+	return (
+		_is_showing_photosensitivity_warning
+		and not _is_skipping_photosensitivity_warning
+		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_TAP_ENABLE_SEC
+	)
+
+
+func _start_photosensitivity_warning() -> void:
+	_has_shown_photosensitivity_warning = true
+	_is_showing_photosensitivity_warning = true
+	_is_skipping_photosensitivity_warning = false
+	_photosensitivity_elapsed_sec = 0.0
+	_photosensitivity_hint_revealed = false
+	_kill_photosensitivity_tweens()
+	if _photosensitivity_overlay != null:
+		_photosensitivity_overlay.queue_free()
+		_photosensitivity_overlay = null
+
+	# Full-rect pure black blocker (stops all clicks toward the menu underneath)
+	_photosensitivity_overlay = Control.new()
+	_photosensitivity_overlay.name = "PhotosensitivityWarningOverlay"
+	_photosensitivity_overlay.z_index = PHOTOSENSITIVITY_Z_INDEX
+	_photosensitivity_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_photosensitivity_overlay)
+	_photosensitivity_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	var black_rect: ColorRect = ColorRect.new()
+	black_rect.name = "PhotosensitivityBlackBackground"
+	black_rect.color = Color(0.0, 0.0, 0.0, 1.0)
+	black_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_overlay.add_child(black_rect)
+	black_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	# Vertically centered content column with wide lateral margins
+	_photosensitivity_content = VBoxContainer.new()
+	_photosensitivity_content.name = "PhotosensitivityContent"
+	_photosensitivity_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_content.alignment = BoxContainer.ALIGNMENT_CENTER
+	_photosensitivity_content.add_theme_constant_override("separation", 40)
+	_photosensitivity_content.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_overlay.add_child(_photosensitivity_content)
+	_photosensitivity_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_photosensitivity_content.offset_left = PHOTOSENSITIVITY_SIDE_MARGIN_PX
+	_photosensitivity_content.offset_right = -PHOTOSENSITIVITY_SIDE_MARGIN_PX
+
+	_photosensitivity_icon = Control.new()
+	_photosensitivity_icon.name = "PhotosensitivityWarningIcon"
+	_photosensitivity_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_icon.custom_minimum_size = Vector2(0.0, PHOTOSENSITIVITY_ICON_HEIGHT_PX)
+	_photosensitivity_icon.draw.connect(_draw_photosensitivity_icon)
+	_photosensitivity_content.add_child(_photosensitivity_icon)
+
+	var title_label: Label = Label.new()
+	title_label.name = "PhotosensitivityTitle"
+	title_label.text = PHOTOSENSITIVITY_TITLE_TEXT
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_content.add_child(title_label)
+
+	var body_label: Label = Label.new()
+	body_label.name = "PhotosensitivityBody"
+	body_label.text = PHOTOSENSITIVITY_BODY_TEXT
+	body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_content.add_child(body_label)
+
+	_photosensitivity_hint_label = Label.new()
+	_photosensitivity_hint_label.name = "PhotosensitivityHint"
+	_photosensitivity_hint_label.text = PHOTOSENSITIVITY_HINT_TEXT
+	_photosensitivity_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_photosensitivity_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_content.add_child(_photosensitivity_hint_label)
+
+	if _font_registry != null:
+		_font_registry.apply_global_font_override(title_label, 0)
+		_font_registry.apply_global_font_override(body_label, 0)
+		_font_registry.apply_global_font_override(_photosensitivity_hint_label, 0)
+	# Faux-bold title via same-color outline (clean, no glow flicker)
+	title_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_TITLE_FONT_SIZE)
+	title_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_AMBER)
+	title_label.add_theme_constant_override("outline_size", 3)
+	title_label.add_theme_color_override("font_outline_color", COLOR_PHOTOSENSITIVITY_AMBER)
+	body_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_BODY_FONT_SIZE)
+	body_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_BODY)
+	body_label.add_theme_constant_override("line_spacing", 10)
+	_photosensitivity_hint_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_HINT_FONT_SIZE)
+	_photosensitivity_hint_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_HINT)
+
+	_photosensitivity_overlay.move_to_front()
+
+	# Timeline: 0.45s fade-in -> 3.95s static hold -> 0.60s fade-out (5.00s total) -> 3.0s menu intro
+	_photosensitivity_tween = create_tween()
+	_photosensitivity_tween.tween_property(
+		_photosensitivity_content,
+		"modulate:a",
+		1.0,
+		PHOTOSENSITIVITY_FADE_IN_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_HOLD_SEC)
+	_photosensitivity_tween.tween_property(
+		_photosensitivity_content,
+		"modulate:a",
+		0.0,
+		PHOTOSENSITIVITY_FADE_OUT_SEC
+	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	_photosensitivity_tween.tween_callback(_finish_photosensitivity_warning)
+
+
+func _step_photosensitivity_warning(p_delta: float) -> void:
+	_photosensitivity_elapsed_sec += p_delta
+	if (
+		not _photosensitivity_hint_revealed
+		and not _is_skipping_photosensitivity_warning
+		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_TAP_ENABLE_SEC
+		and _photosensitivity_hint_label != null
+	):
+		_photosensitivity_hint_revealed = true
+		_photosensitivity_hint_tween = create_tween()
+		_photosensitivity_hint_tween.tween_property(
+			_photosensitivity_hint_label,
+			"modulate:a",
+			1.0,
+			PHOTOSENSITIVITY_HINT_FADE_SEC
+		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+
+func _handle_photosensitivity_input(p_event: InputEvent) -> void:
+	var is_tap: bool = false
+	if p_event is InputEventScreenTouch:
+		is_tap = (p_event as InputEventScreenTouch).pressed
+	elif p_event is InputEventMouseButton:
+		var mb: InputEventMouseButton = p_event as InputEventMouseButton
+		is_tap = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	# Swallow every pointer event so nothing reaches the menu underneath
+	var vp: Viewport = get_viewport()
+	if vp != null:
+		vp.set_input_as_handled()
+	if is_tap:
+		request_skip_photosensitivity_warning()
+
+
+func request_skip_photosensitivity_warning() -> bool:
+	if not can_skip_photosensitivity_warning():
+		return false
+	_is_skipping_photosensitivity_warning = true
+	_kill_photosensitivity_tweens()
+	_photosensitivity_tween = create_tween()
+	if _photosensitivity_content != null:
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_content,
+			"modulate:a",
+			0.0,
+			PHOTOSENSITIVITY_SKIP_FADE_SEC
+		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	else:
+		_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_SKIP_FADE_SEC)
+	_photosensitivity_tween.tween_callback(_finish_photosensitivity_warning)
+	return true
+
+
+func _finish_photosensitivity_warning() -> void:
+	if not _is_showing_photosensitivity_warning:
+		return
+	_is_showing_photosensitivity_warning = false
+	_is_skipping_photosensitivity_warning = false
+	_photosensitivity_tween = null
+	if _photosensitivity_hint_tween != null:
+		_photosensitivity_hint_tween.kill()
+		_photosensitivity_hint_tween = null
+
+	# Start the 3.0s intro first: its opaque dark veil takes over seamlessly from pure black
+	if not _has_played_startup_intro:
+		_start_startup_intro()
+
+	if _photosensitivity_overlay != null:
+		var overlay_to_free: Control = _photosensitivity_overlay
+		_photosensitivity_overlay = null
+		_photosensitivity_content = null
+		_photosensitivity_icon = null
+		_photosensitivity_hint_label = null
+		overlay_to_free.queue_free()
+
+
+func _kill_photosensitivity_tweens() -> void:
+	if _photosensitivity_tween != null:
+		_photosensitivity_tween.kill()
+		_photosensitivity_tween = null
+	if _photosensitivity_hint_tween != null:
+		_photosensitivity_hint_tween.kill()
+		_photosensitivity_hint_tween = null
+
+
+func _draw_photosensitivity_icon() -> void:
+	if _photosensitivity_icon == null:
+		return
+	var icon_size: Vector2 = _photosensitivity_icon.size
+	var tri_h: float = minf(icon_size.y, PHOTOSENSITIVITY_ICON_HEIGHT_PX) * 0.92
+	var tri_w: float = tri_h * 1.12
+	var center_x: float = icon_size.x * 0.5
+	var top_y: float = (icon_size.y - tri_h) * 0.5
+	var p_top: Vector2 = Vector2(center_x, top_y)
+	var p_right: Vector2 = Vector2(center_x + (tri_w * 0.5), top_y + tri_h)
+	var p_left: Vector2 = Vector2(center_x - (tri_w * 0.5), top_y + tri_h)
+
+	# Static soft amber fill
+	var fill_pts: PackedVector2Array = PackedVector2Array([p_top, p_right, p_left])
+	_photosensitivity_icon.draw_colored_polygon(
+		fill_pts,
+		Color(COLOR_PHOTOSENSITIVITY_AMBER.r, COLOR_PHOTOSENSITIVITY_AMBER.g, COLOR_PHOTOSENSITIVITY_AMBER.b, 0.10)
+	)
+
+	# Soft cyan neon halo stroke + crisp amber outline (no animation, no flashing)
+	var outline_pts: PackedVector2Array = PackedVector2Array([p_top, p_right, p_left, p_top])
+	_photosensitivity_icon.draw_polyline(outline_pts, COLOR_PHOTOSENSITIVITY_CYAN_GLOW, 14.0, true)
+	_photosensitivity_icon.draw_polyline(outline_pts, COLOR_PHOTOSENSITIVITY_AMBER, 6.0, true)
+
+	# Exclamation mark
+	var bar_top: Vector2 = Vector2(center_x, top_y + (tri_h * 0.36))
+	var bar_bottom: Vector2 = Vector2(center_x, top_y + (tri_h * 0.68))
+	_photosensitivity_icon.draw_line(bar_top, bar_bottom, COLOR_PHOTOSENSITIVITY_AMBER, tri_h * 0.085, true)
+	_photosensitivity_icon.draw_circle(bar_top, tri_h * 0.0425, COLOR_PHOTOSENSITIVITY_AMBER)
+	_photosensitivity_icon.draw_circle(bar_bottom, tri_h * 0.0425, COLOR_PHOTOSENSITIVITY_AMBER)
+	_photosensitivity_icon.draw_circle(
+		Vector2(center_x, top_y + (tri_h * 0.82)),
+		tri_h * 0.055,
+		COLOR_PHOTOSENSITIVITY_AMBER
+	)
 
 
 func _start_startup_intro() -> void:
