@@ -1,6 +1,8 @@
 class_name LaneField
 extends Control
 
+signal lane_geometry_changed()
+
 const DEFAULT_LANE_COUNT: int = 4
 const MIN_SPEED_MULTIPLIER: int = 1
 const MAX_SPEED_MULTIPLIER: int = 4
@@ -131,6 +133,8 @@ var _rip_duration: PackedFloat32Array = PackedFloat32Array()
 var _rip_pos: PackedVector2Array = PackedVector2Array()
 var _rip_color: PackedColorArray = PackedColorArray()
 var _rip_variant: PackedInt32Array = PackedInt32Array()
+var _rip_lane: PackedInt32Array = PackedInt32Array()
+var _rip_lane_offset_ratio: PackedFloat32Array = PackedFloat32Array()
 var _rip_cursor: int = 0
 
 # Preallocated hold absorb ring pool (0 heap allocations per frame)
@@ -139,6 +143,7 @@ var _ring_age: PackedFloat32Array = PackedFloat32Array()
 var _ring_duration: PackedFloat32Array = PackedFloat32Array()
 var _ring_origin: PackedVector2Array = PackedVector2Array()
 var _ring_completion: PackedByteArray = PackedByteArray()
+var _ring_lane: PackedInt32Array = PackedInt32Array()
 var _ring_cursor: int = 0
 
 # Preallocated hold spark particle pool (0 heap allocations per frame)
@@ -149,6 +154,7 @@ var _part_pos: PackedVector2Array = PackedVector2Array()
 var _part_vel: PackedVector2Array = PackedVector2Array()
 var _part_radius: PackedFloat32Array = PackedFloat32Array()
 var _part_color: PackedColorArray = PackedColorArray()
+var _part_lane: PackedInt32Array = PackedInt32Array()
 var _part_cursor: int = 0
 var _hold_spark_accumulator_sec: float = 0.0
 var _hold_ring_accumulator_sec: float = 0.0
@@ -169,6 +175,7 @@ var _fw_dir: PackedVector2Array = PackedVector2Array()
 var _fw_max_dist: PackedFloat32Array = PackedFloat32Array()
 var _fw_ray_len: PackedFloat32Array = PackedFloat32Array()
 var _fw_color: PackedColorArray = PackedColorArray()
+var _fw_lane: PackedInt32Array = PackedInt32Array()
 var _fw_drop_poly_buf: PackedVector2Array = PackedVector2Array()
 var _fw_cursor: int = 0
 
@@ -179,6 +186,7 @@ var _zf_duration: PackedFloat32Array = PackedFloat32Array()
 var _zf_center: PackedVector2Array = PackedVector2Array()
 var _zf_base_size: PackedVector2Array = PackedVector2Array()
 var _zf_color: PackedColorArray = PackedColorArray()
+var _zf_lane: PackedInt32Array = PackedInt32Array()
 var _zf_cursor: int = 0
 
 # Preallocated Fracture shard pool (fixed size = MAX_FRACTURE_SHARDS, 0 allocs/frame)
@@ -190,6 +198,7 @@ var _fr_vel: PackedVector2Array = PackedVector2Array()
 var _fr_angle: PackedFloat32Array = PackedFloat32Array()
 var _fr_ang_vel: PackedFloat32Array = PackedFloat32Array()
 var _fr_color: PackedColorArray = PackedColorArray()
+var _fr_lane: PackedInt32Array = PackedInt32Array()
 var _fr_local_polys: Array[PackedVector2Array] = []
 var _fr_world_poly_buf: PackedVector2Array = PackedVector2Array()
 var _fr_cursor: int = 0
@@ -634,7 +643,15 @@ func get_visual_time_sec() -> float:
 	return _visual_time_sec
 
 
+func _notification(p_what: int) -> void:
+	if p_what == NOTIFICATION_RESIZED and is_inside_tree():
+		lane_geometry_changed.emit()
+
+
 func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
+	var old_lane_width: float = _lane_width
+	var old_hit_line_y: float = _hit_line_y
+
 	position = p_play_rect.position
 	size = p_play_rect.size
 
@@ -648,6 +665,8 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	var target_hit_line_y: float = (p_play_rect.size.y * hit_line_height_ratio) - scaled_lift_px
 	_hit_line_y = clampf(target_hit_line_y, 0.0, max_hit_line_y)
 
+	_reanchor_active_effects_to_lanes(old_lane_width, old_hit_line_y)
+
 	var active_count: int = _active_views.size()
 	for i: int in range(active_count):
 		var view: NoteView = _active_views[i]
@@ -660,6 +679,68 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 			view.update_position(_visual_time_sec, _hit_line_y, is_holding)
 
 	queue_redraw()
+	lane_geometry_changed.emit()
+
+
+func _reanchor_active_effects_to_lanes(p_old_lane_width: float, p_old_hit_line_y: float) -> void:
+	var lane_count: int = _get_active_lane_count()
+	var delta_y: float = _hit_line_y - p_old_hit_line_y
+	var safe_old_w: float = maxf(1.0, p_old_lane_width)
+	var width_scale: float = _lane_width / safe_old_w
+	var new_visual_w: float = maxf(12.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
+
+	for r_i: int in range(_rip_active.size()):
+		if _rip_active[r_i] == 0:
+			continue
+		var lane: int = clampi(_rip_lane[r_i], 0, lane_count - 1)
+		var new_cx: float = (float(lane) + 0.5) * _lane_width
+		var lane_min_x: float = float(lane) * _lane_width
+		var lane_max_x: float = lane_min_x + _lane_width
+		var offset_x: float = _rip_lane_offset_ratio[r_i] * _lane_width
+		var cur_pos: Vector2 = _rip_pos[r_i]
+		_rip_pos[r_i] = Vector2(
+			clampf(new_cx + offset_x, lane_min_x, lane_max_x),
+			clampf(cur_pos.y + delta_y, 0.0, maxf(1.0, size.y))
+		)
+
+	for h_i: int in range(_ring_active.size()):
+		if _ring_active[h_i] == 0:
+			continue
+		var lane: int = clampi(_ring_lane[h_i], 0, lane_count - 1)
+		_ring_origin[h_i] = Vector2((float(lane) + 0.5) * _lane_width, _hit_line_y)
+
+	for i: int in range(_fw_active.size()):
+		if _fw_active[i] == 0:
+			continue
+		var lane: int = clampi(_fw_lane[i], 0, lane_count - 1)
+		_fw_origin[i] = Vector2((float(lane) + 0.5) * _lane_width, _hit_line_y)
+
+	for j: int in range(_zf_active.size()):
+		if _zf_active[j] == 0:
+			continue
+		var lane: int = clampi(_zf_lane[j], 0, lane_count - 1)
+		_zf_center[j] = Vector2((float(lane) + 0.5) * _lane_width, _hit_line_y)
+		_zf_base_size[j] = Vector2(new_visual_w, NoteView.DEFAULT_HEAD_HEIGHT_PX)
+
+	for k: int in range(_fr_active.size()):
+		if _fr_active[k] == 0:
+			continue
+		var lane: int = clampi(_fr_lane[k], 0, lane_count - 1)
+		var old_cx: float = (float(lane) + 0.5) * safe_old_w
+		var new_cx: float = (float(lane) + 0.5) * _lane_width
+		var cur_pos: Vector2 = _fr_pos[k]
+		var rel_x: float = (cur_pos.x - old_cx) * width_scale
+		_fr_pos[k] = Vector2(new_cx + rel_x, cur_pos.y + delta_y)
+
+	for p_i: int in range(_part_active.size()):
+		if _part_active[p_i] == 0:
+			continue
+		var lane: int = clampi(_part_lane[p_i], 0, lane_count - 1)
+		var old_cx: float = (float(lane) + 0.5) * safe_old_w
+		var new_cx: float = (float(lane) + 0.5) * _lane_width
+		var cur_pos: Vector2 = _part_pos[p_i]
+		var rel_x: float = (cur_pos.x - old_cx) * width_scale
+		_part_pos[p_i] = Vector2(new_cx + rel_x, cur_pos.y + delta_y)
 
 
 func update_field_at_time(p_dsp_time_sec: float) -> void:
@@ -716,18 +797,96 @@ func get_lane_width() -> float:
 	return _lane_width
 
 
-func get_lane_global_rect(p_lane: int) -> Rect2:
+func get_lane_width_global() -> float:
 	var lane_count: int = _get_active_lane_count()
-	var clamped_lane: int = clampi(p_lane, 0, lane_count - 1)
+	if size.x > 1.0:
+		return size.x / float(lane_count)
+	return _lane_width
+
+
+func get_lane_global_rect(p_lane: int = -1) -> Rect2:
+	var lane_count: int = _get_active_lane_count()
 	var field_global_pos: Vector2 = global_position if is_inside_tree() else position
+	var field_width: float = size.x if size.x > 1.0 else (_lane_width * float(lane_count))
 	var field_height: float = size.y if size.y > 1.0 else DEFAULT_PLAY_HEIGHT
-	var lane_left_x: float = field_global_pos.x + (float(clamped_lane) * _lane_width)
-	return Rect2(lane_left_x, field_global_pos.y, _lane_width, field_height)
+	if p_lane < 0:
+		return Rect2(field_global_pos, Vector2(field_width, field_height))
+	var clamped_lane: int = clampi(p_lane, 0, lane_count - 1)
+	var lane_w: float = field_width / float(lane_count)
+	var lane_left_x: float = field_global_pos.x + (float(clamped_lane) * lane_w)
+	return Rect2(lane_left_x, field_global_pos.y, lane_w, field_height)
+
+
+func get_lane_center_global_x(p_lane: int) -> float:
+	var lane_rect: Rect2 = get_lane_global_rect(p_lane)
+	return lane_rect.position.x + (lane_rect.size.x * 0.5)
 
 
 func get_judgment_line_global_y() -> float:
 	var field_global_pos: Vector2 = global_position if is_inside_tree() else position
 	return field_global_pos.y + _hit_line_y
+
+
+func get_active_ripple_global_positions() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_rip_active.size()):
+		if _rip_active[i] != 0:
+			out.append(base + _rip_pos[i])
+	return out
+
+
+func get_active_firework_global_origins() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_fw_active.size()):
+		if _fw_active[i] != 0:
+			out.append(base + _fw_origin[i])
+	return out
+
+
+func get_active_zoom_fade_global_centers() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_zf_active.size()):
+		if _zf_active[i] != 0:
+			out.append(base + _zf_center[i])
+	return out
+
+
+func get_active_zoom_fade_widths() -> PackedFloat32Array:
+	var out: PackedFloat32Array = PackedFloat32Array()
+	for i: int in range(_zf_active.size()):
+		if _zf_active[i] != 0:
+			out.append(_zf_base_size[i].x)
+	return out
+
+
+func get_active_fracture_global_positions() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_fr_active.size()):
+		if _fr_active[i] != 0:
+			out.append(base + _fr_pos[i])
+	return out
+
+
+func get_active_ring_global_origins() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_ring_active.size()):
+		if _ring_active[i] != 0:
+			out.append(base + _ring_origin[i])
+	return out
+
+
+func get_active_particle_global_positions() -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	var base: Vector2 = global_position if is_inside_tree() else position
+	for i: int in range(_part_active.size()):
+		if _part_active[i] != 0:
+			out.append(base + _part_pos[i])
+	return out
 
 
 func get_active_note_views() -> Array[NoteView]:
@@ -1006,7 +1165,7 @@ func _on_touch_ripple_triggered(p_local_pos: Vector2, p_lane: int) -> void:
 		clampf(p_local_pos.x, 0.0, maxf(1.0, size.x)),
 		clampf(p_local_pos.y, 0.0, maxf(1.0, size.y))
 	)
-	_spawn_touch_ripple(clamped_pos, COLOR_TOUCH_RIPPLE)
+	_spawn_touch_ripple(clamped_pos, COLOR_TOUCH_RIPPLE, p_lane)
 
 
 func _on_lane_input_pressed(p_lane: int, _p_dsp_time_sec: float) -> void:
@@ -1017,7 +1176,7 @@ func _on_lane_input_pressed(p_lane: int, _p_dsp_time_sec: float) -> void:
 		_touch_ripple_consumed_for_lane[p_lane] = false
 	else:
 		var lane_center_x: float = (float(p_lane) + 0.5) * _lane_width
-		_spawn_touch_ripple(Vector2(lane_center_x, _hit_line_y), COLOR_TOUCH_RIPPLE)
+		_spawn_touch_ripple(Vector2(lane_center_x, _hit_line_y), COLOR_TOUCH_RIPPLE, p_lane)
 
 	if not _lane_pressed_states[p_lane]:
 		_lane_pressed_states[p_lane] = true
@@ -1077,13 +1236,16 @@ func _trigger_hold_completion_flare(p_lane: int) -> void:
 func _spawn_hold_absorb_ring(p_lane: int, p_is_completion: bool) -> void:
 	if _ring_active.size() != MAX_HOLD_ABSORB_RINGS:
 		return
+	var lane_count: int = _get_active_lane_count()
+	var clamped_lane: int = clampi(p_lane, 0, lane_count - 1)
 	var slot: int = _ring_cursor
 	_ring_cursor = (_ring_cursor + 1) % MAX_HOLD_ABSORB_RINGS
 	_ring_active[slot] = 1
 	_ring_age[slot] = 0.0
 	_ring_duration[slot] = HOLD_RING_DURATION_SEC * (1.20 if p_is_completion else 1.0)
-	_ring_origin[slot] = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	_ring_origin[slot] = Vector2((float(clamped_lane) + 0.5) * _lane_width, _hit_line_y)
 	_ring_completion[slot] = 1 if p_is_completion else 0
+	_ring_lane[slot] = clamped_lane
 	queue_redraw()
 
 
@@ -1107,9 +1269,17 @@ func _create_hold_contact_halo_texture() -> GradientTexture2D:
 	return tex
 
 
-func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
+func _spawn_touch_ripple(p_pos: Vector2, p_color: Color, p_lane: int = -1) -> void:
 	if _rip_active.size() != MAX_ACTIVE_RIPPLES:
 		return
+	var lane_count: int = _get_active_lane_count()
+	var safe_lane_w: float = maxf(1.0, _lane_width)
+	var resolved_lane: int = p_lane
+	if resolved_lane < 0 or resolved_lane >= lane_count:
+		resolved_lane = clampi(int(floor(p_pos.x / safe_lane_w)), 0, lane_count - 1)
+	var lane_cx: float = (float(resolved_lane) + 0.5) * safe_lane_w
+	var offset_ratio_x: float = clampf((p_pos.x - lane_cx) / safe_lane_w, -0.5, 0.5)
+
 	_fx_seed_counter += 1
 	var slot: int = _rip_cursor
 	_rip_cursor = (_rip_cursor + 1) % MAX_ACTIVE_RIPPLES
@@ -1119,6 +1289,8 @@ func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
 	_rip_pos[slot] = p_pos
 	_rip_color[slot] = p_color
 	_rip_variant[slot] = posmod((_fx_seed_counter * 7) + int(p_pos.x), TouchEffectRenderer.NOTE_VARIANT_COUNT)
+	_rip_lane[slot] = resolved_lane
+	_rip_lane_offset_ratio[slot] = offset_ratio_x
 	queue_redraw()
 
 
@@ -1146,6 +1318,7 @@ func _init_vanish_effect_pools() -> void:
 	_fw_max_dist.resize(MAX_FIREWORK_RAYS)
 	_fw_ray_len.resize(MAX_FIREWORK_RAYS)
 	_fw_color.resize(MAX_FIREWORK_RAYS)
+	_fw_lane.resize(MAX_FIREWORK_RAYS)
 	for i: int in range(MAX_FIREWORK_RAYS):
 		_fw_active[i] = 0
 		_fw_age[i] = 0.0
@@ -1155,6 +1328,7 @@ func _init_vanish_effect_pools() -> void:
 		_fw_max_dist[i] = 90.0
 		_fw_ray_len[i] = 24.0
 		_fw_color[i] = Color.WHITE
+		_fw_lane[i] = 0
 
 	_fw_drop_poly_buf.resize(4)
 	_zf_active.resize(MAX_ZOOM_FADE_GHOSTS)
@@ -1163,6 +1337,7 @@ func _init_vanish_effect_pools() -> void:
 	_zf_center.resize(MAX_ZOOM_FADE_GHOSTS)
 	_zf_base_size.resize(MAX_ZOOM_FADE_GHOSTS)
 	_zf_color.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_lane.resize(MAX_ZOOM_FADE_GHOSTS)
 	for j: int in range(MAX_ZOOM_FADE_GHOSTS):
 		_zf_active[j] = 0
 		_zf_age[j] = 0.0
@@ -1170,6 +1345,7 @@ func _init_vanish_effect_pools() -> void:
 		_zf_center[j] = Vector2.ZERO
 		_zf_base_size[j] = Vector2(180.0, NoteView.DEFAULT_HEAD_HEIGHT_PX)
 		_zf_color[j] = COLOR_PERFECT_A
+		_zf_lane[j] = 0
 
 	_fr_active.resize(MAX_FRACTURE_SHARDS)
 	_fr_age.resize(MAX_FRACTURE_SHARDS)
@@ -1179,6 +1355,7 @@ func _init_vanish_effect_pools() -> void:
 	_fr_angle.resize(MAX_FRACTURE_SHARDS)
 	_fr_ang_vel.resize(MAX_FRACTURE_SHARDS)
 	_fr_color.resize(MAX_FRACTURE_SHARDS)
+	_fr_lane.resize(MAX_FRACTURE_SHARDS)
 	_fr_local_polys.clear()
 	for k: int in range(MAX_FRACTURE_SHARDS):
 		_fr_active[k] = 0
@@ -1189,6 +1366,7 @@ func _init_vanish_effect_pools() -> void:
 		_fr_angle[k] = 0.0
 		_fr_ang_vel[k] = 0.0
 		_fr_color[k] = COLOR_PERFECT_A
+		_fr_lane[k] = 0
 		var poly_slot: PackedVector2Array = PackedVector2Array()
 		poly_slot.resize(4)
 		_fr_local_polys.append(poly_slot)
@@ -1200,6 +1378,8 @@ func _init_vanish_effect_pools() -> void:
 	_rip_pos.resize(MAX_ACTIVE_RIPPLES)
 	_rip_color.resize(MAX_ACTIVE_RIPPLES)
 	_rip_variant.resize(MAX_ACTIVE_RIPPLES)
+	_rip_lane.resize(MAX_ACTIVE_RIPPLES)
+	_rip_lane_offset_ratio.resize(MAX_ACTIVE_RIPPLES)
 	for r_i: int in range(MAX_ACTIVE_RIPPLES):
 		_rip_active[r_i] = 0
 		_rip_age[r_i] = 0.0
@@ -1207,18 +1387,22 @@ func _init_vanish_effect_pools() -> void:
 		_rip_pos[r_i] = Vector2.ZERO
 		_rip_color[r_i] = COLOR_TOUCH_RIPPLE
 		_rip_variant[r_i] = 0
+		_rip_lane[r_i] = 0
+		_rip_lane_offset_ratio[r_i] = 0.0
 
 	_ring_active.resize(MAX_HOLD_ABSORB_RINGS)
 	_ring_age.resize(MAX_HOLD_ABSORB_RINGS)
 	_ring_duration.resize(MAX_HOLD_ABSORB_RINGS)
 	_ring_origin.resize(MAX_HOLD_ABSORB_RINGS)
 	_ring_completion.resize(MAX_HOLD_ABSORB_RINGS)
+	_ring_lane.resize(MAX_HOLD_ABSORB_RINGS)
 	for h_i: int in range(MAX_HOLD_ABSORB_RINGS):
 		_ring_active[h_i] = 0
 		_ring_age[h_i] = 0.0
 		_ring_duration[h_i] = HOLD_RING_DURATION_SEC
 		_ring_origin[h_i] = Vector2.ZERO
 		_ring_completion[h_i] = 0
+		_ring_lane[h_i] = 0
 
 	_part_active.resize(MAX_ACTIVE_PARTICLES)
 	_part_age.resize(MAX_ACTIVE_PARTICLES)
@@ -1227,6 +1411,7 @@ func _init_vanish_effect_pools() -> void:
 	_part_vel.resize(MAX_ACTIVE_PARTICLES)
 	_part_radius.resize(MAX_ACTIVE_PARTICLES)
 	_part_color.resize(MAX_ACTIVE_PARTICLES)
+	_part_lane.resize(MAX_ACTIVE_PARTICLES)
 	for p_i: int in range(MAX_ACTIVE_PARTICLES):
 		_part_active[p_i] = 0
 		_part_age[p_i] = 0.0
@@ -1235,6 +1420,7 @@ func _init_vanish_effect_pools() -> void:
 		_part_vel[p_i] = Vector2.ZERO
 		_part_radius[p_i] = 4.0
 		_part_color[p_i] = COLOR_HOLD_SPARK
+		_part_lane[p_i] = 0
 
 
 func _clear_vanish_effect_pools() -> void:
@@ -1344,6 +1530,7 @@ func _spawn_firework_rays(p_lane: int, p_grade: int) -> void:
 		_fw_max_dist[slot] = max_dist_base * dist_jitter
 		_fw_ray_len[slot] = ray_len_base * dist_jitter
 		_fw_color[slot] = col
+		_fw_lane[slot] = clampi(p_lane, 0, _get_active_lane_count() - 1)
 
 
 func _spawn_zoom_fade_ghost(p_lane: int, p_grade: int) -> void:
@@ -1358,15 +1545,17 @@ func _spawn_zoom_fade_ghost(p_lane: int, p_grade: int) -> void:
 		_:
 			return
 
+	var clamped_lane: int = clampi(p_lane, 0, _get_active_lane_count() - 1)
 	var slot: int = _zf_cursor
 	_zf_cursor = (_zf_cursor + 1) % MAX_ZOOM_FADE_GHOSTS
 	var visual_w: float = maxf(12.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
 	_zf_active[slot] = 1
 	_zf_age[slot] = 0.0
 	_zf_duration[slot] = ZOOM_FADE_DURATION_SEC
-	_zf_center[slot] = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	_zf_center[slot] = Vector2((float(clamped_lane) + 0.5) * _lane_width, _hit_line_y)
 	_zf_base_size[slot] = Vector2(visual_w, NoteView.DEFAULT_HEAD_HEIGHT_PX)
 	_zf_color[slot] = col
+	_zf_lane[slot] = clamped_lane
 
 
 func _spawn_fracture_shards(p_lane: int, p_grade: int) -> void:
@@ -1431,6 +1620,7 @@ func _spawn_fracture_shards(p_lane: int, p_grade: int) -> void:
 		_fr_angle[slot] = 0.0
 		_fr_ang_vel[slot] = _pseudo_rand_signed(_fx_seed_counter * 79) * 5.2
 		_fr_color[slot] = tint.lerp(Color(0.84, 0.99, 1.0, 1.0), 0.28 if (i % 2) == 0 else 0.0)
+		_fr_lane[slot] = clampi(p_lane, 0, _get_active_lane_count() - 1)
 
 		prev_top_x = next_top_x
 		prev_bot_x = next_bot_x
@@ -1544,7 +1734,7 @@ func _spawn_hold_sparks(p_lane: int, p_count: int) -> void:
 		var vel: Vector2 = Vector2(cos(angle_rad), sin(angle_rad)) * speed
 		var radius: float = lerpf(3.4, 5.8, speed_t)
 		var col: Color = COLOR_HOLD_SPARK if (i % 2) == 0 else COLOR_HOLD_ABSORB_CYAN
-		_append_particle(origin, vel, radius, 0.24, col)
+		_append_particle(origin, vel, radius, 0.24, col, p_lane)
 
 	queue_redraw()
 
@@ -1554,7 +1744,8 @@ func _append_particle(
 	p_vel: Vector2,
 	p_radius: float,
 	p_duration: float,
-	p_color: Color
+	p_color: Color,
+	p_lane: int = 0
 ) -> void:
 	if _part_active.size() != MAX_ACTIVE_PARTICLES:
 		return
@@ -1567,6 +1758,7 @@ func _append_particle(
 	_part_vel[slot] = p_vel
 	_part_radius[slot] = p_radius
 	_part_color[slot] = p_color
+	_part_lane[slot] = clampi(p_lane, 0, _get_active_lane_count() - 1)
 
 
 func _pseudo_rand_signed(p_seed: int) -> float:

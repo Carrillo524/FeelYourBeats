@@ -83,6 +83,7 @@ const COLOR_PROGRESS_SQUARE_BORDER: Color = Color(0.32, 0.96, 1.0, 1.0)
 @export var dsp_clock: DSPClock = null
 @export var input_adapter: RhythmInputAdapter = null
 @export var reactive_background: ReactiveBackground = null
+@export var lane_field: LaneField = null
 @export var ui_sfx_player: UiSfxPlayer = null
 
 var _safe_container: Control = null
@@ -271,6 +272,62 @@ func connect_dependencies() -> void:
 		if not dsp_clock.playback_finished.is_connected(_on_dsp_playback_finished):
 			dsp_clock.playback_finished.connect(_on_dsp_playback_finished)
 
+	if lane_field != null:
+		if not lane_field.lane_geometry_changed.is_connected(sync_lane_field_geometry):
+			lane_field.lane_geometry_changed.connect(sync_lane_field_geometry)
+
+
+func sync_lane_field_geometry(p_lane_field: LaneField = null) -> void:
+	if p_lane_field != null:
+		lane_field = p_lane_field
+	if _safe_container == null:
+		return
+	var safe_w: float = maxf(320.0, _safe_container.size.x)
+	var safe_h: float = maxf(480.0, _safe_container.size.y)
+	_layout_judgment_banners(safe_w, safe_h)
+
+
+func _layout_judgment_banners(p_safe_w: float, p_safe_h: float) -> void:
+	if _combo_label == null or _judgment_label == null or _safe_container == null:
+		return
+
+	var banner_w: float = minf(560.0, p_safe_w * COMBO_MAX_WIDTH_RATIO)
+	var banner_x: float = (p_safe_w - banner_w) * 0.5
+	var center_y: float = p_safe_h * 0.28
+
+	if lane_field != null:
+		var field_rect: Rect2 = lane_field.get_lane_global_rect()
+		var judge_global_y: float = lane_field.get_judgment_line_global_y()
+		var container_global_pos: Vector2 = _safe_container.global_position if _safe_container.is_inside_tree() else _safe_container.position
+		var local_field_x: float = field_rect.position.x - container_global_pos.x
+		var field_w: float = maxf(160.0, field_rect.size.x)
+		var local_judge_y: float = judge_global_y - container_global_pos.y
+		banner_w = clampf(field_w * 0.72, minf(220.0, field_w), field_w)
+		banner_x = local_field_x + ((field_w - banner_w) * 0.5)
+		center_y = clampf(local_judge_y * 0.36, 128.0, maxf(128.0, local_judge_y - 190.0))
+
+	_combo_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.52)
+	_combo_label.position = Vector2(banner_x, center_y)
+	_combo_label.pivot_offset = _combo_label.size * 0.5
+
+	_judgment_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.48)
+	_judgment_label.position = Vector2(banner_x, center_y + 72.0)
+	_judgment_label.pivot_offset = _judgment_label.size * 0.5
+
+
+func get_combo_banner_global_rect() -> Rect2:
+	if _combo_label == null:
+		return Rect2()
+	var base: Vector2 = _safe_container.global_position if (_safe_container != null and _safe_container.is_inside_tree()) else (_safe_container.position if _safe_container != null else Vector2.ZERO)
+	return Rect2(base + _combo_label.position, _combo_label.size)
+
+
+func get_judgment_banner_global_rect() -> Rect2:
+	if _judgment_label == null:
+		return Rect2()
+	var base: Vector2 = _safe_container.global_position if (_safe_container != null and _safe_container.is_inside_tree()) else (_safe_container.position if _safe_container != null else Vector2.ZERO)
+	return Rect2(base + _judgment_label.position, _judgment_label.size)
+
 
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_ensure_ui_nodes()
@@ -296,18 +353,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_top_bar_margin.offset_bottom = _top_bar_margin.get_combined_minimum_size().y
 
 	_sync_danger_bar_fill_rect()
-
-	var banner_w: float = minf(560.0, safe_w * COMBO_MAX_WIDTH_RATIO)
-	var banner_x: float = (safe_w - banner_w) * 0.5
-	var center_y: float = safe_h * 0.28
-
-	_combo_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.52)
-	_combo_label.position = Vector2(banner_x, center_y)
-	_combo_label.pivot_offset = _combo_label.size * 0.5
-
-	_judgment_label.size = Vector2(banner_w, CENTER_BANNER_HEIGHT_PX * 0.48)
-	_judgment_label.position = Vector2(banner_x, center_y + 72.0)
-	_judgment_label.pivot_offset = _judgment_label.size * 0.5
+	_layout_judgment_banners(safe_w, safe_h)
 
 	var countdown_size: Vector2 = Vector2(COUNTDOWN_BOX_WIDTH_PX, COUNTDOWN_BOX_HEIGHT_PX)
 	_countdown_label.size = countdown_size

@@ -149,8 +149,14 @@ func sync_responsive_viewport_layout(p_explicit_size: Vector2 = Vector2.ZERO) ->
 			safe_hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if screen_safe_adapter != null:
 		screen_safe_adapter.recalculate_for_viewport_size(vp_size)
+	_sync_all_effect_controllers_to_lane_field()
+	call_deferred(&"_sync_all_effect_controllers_to_lane_field")
+
+
+func _sync_all_effect_controllers_to_lane_field() -> void:
 	sync_lane_geometry_to_background()
-	call_deferred(&"sync_lane_geometry_to_background")
+	if safe_hud != null and lane_field != null:
+		safe_hud.sync_lane_field_geometry(lane_field)
 
 
 func _process(p_delta: float) -> void:
@@ -578,11 +584,7 @@ func reload_gameplay_effects_settings() -> void:
 func sync_lane_geometry_to_background() -> void:
 	if lane_field == null or reactive_background == null:
 		return
-	var lane_rects: Array[Rect2] = []
-	for lane_idx: int in range(4):
-		lane_rects.append(lane_field.get_lane_global_rect(lane_idx))
-	var judgment_global_y: float = lane_field.get_judgment_line_global_y()
-	reactive_background.sync_lane_geometry_from_global(lane_rects, judgment_global_y)
+	reactive_background.sync_lane_geometry_from_lane_field(lane_field)
 
 
 func _start_from_pending_config(p_cfg: Dictionary) -> void:
@@ -692,8 +694,10 @@ func _resolve_and_wire_nodes() -> void:
 		lane_field.hit_judge = hit_judge
 		lane_field.audio_analyzer = audio_analyzer
 		lane_field.connect_dependencies()
-		if not lane_field.resized.is_connected(sync_lane_geometry_to_background):
-			lane_field.resized.connect(sync_lane_geometry_to_background)
+		if not lane_field.resized.is_connected(_sync_all_effect_controllers_to_lane_field):
+			lane_field.resized.connect(_sync_all_effect_controllers_to_lane_field)
+		if not lane_field.lane_geometry_changed.is_connected(_sync_all_effect_controllers_to_lane_field):
+			lane_field.lane_geometry_changed.connect(_sync_all_effect_controllers_to_lane_field)
 		if screen_safe_adapter != null:
 			lane_field.apply_safe_layout(
 				screen_safe_adapter.get_play_rect(),
@@ -701,7 +705,7 @@ func _resolve_and_wire_nodes() -> void:
 			)
 			if not screen_safe_adapter.safe_play_rect_changed.is_connected(_on_safe_play_rect_changed_for_background):
 				screen_safe_adapter.safe_play_rect_changed.connect(_on_safe_play_rect_changed_for_background)
-		sync_lane_geometry_to_background()
+		_sync_all_effect_controllers_to_lane_field()
 
 	reload_gameplay_effects_settings()
 
@@ -718,6 +722,7 @@ func _resolve_and_wire_nodes() -> void:
 		safe_hud.dsp_clock = dsp_clock
 		safe_hud.input_adapter = input_adapter
 		safe_hud.reactive_background = reactive_background
+		safe_hud.lane_field = lane_field
 		safe_hud.connect_dependencies()
 		if not safe_hud.pause_requested.is_connected(_on_pause_requested):
 			safe_hud.pause_requested.connect(_on_pause_requested)
@@ -727,6 +732,7 @@ func _resolve_and_wire_nodes() -> void:
 			safe_hud.main_menu_requested.connect(_on_main_menu_requested)
 		if screen_safe_adapter != null:
 			safe_hud.apply_hud_safe_rect(screen_safe_adapter.get_hud_safe_rect())
+		safe_hud.sync_lane_field_geometry(lane_field)
 
 
 func _on_screen_shake_updated(p_offset: Vector2) -> void:
@@ -745,15 +751,15 @@ func _on_screen_shake_updated(p_offset: Vector2) -> void:
 		lane_field.position = base_pos
 	else:
 		lane_field.position = base_pos + p_offset
-	sync_lane_geometry_to_background()
+	_sync_all_effect_controllers_to_lane_field()
 
 
 func _on_safe_play_rect_changed_for_background(_p_play_rect: Rect2, _p_hud_safe_rect: Rect2) -> void:
-	sync_lane_geometry_to_background()
+	_sync_all_effect_controllers_to_lane_field()
 
 
 func _on_note_judged_sync_background(_p_lane: int, _p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
-	sync_lane_geometry_to_background()
+	_sync_all_effect_controllers_to_lane_field()
 
 
 func _on_pause_requested() -> void:

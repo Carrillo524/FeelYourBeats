@@ -578,6 +578,15 @@ func set_hit_line_normalized_y(p_norm_y: float) -> void:
 		_hit_effect_overlay.queue_redraw()
 
 
+func sync_lane_geometry_from_lane_field(p_lane_field: LaneField) -> void:
+	if p_lane_field == null:
+		return
+	var lane_rects: Array[Rect2] = []
+	for lane_idx: int in range(4):
+		lane_rects.append(p_lane_field.get_lane_global_rect(lane_idx))
+	sync_lane_geometry_from_global(lane_rects, p_lane_field.get_judgment_line_global_y())
+
+
 func sync_lane_geometry_from_global(
 	p_lane_global_rects: Array[Rect2],
 	p_judgment_global_y: float
@@ -592,6 +601,7 @@ func sync_lane_geometry_from_global(
 	var bounds_h: float = maxf(1.0, _resolve_draw_bounds().y)
 	if _judgment_line_local_y >= 0.0:
 		_hit_line_normalized_y = clampf(_judgment_line_local_y / bounds_h, 0.25, 0.94)
+	_sync_shader_parameters()
 	queue_redraw()
 	if _hit_effect_overlay != null:
 		_hit_effect_overlay.queue_redraw()
@@ -605,6 +615,25 @@ func get_synced_lane_local_rect(p_lane: int) -> Rect2:
 	if p_lane < 0 or p_lane >= _lane_local_rects.size():
 		return Rect2()
 	return _lane_local_rects[p_lane]
+
+
+func get_hit_effect_lane_global_rect(p_lane: int) -> Rect2:
+	var local_rect: Rect2 = _resolve_hit_lane_rect(p_lane, _resolve_draw_bounds())
+	var bg_global_pos: Vector2 = global_position if is_inside_tree() else position
+	return Rect2(bg_global_pos + local_rect.position, local_rect.size)
+
+
+func get_hit_effect_lane_center_global_x(p_lane: int) -> float:
+	var r: Rect2 = get_hit_effect_lane_global_rect(p_lane)
+	return r.position.x + (r.size.x * 0.5)
+
+
+func _resolve_hit_lane_rect(p_lane: int, p_bounds: Vector2) -> Rect2:
+	var clamped_lane: int = clampi(p_lane, 0, 3)
+	if _has_synced_lane_geometry and clamped_lane < _lane_local_rects.size():
+		return _lane_local_rects[clamped_lane]
+	var fallback_w: float = maxf(1.0, p_bounds.x * 0.25)
+	return Rect2(float(clamped_lane) * fallback_w, 0.0, fallback_w, maxf(1.0, p_bounds.y))
 
 
 func get_synced_judgment_line_local_y() -> float:
@@ -1245,7 +1274,11 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("beat_pulse", _beat_pulse)
 	_shader_material.set_shader_parameter("energy_level", _current_energy)
 	_shader_material.set_shader_parameter("intensity_tier", _current_tier)
-	var uses_custom_overlay_hit: bool = _hit_effect_style == HIT_EFFECT_STAR or _hit_effect_style == HIT_EFFECT_CROWN
+	var uses_custom_overlay_hit: bool = (
+		_hit_effect_style == HIT_EFFECT_STAR
+		or _hit_effect_style == HIT_EFFECT_CROWN
+		or _has_synced_lane_geometry
+	)
 	var shader_lane_flashes: Vector4 = Vector4.ZERO if uses_custom_overlay_hit else _lane_flashes
 	_shader_material.set_shader_parameter("lane_hit_energies", shader_lane_flashes)
 	_shader_material.set_shader_parameter("bass_energy", _smoothed_bass)
@@ -1726,6 +1759,8 @@ func _on_hit_effect_overlay_draw() -> void:
 		HIT_EFFECT_CROWN:
 			_draw_crown_diffused_hit_flashes(_hit_effect_overlay, bounds)
 		_:
+			if _has_synced_lane_geometry:
+				_draw_classic_diffused_hit_flashes(_hit_effect_overlay, bounds)
 			var drop_factor: float = get_hit_effect_drop_factor()
 			if drop_factor > 0.05:
 				_draw_classic_drop_bidirectional_boost(_hit_effect_overlay, bounds, drop_factor)
@@ -1748,10 +1783,8 @@ func _draw_classic_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2)
 	if p_canvas == null or _hit_beam_texture == null:
 		return
 
-	var w: float = p_bounds.x
 	var h: float = p_bounds.y
-	var lane_w: float = w * 0.25
-	var hit_zone_y: float = h * _hit_line_normalized_y
+	var hit_zone_y: float = get_synced_judgment_line_local_y()
 	var drop_factor: float = get_hit_effect_drop_factor()
 	var up_reach: float = h * lerpf(0.58, 0.78, drop_factor)
 	var down_reach: float = h * lerpf(0.24, 0.36, drop_factor)
@@ -1770,13 +1803,15 @@ func _draw_classic_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2)
 		if e <= 0.004:
 			continue
 
+		var lane_rect: Rect2 = _resolve_hit_lane_rect(lane_idx, p_bounds)
+		var lane_w: float = lane_rect.size.x
+		var cx: float = lane_rect.position.x + (lane_w * 0.5)
 		var perfect_boost: float = smoothstep(0.75, 1.0, e)
 		var accent_col: Color = Color(0.20, 0.85, 1.0, 1.0)
 		var beam_col: Color = accent_col.lerp(
 			Color(0.55, 1.0, 0.96, 1.0),
 			clampf((perfect_boost * 0.55) + (drop_factor * 0.22), 0.0, 0.80)
 		)
-		var cx: float = (float(lane_idx) + 0.5) * lane_w
 
 		# 1. Bidirectional wide diffused vertical glow (up & down from hit line, intensifying in Drops)
 		var wide_hw: float = lane_w * lerpf(0.96, 1.12, drop_factor)
@@ -1812,10 +1847,8 @@ func _draw_classic_drop_bidirectional_boost(
 	if p_canvas == null or _hit_beam_texture == null:
 		return
 
-	var w: float = p_bounds.x
 	var h: float = p_bounds.y
-	var lane_w: float = w * 0.25
-	var hit_zone_y: float = h * _hit_line_normalized_y
+	var hit_zone_y: float = get_synced_judgment_line_local_y()
 	var top_y: float = maxf(0.0, hit_zone_y - (h * lerpf(0.55, 0.80, p_drop_factor)))
 	var bottom_y: float = minf(h, hit_zone_y + (h * lerpf(0.22, 0.34, p_drop_factor)))
 	var energies: PackedFloat32Array = PackedFloat32Array([
@@ -1829,7 +1862,9 @@ func _draw_classic_drop_bidirectional_boost(
 		var e: float = clampf(energies[lane_idx], 0.0, 1.0)
 		if e <= 0.004:
 			continue
-		var cx: float = (float(lane_idx) + 0.5) * lane_w
+		var lane_rect: Rect2 = _resolve_hit_lane_rect(lane_idx, p_bounds)
+		var lane_w: float = lane_rect.size.x
+		var cx: float = lane_rect.position.x + (lane_w * 0.5)
 		var boost_col: Color = Color(0.32, 0.94, 1.0, 1.0)
 		var boost_alpha: float = clampf(e * p_drop_factor * 0.24, 0.0, 0.28)
 		var hw: float = lane_w * 0.92
@@ -1841,18 +1876,13 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 	if p_canvas == null or _hit_beam_texture == null:
 		return
 
-	var w: float = p_bounds.x
-	var h: float = p_bounds.y
-	var lane_w: float = w * 0.25
-	var hit_zone_y: float = h * _hit_line_normalized_y
+	var hit_zone_y: float = get_synced_judgment_line_local_y()
 	var drop_factor: float = get_hit_effect_drop_factor()
 	var reach_mult: float = get_hit_effect_reach_multiplier()
 	var drop_bright: float = 1.0 + (drop_factor * 0.30)
 
 	# 4 diagonal directions rotated 45 deg forming an X centered on hit_zone_y
 	var diag_dirs: PackedVector2Array = get_star_arm_directions()
-	var arm_len_upper: float = lane_w * 2.15 * reach_mult
-	var arm_len_lower: float = lane_w * 1.45 * reach_mult
 	var energies: PackedFloat32Array = PackedFloat32Array([
 		_lane_flashes.x,
 		_lane_flashes.y,
@@ -1865,13 +1895,17 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 		if e <= 0.004:
 			continue
 
+		var lane_rect: Rect2 = _resolve_hit_lane_rect(lane_idx, p_bounds)
+		var lane_w: float = lane_rect.size.x
+		var arm_len_upper: float = lane_w * 2.15 * reach_mult
+		var arm_len_lower: float = lane_w * 1.45 * reach_mult
 		var perfect_boost: float = smoothstep(0.75, 1.0, e)
 		var base_col: Color = Color(0.22, 0.88, 1.0, 1.0)
 		var star_col: Color = base_col.lerp(
 			Color(0.70, 1.0, 0.98, 1.0),
 			clampf((perfect_boost * 0.52) + (drop_factor * 0.25), 0.0, 0.82)
 		)
-		var origin: Vector2 = Vector2((float(lane_idx) + 0.5) * lane_w, hit_zone_y)
+		var origin: Vector2 = Vector2(lane_rect.position.x + (lane_w * 0.5), hit_zone_y)
 		var outer_hw: float = lane_w * lerpf(0.48, 0.62, drop_factor)
 		var outer_alpha: float = clampf(e * 0.40 * drop_bright, 0.0, 0.50)
 		var core_hw: float = lane_w * lerpf(0.18, 0.25, drop_factor)
