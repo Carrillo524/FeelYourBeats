@@ -37,13 +37,8 @@ const RAIL_ACTIVE_PRESS_GLOW_SCALE: float = 1.40
 
 const MAX_ACTIVE_RIPPLES: int = 16
 const RIPPLE_DURATION_SEC: float = 0.34
-const RIPPLE_START_RADIUS_PX: float = 14.0
-const RIPPLE_END_RADIUS_PX: float = 78.0
 
 const MAX_ACTIVE_PARTICLES: int = 128
-const PERFECT_PARTICLE_COUNT: int = 14
-const GREAT_PARTICLE_COUNT: int = 8
-const GOOD_PARTICLE_COUNT: int = 4
 const HOLD_TICK_SPARK_COUNT: int = 6
 const HOLD_SPARK_INTERVAL_SEC: float = 0.045
 const PARTICLE_GRAVITY_PX_PER_SEC2: float = 340.0
@@ -83,9 +78,6 @@ const FRACTURE_DURATION_SEC: float = 0.26
 const FRACTURE_GRAVITY_PX_PER_SEC2: float = 560.0
 
 const COLOR_PERFECT_A: Color = Color(0.35, 1.0, 0.96, 1.0)
-const COLOR_PERFECT_B: Color = Color(1.0, 0.88, 0.28, 1.0)
-const COLOR_PERFECT_C: Color = Color(1.0, 0.36, 0.86, 1.0)
-const COLOR_GREAT_A: Color = Color(0.30, 1.0, 0.62, 1.0)
 const COLOR_GREAT_B: Color = Color(0.25, 0.90, 1.0, 1.0)
 const COLOR_GOOD_A: Color = Color(0.38, 0.76, 1.0, 0.92)
 const COLOR_HOLD_SPARK: Color = Color(0.26, 0.98, 0.88, 1.0)
@@ -108,7 +100,6 @@ var _speed_multiplier: int = MIN_SPEED_MULTIPLIER
 var _speed_multiplier_configured: bool = false
 var _hit_line_y: float = (DEFAULT_PLAY_HEIGHT * 0.84) - HIT_LINE_VERTICAL_LIFT_PX
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
-var _current_dsp_time_sec: float = 0.0
 var _visual_time_sec: float = 0.0
 var _use_external_smooth_time: bool = false
 var _external_smooth_time_sec: float = 0.0
@@ -744,7 +735,6 @@ func _reanchor_active_effects_to_lanes(p_old_lane_width: float, p_old_hit_line_y
 
 
 func update_field_at_time(p_dsp_time_sec: float) -> void:
-	_current_dsp_time_sec = p_dsp_time_sec
 	_visual_time_sec = p_dsp_time_sec
 
 	if hit_judge != null:
@@ -760,7 +750,6 @@ func update_field_at_time(p_dsp_time_sec: float) -> void:
 
 
 func _on_dsp_time_updated(p_dsp_time_sec: float) -> void:
-	_current_dsp_time_sec = p_dsp_time_sec
 	if hit_judge != null:
 		hit_judge.update_dsp_time(p_dsp_time_sec)
 
