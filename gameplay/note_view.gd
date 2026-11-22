@@ -3,12 +3,12 @@ extends Control
 
 const DEFAULT_HEAD_HEIGHT_PX: float = 36.0
 const HORIZONTAL_PADDING_PX: float = 8.0
-const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.86
-const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 0.90
-const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.76
-const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 0.76
-const HOLD_TOP_FADE_RATIO: float = 0.06
-const HOLD_TOP_FADE_MAX_PX: float = 24.0
+const HOLD_OUTER_BEAM_IDLE_RATIO: float = 0.74
+const HOLD_OUTER_BEAM_ACTIVE_RATIO: float = 1.0
+const HOLD_INNER_BEAM_IDLE_RATIO: float = 0.74
+const HOLD_INNER_BEAM_ACTIVE_RATIO: float = 1.0
+const HOLD_TOP_FADE_PX: float = 22.0
+const HOLD_TOP_SOFT_TAPER: float = 0.88
 const HOLD_PULSE_FREQ_RAD: float = 18.0
 
 const MOTION_FEATHER_MIN_MULTIPLIER: int = 3
@@ -25,6 +25,8 @@ const HOLD_CAP_ACTIVE_COLOR: Color = Color(0.32, 0.98, 0.90, 0.78)
 const HEAD_IDLE_COLOR: Color = Color(0.35, 0.95, 1.0, 1.0)
 const HEAD_HOLD_ACTIVE_COLOR: Color = Color(0.45, 1.0, 0.94, 1.0)
 
+static var _shared_hold_idle_texture: GradientTexture2D = null
+static var _shared_hold_active_texture: GradientTexture2D = null
 static var _shared_hold_beam_texture: GradientTexture2D = null
 static var _shared_hold_tail_cap_texture: GradientTexture2D = null
 
@@ -70,33 +72,24 @@ func _ready() -> void:
 func _draw() -> void:
 	if not _is_hold_visible or _current_tail_height_px <= 0.5:
 		return
-	if _shared_hold_beam_texture == null:
+	var active_tex: GradientTexture2D = _shared_hold_active_texture if _is_hold_active else _shared_hold_idle_texture
+	if active_tex == null:
 		return
 
 	var cx: float = lane_width * 0.5
 	var tail_h: float = _current_tail_height_px
-	var top_fade_h: float = minf(HOLD_TOP_FADE_MAX_PX, maxf(3.0, tail_h * HOLD_TOP_FADE_RATIO))
+	var top_fade_h: float = minf(HOLD_TOP_FADE_PX, tail_h * 0.45)
 	var fade_end_y: float = minf(0.0, -(tail_h - top_fade_h))
 	var tail_top_y: float = -tail_h
 	var pulse: float = _hold_pulse_phase if _is_hold_active else 0.0
 
-	var head_w: float = _compute_note_head_width()
-	var ribbon_w: float = head_w
+	# Idle: narrower (~74% of lane_width, centered) with softer 3-tier glow.
+	# Holding: expands cleanly to 100% of lane_width ([0.0, lane_width]) with radiant white-cyan core.
+	var ribbon_w: float = lane_width if _is_hold_active else (lane_width * HOLD_INNER_BEAM_IDLE_RATIO)
 	var ribbon_hw: float = ribbon_w * 0.5
+	var alpha_mod: float = clampf(0.92 + (pulse * 0.08), 0.92, 1.0) if _is_hold_active else 1.0
 
-	var outer_w: float = minf(lane_width - 4.0, maxf(ribbon_w, lane_width * (HOLD_OUTER_BEAM_ACTIVE_RATIO if _is_hold_active else HOLD_OUTER_BEAM_IDLE_RATIO)))
-	var outer_hw: float = outer_w * 0.5
-	var outer_col: Color = HOLD_OUTER_ACTIVE_COLOR if _is_hold_active else HOLD_OUTER_IDLE_COLOR
-	var outer_alpha: float = clampf(outer_col.a + (pulse * 0.08), 0.0, 0.48)
-
-	var inner_col: Color = HOLD_INNER_ACTIVE_COLOR if _is_hold_active else HOLD_INNER_IDLE_COLOR
-	var inner_alpha: float = clampf(inner_col.a + (pulse * 0.12), 0.0, 0.88)
-
-	# 1. Soft diffused outer neon veil (flat-topped rectangular ribbon, never touches lane dividers)
-	_draw_diffused_beam_body(cx, outer_hw, fade_end_y, tail_top_y, outer_col, outer_alpha)
-
-	# 2. Wide luminous flat-topped ribbon matching exact note head width (broad plateau horizontal gradient)
-	_draw_diffused_beam_body(cx, ribbon_hw, fade_end_y, tail_top_y, inner_col, inner_alpha)
+	_draw_diffused_beam_body(cx, ribbon_hw, fade_end_y, tail_top_y, active_tex, alpha_mod)
 
 
 func _draw_diffused_beam_body(
@@ -104,14 +97,14 @@ func _draw_diffused_beam_body(
 	p_hw: float,
 	p_fade_end_y: float,
 	p_tail_top_y: float,
-	p_color: Color,
-	p_alpha: float
+	p_texture: GradientTexture2D,
+	p_alpha_mod: float
 ) -> void:
-	var c_bottom: Color = Color(p_color.r, p_color.g, p_color.b, p_alpha)
-	var c_upper_body: Color = Color(p_color.r, p_color.g, p_color.b, p_alpha * 0.95)
-	var c_zero: Color = Color(p_color.r, p_color.g, p_color.b, 0.0)
+	var c_bottom: Color = Color(1.0, 1.0, 1.0, p_alpha_mod)
+	var c_upper_body: Color = Color(1.0, 1.0, 1.0, p_alpha_mod * 0.96)
+	var c_zero: Color = Color(1.0, 1.0, 1.0, 0.0)
 
-	# Main continuous rectangular ribbon body (from y = 0 up to p_fade_end_y, alpha 1.0 -> 0.95)
+	# Main continuous 3-tier diffused ribbon body (y = 0 up to p_fade_end_y, zero hard steps)
 	if p_fade_end_y < -0.25:
 		_quad_pts_buf[0] = Vector2(p_cx - p_hw, p_fade_end_y)
 		_quad_pts_buf[1] = Vector2(p_cx + p_hw, p_fade_end_y)
@@ -121,19 +114,20 @@ func _draw_diffused_beam_body(
 		_quad_cols_buf[1] = c_upper_body
 		_quad_cols_buf[2] = c_bottom
 		_quad_cols_buf[3] = c_bottom
-		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _shared_hold_beam_texture)
+		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, p_texture)
 
-	# Short flat-topped vertical fade at the top edge (0.00 -> alpha 0.0, 0.06 -> alpha 0.95, square width)
+	# Gradual softened top fade (~22 px) with subtle organic taper
 	if p_tail_top_y < p_fade_end_y - 0.15:
-		_quad_pts_buf[0] = Vector2(p_cx - p_hw, p_tail_top_y)
-		_quad_pts_buf[1] = Vector2(p_cx + p_hw, p_tail_top_y)
+		var top_hw: float = p_hw * HOLD_TOP_SOFT_TAPER
+		_quad_pts_buf[0] = Vector2(p_cx - top_hw, p_tail_top_y)
+		_quad_pts_buf[1] = Vector2(p_cx + top_hw, p_tail_top_y)
 		_quad_pts_buf[2] = Vector2(p_cx + p_hw, p_fade_end_y)
 		_quad_pts_buf[3] = Vector2(p_cx - p_hw, p_fade_end_y)
 		_quad_cols_buf[0] = c_zero
 		_quad_cols_buf[1] = c_zero
 		_quad_cols_buf[2] = c_upper_body
 		_quad_cols_buf[3] = c_upper_body
-		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _shared_hold_beam_texture)
+		draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, p_texture)
 
 
 func setup(
@@ -247,7 +241,15 @@ func is_hold_actively_consuming() -> bool:
 
 
 func get_hold_beam_texture() -> GradientTexture2D:
-	return _shared_hold_beam_texture
+	return _shared_hold_active_texture if _is_hold_active else _shared_hold_idle_texture
+
+
+func get_hold_idle_texture() -> GradientTexture2D:
+	return _shared_hold_idle_texture
+
+
+func get_hold_active_texture() -> GradientTexture2D:
+	return _shared_hold_active_texture
 
 
 func get_hold_tail_cap_texture() -> GradientTexture2D:
@@ -268,26 +270,52 @@ func get_motion_feather_height_px() -> float:
 
 
 static func _ensure_shared_textures() -> void:
-	if _shared_hold_beam_texture == null:
-		# Broad horizontal plateau gradient (soft lateral blur without hard edges)
-		var beam_grad: Gradient = Gradient.new()
-		beam_grad.offsets = PackedFloat32Array([0.0, 0.14, 0.50, 0.86, 1.0])
-		beam_grad.colors = PackedColorArray([
-			Color(1.0, 1.0, 1.0, 0.0),
-			Color(1.0, 1.0, 1.0, 0.88),
-			Color(1.0, 1.0, 1.0, 1.0),
-			Color(1.0, 1.0, 1.0, 0.88),
-			Color(1.0, 1.0, 1.0, 0.0),
+	if _shared_hold_idle_texture == null:
+		# 3-tier smooth horizontal gradient (idle: softer translucent cyan halo -> dim neon cyan -> soft white-cyan core)
+		var idle_grad: Gradient = Gradient.new()
+		idle_grad.offsets = PackedFloat32Array([0.0, 0.16, 0.36, 0.50, 0.64, 0.84, 1.0])
+		idle_grad.colors = PackedColorArray([
+			Color(0.16, 0.82, 0.96, 0.0),
+			Color(0.16, 0.82, 0.96, 0.28),
+			Color(0.26, 0.92, 0.98, 0.50),
+			Color(0.80, 0.98, 1.0, 0.72),
+			Color(0.26, 0.92, 0.98, 0.50),
+			Color(0.16, 0.82, 0.96, 0.28),
+			Color(0.16, 0.82, 0.96, 0.0),
 		])
-		var beam_tex: GradientTexture2D = GradientTexture2D.new()
-		beam_tex.gradient = beam_grad
-		beam_tex.fill = GradientTexture2D.FILL_LINEAR
-		beam_tex.fill_from = Vector2(0.0, 0.5)
-		beam_tex.fill_to = Vector2(1.0, 0.5)
-		beam_tex.width = 128
-		beam_tex.height = 8
-		beam_tex.use_hdr = false
-		_shared_hold_beam_texture = beam_tex
+		var idle_tex: GradientTexture2D = GradientTexture2D.new()
+		idle_tex.gradient = idle_grad
+		idle_tex.fill = GradientTexture2D.FILL_LINEAR
+		idle_tex.fill_from = Vector2(0.0, 0.5)
+		idle_tex.fill_to = Vector2(1.0, 0.5)
+		idle_tex.width = 128
+		idle_tex.height = 8
+		idle_tex.use_hdr = false
+		_shared_hold_idle_texture = idle_tex
+		_shared_hold_beam_texture = idle_tex
+
+	if _shared_hold_active_texture == null:
+		# 3-tier smooth horizontal gradient (holding: bright neon cyan -> electric cyan -> radiant white-cyan core)
+		var active_grad: Gradient = Gradient.new()
+		active_grad.offsets = PackedFloat32Array([0.0, 0.08, 0.32, 0.50, 0.68, 0.92, 1.0])
+		active_grad.colors = PackedColorArray([
+			Color(0.18, 0.90, 1.0, 0.0),
+			Color(0.18, 0.90, 1.0, 0.72),
+			Color(0.32, 0.96, 1.0, 0.92),
+			Color(0.94, 1.0, 1.0, 1.0),
+			Color(0.32, 0.96, 1.0, 0.92),
+			Color(0.18, 0.90, 1.0, 0.72),
+			Color(0.18, 0.90, 1.0, 0.0),
+		])
+		var active_tex: GradientTexture2D = GradientTexture2D.new()
+		active_tex.gradient = active_grad
+		active_tex.fill = GradientTexture2D.FILL_LINEAR
+		active_tex.fill_from = Vector2(0.0, 0.5)
+		active_tex.fill_to = Vector2(1.0, 0.5)
+		active_tex.width = 128
+		active_tex.height = 8
+		active_tex.use_hdr = false
+		_shared_hold_active_texture = active_tex
 
 	if _shared_hold_tail_cap_texture == null:
 		var cap_grad: Gradient = Gradient.new()
@@ -385,12 +413,7 @@ func _update_hold_body_geometry(
 	_is_hold_active = p_is_holding and _is_hold_visible
 	_hold_pulse_phase = clampf(p_pulse_phase, 0.0, 1.0)
 
-	var head_w: float = _compute_note_head_width()
-	var outer_ratio: float = (
-		HOLD_OUTER_BEAM_ACTIVE_RATIO
-		if _is_hold_active
-		else HOLD_OUTER_BEAM_IDLE_RATIO
-	)
-	_current_inner_beam_width_px = head_w
-	_current_outer_glow_width_px = minf(lane_width - 4.0, maxf(head_w, lane_width * outer_ratio))
+	var ribbon_w: float = lane_width if _is_hold_active else (lane_width * HOLD_INNER_BEAM_IDLE_RATIO)
+	_current_inner_beam_width_px = ribbon_w
+	_current_outer_glow_width_px = ribbon_w
 	queue_redraw()
