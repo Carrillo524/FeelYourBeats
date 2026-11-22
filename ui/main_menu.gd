@@ -83,13 +83,16 @@ const GITHUB_REPO_SLUG: String = "Carrillo524/FeelYourBeats"
 const GITHUB_LATEST_RELEASE_URL_FMT: String = "https://api.github.com/repos/%s/releases/latest"
 const GITHUB_HTTP_USER_AGENT: String = "User-Agent: FeelYourBeats-Client"
 const GITHUB_HTTP_ACCEPT: String = "Accept: application/vnd.github+json"
-const RELEASE_BELL_SIZE_PX: float = 78.0
+const RELEASE_BELL_SIZE_PX: float = 72.0
 const RELEASE_MODAL_Z_INDEX: int = 80
+const RELEASE_STATE_SETTINGS_PATH: String = "user://user_settings.cfg"
+const RELEASE_STATE_SECTION: String = "release_notes"
+const RELEASE_STATE_KEY_LAST_READ: String = "last_read_release_tag"
 const RELEASE_WELCOME_TITLE_FMT: String = "¡Bienvenido a FeelYourBeats v%s!"
 const RELEASE_WELCOME_GUIDE_TEXT: String = "• Importa tu propia música desde el selector de canciones.\n• Cambia entre los 4 modos de juego.\n• Personaliza velocidad, fondo reactivo y efectos en Ajustes.\n• Si juegas en PC, los controles de los 4 carriles son las teclas D, F, J, K."
 const DEFAULT_RELEASE_NOTES_SUMMARY: String = "Resumen de novedades de v1.1.0:\n• Pantalla completa responsiva para PC y rotación vertical/horizontal en Android.\n• Controles de teclado en PC (D, F, J, K y flechas) compatibles con Tap y Hold.\n• Efectos de acierto, toque y desaparición sincronizados exactamente con la pista centrada.\n• Optimización de rendimiento a 60/120 Hz y compatibilidad gráfica universal en Android.\n• Aviso inicial de fotosensibilidad y mejoras de audio en segundo plano."
-const COLOR_UPDATE_BADGE: Color = Color(1.0, 0.34, 0.56, 1.0)
-const COLOR_UPDATE_BADGE_GLOW: Color = Color(1.0, 0.34, 0.56, 0.38)
+const COLOR_UPDATE_BADGE: Color = Color(1.0, 0.23, 0.36, 1.0)
+const COLOR_UPDATE_BADGE_GLOW: Color = Color(1.0, 0.23, 0.36, 0.42)
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -149,6 +152,7 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 @export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var background_settings_path: String = ReactiveBackgroundConfig.DEFAULT_SETTINGS_PATH
 @export var effects_settings_path: String = GameplayEffectsConfig.DEFAULT_SETTINGS_PATH
+@export var release_state_settings_path: String = RELEASE_STATE_SETTINGS_PATH
 @export var enable_remote_release_check: bool = true
 @export var allow_scene_change: bool = true
 
@@ -258,20 +262,28 @@ var _exit_cancel_button: Button = null
 var _exit_confirm_button: Button = null
 
 # Release Notes & Notification Bell UI
+var _browser_header_row: HBoxContainer = null
+var _browser_header_spacer: Control = null
 var _release_bell_button: Button = null
 var _release_bell_icon: Control = null
+var _title_release_bell_button: Button = null
+var _title_release_bell_icon: Control = null
 var _release_modal_backdrop: ColorRect = null
 var _release_modal_panel: Panel = null
+var _release_modal_root_vbox: VBoxContainer = null
 var _release_modal_scroll: ScrollContainer = null
 var _release_modal_vbox: VBoxContainer = null
 var _release_modal_title_label: Label = null
+var _release_mark_read_button: Button = null
 var _release_modal_close_button: Button = null
 var _release_welcome_title_label: Label = null
 var _release_welcome_body_label: Label = null
 var _release_notes_heading_label: Label = null
 var _release_notes_body_label: Label = null
 var _release_download_button: Button = null
+var _release_modal_readable_font: SystemFont = null
 var _release_http_request: HTTPRequest = null
+var last_read_release_tag: String = ""
 var _has_remote_update: bool = false
 var _remote_release_tag: String = ""
 var _remote_release_body: String = ""
@@ -407,7 +419,9 @@ func _ready() -> void:
 
 	_connect_viewport_resize()
 	sync_responsive_viewport_layout()
+	load_release_read_state()
 	_refresh_release_notes_modal_content()
+	_queue_redraw_release_bells()
 	_start_silent_release_check()
 
 	if returning_to_selector:
@@ -467,8 +481,11 @@ func _process(p_delta: float) -> void:
 	if _loading_overlay != null and _loading_overlay.visible:
 		_step_loading_overlay_animation(dt)
 
-	if _has_remote_update and _release_bell_icon != null and _release_bell_icon.is_visible_in_tree():
-		_release_bell_icon.queue_redraw()
+	if has_unread_release_notes():
+		if _release_bell_icon != null and _release_bell_icon.is_visible_in_tree():
+			_release_bell_icon.queue_redraw()
+		if _title_release_bell_icon != null and _title_release_bell_icon.is_visible_in_tree():
+			_title_release_bell_icon.queue_redraw()
 
 	_step_touch_preview_pool(dt)
 
@@ -973,12 +990,18 @@ func _layout_release_bell_and_modal(
 	p_ui_scale: float,
 	p_full_offset: Vector2
 ) -> void:
+	var bell_sz: float = clampf(RELEASE_BELL_SIZE_PX * p_ui_scale, 56.0, RELEASE_BELL_SIZE_PX)
+	var scaled_header_font: int = maxi(26, int(round(float(HEADER_TITLE_FONT_SIZE) * p_ui_scale)))
+	if _browser_header_label != null:
+		_browser_header_label.add_theme_font_size_override("font_size", scaled_header_font)
+	if _browser_header_spacer != null:
+		_browser_header_spacer.custom_minimum_size = Vector2(bell_sz, bell_sz)
 	if _release_bell_button != null:
-		var bell_sz: float = clampf(RELEASE_BELL_SIZE_PX * p_ui_scale, 56.0, RELEASE_BELL_SIZE_PX)
-		_release_bell_button.size = Vector2(bell_sz, bell_sz)
-		_release_bell_button.position = Vector2(maxf(8.0, p_safe_w - bell_sz - 12.0), 14.0)
-		if _release_bell_icon != null:
-			_release_bell_icon.queue_redraw()
+		_release_bell_button.custom_minimum_size = Vector2(bell_sz, bell_sz)
+	if _title_release_bell_button != null:
+		_title_release_bell_button.size = Vector2(bell_sz, bell_sz)
+		_title_release_bell_button.position = Vector2(maxf(8.0, p_safe_w - bell_sz - 12.0), 18.0)
+	_queue_redraw_release_bells()
 
 	if _release_modal_backdrop != null:
 		_release_modal_backdrop.position = p_full_offset
@@ -989,13 +1012,13 @@ func _layout_release_bell_and_modal(
 		var modal_h: float = minf(1180.0, p_safe_h - 48.0)
 		_release_modal_panel.size = Vector2(modal_w, modal_h)
 		_release_modal_panel.position = Vector2((p_vp_size.x - modal_w) * 0.5, (p_vp_size.y - modal_h) * 0.5)
-		if _release_modal_scroll != null:
+		if _release_modal_root_vbox != null:
 			var inner_w: float = maxf(240.0, modal_w - 52.0)
 			var inner_h: float = maxf(320.0, modal_h - 48.0)
-			_release_modal_scroll.position = Vector2(26.0, 24.0)
-			_release_modal_scroll.size = Vector2(inner_w, inner_h)
+			_release_modal_root_vbox.position = Vector2(26.0, 24.0)
+			_release_modal_root_vbox.size = Vector2(inner_w, inner_h)
 			if _release_modal_vbox != null:
-				_release_modal_vbox.custom_minimum_size = Vector2(inner_w - 8.0, 0.0)
+				_release_modal_vbox.custom_minimum_size = Vector2(maxf(200.0, inner_w - 8.0), 0.0)
 
 
 func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
@@ -3224,6 +3247,66 @@ static func is_remote_version_newer(p_remote_tag: String, p_local_version: Strin
 	return compare_semver(p_remote_tag, p_local_version) > 0
 
 
+static func normalize_release_tag(p_tag_or_version: String) -> String:
+	var cleaned: String = p_tag_or_version.strip_edges()
+	if cleaned.is_empty():
+		return ""
+	if cleaned.begins_with("v") or cleaned.begins_with("V"):
+		return "v" + cleaned.substr(1)
+	return "v" + cleaned
+
+
+func load_release_read_state() -> void:
+	last_read_release_tag = ""
+	if release_state_settings_path.is_empty():
+		return
+	var cfg: ConfigFile = ConfigFile.new()
+	var err: Error = cfg.load(release_state_settings_path)
+	if err == OK:
+		last_read_release_tag = str(
+			cfg.get_value(RELEASE_STATE_SECTION, RELEASE_STATE_KEY_LAST_READ, "")
+		).strip_edges()
+	_queue_redraw_release_bells()
+
+
+func save_release_read_state() -> void:
+	if release_state_settings_path.is_empty():
+		return
+	var cfg: ConfigFile = ConfigFile.new()
+	cfg.load(release_state_settings_path)
+	cfg.set_value(RELEASE_STATE_SECTION, RELEASE_STATE_KEY_LAST_READ, last_read_release_tag)
+	cfg.save(release_state_settings_path)
+
+
+func get_active_release_tag() -> String:
+	var local_tag: String = normalize_release_tag(get_local_app_version())
+	if not _remote_release_tag.is_empty():
+		if compare_semver(_remote_release_tag, get_local_app_version()) >= 0:
+			return normalize_release_tag(_remote_release_tag)
+	return local_tag
+
+
+func has_unread_release_notes() -> bool:
+	var active_tag: String = get_active_release_tag()
+	if active_tag.is_empty():
+		return false
+	return last_read_release_tag != active_tag
+
+
+func mark_current_release_as_read() -> void:
+	last_read_release_tag = get_active_release_tag()
+	save_release_read_state()
+	_queue_redraw_release_bells()
+	close_release_notes_modal()
+
+
+func _queue_redraw_release_bells() -> void:
+	if _release_bell_icon != null:
+		_release_bell_icon.queue_redraw()
+	if _title_release_bell_icon != null:
+		_title_release_bell_icon.queue_redraw()
+
+
 func has_remote_update_available() -> bool:
 	return _has_remote_update
 
@@ -3234,6 +3317,14 @@ func get_remote_apk_download_url() -> String:
 
 func get_release_bell_button() -> Button:
 	return _release_bell_button
+
+
+func get_release_mark_read_button() -> Button:
+	return _release_mark_read_button
+
+
+func get_release_close_button() -> Button:
+	return _release_modal_close_button
 
 
 func is_release_notes_modal_open() -> bool:
@@ -3281,8 +3372,7 @@ func apply_release_payload_dict(p_payload: Dictionary) -> void:
 	_remote_apk_download_url = apk_url
 	_has_remote_update = (not remote_tag.is_empty()) and is_remote_version_newer(remote_tag, local_ver)
 
-	if _release_bell_icon != null:
-		_release_bell_icon.queue_redraw()
+	_queue_redraw_release_bells()
 	_refresh_release_notes_modal_content()
 
 
@@ -3380,9 +3470,17 @@ func _on_release_modal_backdrop_gui_input(p_event: InputEvent) -> void:
 
 
 func _draw_release_bell_icon() -> void:
-	if _release_bell_icon == null:
+	_draw_bell_icon_on(_release_bell_icon)
+
+
+func _draw_title_release_bell_icon() -> void:
+	_draw_bell_icon_on(_title_release_bell_icon)
+
+
+func _draw_bell_icon_on(p_canvas: Control) -> void:
+	if p_canvas == null:
 		return
-	var sz: Vector2 = _release_bell_icon.size
+	var sz: Vector2 = p_canvas.size
 	var min_d: float = minf(sz.x, sz.y)
 	if min_d <= 4.0:
 		return
@@ -3406,15 +3504,15 @@ func _draw_release_bell_icon() -> void:
 	var fill_col: Color = Color(0.26, 0.88, 1.0, 0.16)
 	var stroke_col: Color = Color(0.88, 0.99, 1.0, 0.96)
 
-	_release_bell_icon.draw_colored_polygon(bell_pts, fill_col)
-	_release_bell_icon.draw_polyline(bell_pts, halo_col, maxf(4.0, s * 0.24), true)
-	_release_bell_icon.draw_polyline(bell_pts, stroke_col, maxf(2.2, s * 0.12), true)
+	p_canvas.draw_colored_polygon(bell_pts, fill_col)
+	p_canvas.draw_polyline(bell_pts, halo_col, maxf(4.0, s * 0.24), true)
+	p_canvas.draw_polyline(bell_pts, stroke_col, maxf(2.2, s * 0.12), true)
 
 	# Top bell handle knob
-	_release_bell_icon.draw_circle(c + Vector2(0.0, -s * 1.08), maxf(2.4, s * 0.13), stroke_col)
+	p_canvas.draw_circle(c + Vector2(0.0, -s * 1.08), maxf(2.4, s * 0.13), stroke_col)
 
 	# Bottom clapper arc
-	_release_bell_icon.draw_arc(
+	p_canvas.draw_arc(
 		c + Vector2(0.0, s * 0.60),
 		maxf(3.0, s * 0.28),
 		0.15,
@@ -3425,18 +3523,18 @@ func _draw_release_bell_icon() -> void:
 		true
 	)
 
-	# Luminous notification dot when a newer GitHub release is available
-	if _has_remote_update:
-		var pulse: float = 0.78 + (0.22 * (sin(_pulse_phase * 1.4) * 0.5 + 0.5))
-		var dot_pos: Vector2 = c + Vector2(s * 0.86, -s * 0.86)
-		var dot_r: float = maxf(4.8, s * 0.28)
-		_release_bell_icon.draw_circle(
+	# Bright red unread indicator dot while last_read_release_tag != active_release_tag
+	if has_unread_release_notes():
+		var pulse: float = 0.80 + (0.20 * (sin(_pulse_phase * 1.4) * 0.5 + 0.5))
+		var dot_pos: Vector2 = c + Vector2(s * 0.88, -s * 0.88)
+		var dot_r: float = maxf(5.0, s * 0.30)
+		p_canvas.draw_circle(
 			dot_pos,
 			dot_r * (1.75 * pulse),
 			Color(COLOR_UPDATE_BADGE_GLOW.r, COLOR_UPDATE_BADGE_GLOW.g, COLOR_UPDATE_BADGE_GLOW.b, 0.42 * pulse)
 		)
-		_release_bell_icon.draw_circle(dot_pos, dot_r, COLOR_UPDATE_BADGE)
-		_release_bell_icon.draw_circle(dot_pos, dot_r * 0.44, Color(1.0, 0.94, 0.96, 0.98))
+		p_canvas.draw_circle(dot_pos, dot_r, COLOR_UPDATE_BADGE)
+		p_canvas.draw_circle(dot_pos, dot_r * 0.42, Color(1.0, 0.90, 0.92, 0.96))
 
 
 func _on_safe_play_rect_changed(_p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
@@ -4466,6 +4564,19 @@ func _build_theme_styles() -> void:
 	_style_bell_hover.shadow_size = 8
 
 
+func _ensure_release_modal_readable_font() -> SystemFont:
+	if _release_modal_readable_font == null:
+		_release_modal_readable_font = SystemFont.new()
+		_release_modal_readable_font.font_names = PackedStringArray([
+			"Sans-Serif",
+			"Roboto",
+			"Segoe UI",
+			"Arial",
+		])
+		_release_modal_readable_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	return _release_modal_readable_font
+
+
 func _apply_external_fonts() -> void:
 	if _font_registry == null:
 		_font_registry = UiFontRegistry.new()
@@ -4481,12 +4592,20 @@ func _apply_external_fonts() -> void:
 	_font_registry.apply_global_font_override(_loading_stage_label, 2)
 	_font_registry.apply_global_font_override(_loading_percent_label, 2)
 	_font_registry.apply_global_font_override(_release_modal_title_label, 3)
+	_font_registry.apply_global_font_override(_release_mark_read_button, 2)
 	_font_registry.apply_global_font_override(_release_modal_close_button, 2)
-	_font_registry.apply_global_font_override(_release_welcome_title_label, 2)
-	_font_registry.apply_global_font_override(_release_welcome_body_label, 0)
-	_font_registry.apply_global_font_override(_release_notes_heading_label, 2)
-	_font_registry.apply_global_font_override(_release_notes_body_label, 0)
 	_font_registry.apply_global_font_override(_release_download_button, 3)
+
+	# Clean sans-serif SystemFont exclusively for readable descriptive text inside the Release Notes modal
+	var readable_font: SystemFont = _ensure_release_modal_readable_font()
+	if _release_welcome_title_label != null:
+		_release_welcome_title_label.add_theme_font_override(&"font", readable_font)
+	if _release_welcome_body_label != null:
+		_release_welcome_body_label.add_theme_font_override(&"font", readable_font)
+	if _release_notes_heading_label != null:
+		_release_notes_heading_label.add_theme_font_override(&"font", readable_font)
+	if _release_notes_body_label != null:
+		_release_notes_body_label.add_theme_font_override(&"font", readable_font)
 
 
 func _ensure_ui_nodes() -> void:
@@ -4577,13 +4696,51 @@ func _build_browser_screen_ui() -> void:
 	_browser_screen_container.add_theme_constant_override("separation", 18)
 	_safe_container.add_child(_browser_screen_container)
 
+	# Dedicated top header HBoxContainer: left balance spacer + centered title + right bell (zero tab overlap)
+	_browser_header_row = HBoxContainer.new()
+	_browser_header_row.name = "BrowserHeaderRow"
+	_browser_header_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_browser_header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_browser_header_row.add_theme_constant_override("separation", 12)
+	_browser_screen_container.add_child(_browser_header_row)
+
+	_browser_header_spacer = Control.new()
+	_browser_header_spacer.name = "BrowserHeaderLeftSpacer"
+	_browser_header_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_browser_header_spacer.custom_minimum_size = Vector2(RELEASE_BELL_SIZE_PX, RELEASE_BELL_SIZE_PX)
+	_browser_header_row.add_child(_browser_header_spacer)
+
 	_browser_header_label = Label.new()
 	_browser_header_label.name = "BrowserHeaderLabel"
 	_browser_header_label.text = "FEEL YOUR BEATS"
+	_browser_header_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_browser_header_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_browser_header_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_browser_header_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_browser_header_label.clip_text = true
 	_browser_header_label.add_theme_font_size_override("font_size", HEADER_TITLE_FONT_SIZE)
 	_browser_header_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
-	_browser_screen_container.add_child(_browser_header_label)
+	_browser_header_row.add_child(_browser_header_label)
+
+	_release_bell_button = Button.new()
+	_release_bell_button.name = "ReleaseNotesBellButton"
+	_release_bell_button.text = ""
+	_release_bell_button.tooltip_text = "Notas de versión"
+	_release_bell_button.focus_mode = Control.FOCUS_NONE
+	_release_bell_button.custom_minimum_size = Vector2(RELEASE_BELL_SIZE_PX, RELEASE_BELL_SIZE_PX)
+	_release_bell_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_release_bell_button.add_theme_stylebox_override("normal", _style_bell_normal)
+	_release_bell_button.add_theme_stylebox_override("hover", _style_bell_hover)
+	_release_bell_button.add_theme_stylebox_override("pressed", _style_bell_hover)
+	_release_bell_button.pressed.connect(_on_release_bell_pressed)
+	_browser_header_row.add_child(_release_bell_button)
+
+	_release_bell_icon = Control.new()
+	_release_bell_icon.name = "ReleaseBellVectorIcon"
+	_release_bell_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_release_bell_icon.draw.connect(_draw_release_bell_icon)
+	_release_bell_button.add_child(_release_bell_icon)
+	_release_bell_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	_tabs_bar_wrapper = Control.new()
 	_tabs_bar_wrapper.name = "TopTabsBarWrapper"
@@ -5029,23 +5186,25 @@ func _build_browser_screen_ui() -> void:
 
 
 func _build_release_bell_and_modal_ui() -> void:
-	_release_bell_button = Button.new()
-	_release_bell_button.name = "ReleaseNotesBellButton"
-	_release_bell_button.text = ""
-	_release_bell_button.tooltip_text = "Notas de versión"
-	_release_bell_button.focus_mode = Control.FOCUS_NONE
-	_release_bell_button.add_theme_stylebox_override("normal", _style_bell_normal)
-	_release_bell_button.add_theme_stylebox_override("hover", _style_bell_hover)
-	_release_bell_button.add_theme_stylebox_override("pressed", _style_bell_hover)
-	_release_bell_button.pressed.connect(_on_release_bell_pressed)
-	_safe_container.add_child(_release_bell_button)
+	# Matching top-right bell button on the Title Screen (clear of hero title/play button)
+	_title_release_bell_button = Button.new()
+	_title_release_bell_button.name = "TitleReleaseNotesBellButton"
+	_title_release_bell_button.text = ""
+	_title_release_bell_button.tooltip_text = "Notas de versión"
+	_title_release_bell_button.focus_mode = Control.FOCUS_NONE
+	_title_release_bell_button.add_theme_stylebox_override("normal", _style_bell_normal)
+	_title_release_bell_button.add_theme_stylebox_override("hover", _style_bell_hover)
+	_title_release_bell_button.add_theme_stylebox_override("pressed", _style_bell_hover)
+	_title_release_bell_button.pressed.connect(_on_release_bell_pressed)
+	if _title_screen_container != null:
+		_title_screen_container.add_child(_title_release_bell_button)
 
-	_release_bell_icon = Control.new()
-	_release_bell_icon.name = "ReleaseBellVectorIcon"
-	_release_bell_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_release_bell_icon.draw.connect(_draw_release_bell_icon)
-	_release_bell_button.add_child(_release_bell_icon)
-	_release_bell_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_title_release_bell_icon = Control.new()
+	_title_release_bell_icon.name = "TitleReleaseBellVectorIcon"
+	_title_release_bell_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title_release_bell_icon.draw.connect(_draw_title_release_bell_icon)
+	_title_release_bell_button.add_child(_title_release_bell_icon)
+	_title_release_bell_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	_release_modal_backdrop = ColorRect.new()
 	_release_modal_backdrop.name = "ReleaseNotesModalBackdrop"
@@ -5062,46 +5221,42 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_modal_panel.add_theme_stylebox_override("panel", _style_modal_panel)
 	_release_modal_backdrop.add_child(_release_modal_panel)
 
-	_release_modal_scroll = ScrollContainer.new()
-	_release_modal_scroll.name = "ReleaseNotesModalScroll"
-	_release_modal_panel.add_child(_release_modal_scroll)
-
-	_release_modal_vbox = VBoxContainer.new()
-	_release_modal_vbox.name = "ReleaseNotesModalVBox"
-	_release_modal_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_release_modal_vbox.add_theme_constant_override("separation", 22)
-	_release_modal_scroll.add_child(_release_modal_vbox)
-
-	var header_row: HBoxContainer = HBoxContainer.new()
-	header_row.name = "ReleaseNotesHeaderRow"
-	header_row.add_theme_constant_override("separation", 12)
-	_release_modal_vbox.add_child(header_row)
+	_release_modal_root_vbox = VBoxContainer.new()
+	_release_modal_root_vbox.name = "ReleaseNotesModalRootVBox"
+	_release_modal_root_vbox.add_theme_constant_override("separation", 18)
+	_release_modal_panel.add_child(_release_modal_root_vbox)
 
 	_release_modal_title_label = Label.new()
 	_release_modal_title_label.name = "ReleaseNotesTitleLabel"
 	_release_modal_title_label.text = "NOTAS DE VERSIÓN"
-	_release_modal_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_release_modal_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_release_modal_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_release_modal_title_label.add_theme_font_size_override("font_size", MODAL_TITLE_FONT_SIZE)
 	_release_modal_title_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
-	header_row.add_child(_release_modal_title_label)
+	_release_modal_root_vbox.add_child(_release_modal_title_label)
 
-	_release_modal_close_button = Button.new()
-	_release_modal_close_button.name = "ReleaseNotesCloseButton"
-	_release_modal_close_button.text = "CERRAR"
-	_release_modal_close_button.custom_minimum_size = Vector2(168.0, 72.0)
-	_release_modal_close_button.add_theme_font_size_override("font_size", 30)
-	_apply_stylebox_to_button(_release_modal_close_button, _style_option_inactive)
-	_release_modal_close_button.pressed.connect(close_release_notes_modal)
-	header_row.add_child(_release_modal_close_button)
+	_release_modal_root_vbox.add_child(_create_white_divider("ReleaseNotesDivider_0", 0))
 
-	_release_modal_vbox.add_child(_create_white_divider("ReleaseNotesDivider_0", 0))
+	_release_modal_scroll = ScrollContainer.new()
+	_release_modal_scroll.name = "ReleaseNotesModalScroll"
+	_release_modal_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_release_modal_root_vbox.add_child(_release_modal_scroll)
+
+	_release_modal_vbox = VBoxContainer.new()
+	_release_modal_vbox.name = "ReleaseNotesModalVBox"
+	_release_modal_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_vbox.add_theme_constant_override("separation", 20)
+	_release_modal_scroll.add_child(_release_modal_vbox)
+
+	var readable_font: SystemFont = _ensure_release_modal_readable_font()
 
 	_release_welcome_title_label = Label.new()
 	_release_welcome_title_label.name = "ReleaseWelcomeTitleLabel"
 	_release_welcome_title_label.text = RELEASE_WELCOME_TITLE_FMT % get_local_app_version()
 	_release_welcome_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_welcome_title_label.add_theme_font_override(&"font", readable_font)
 	_release_welcome_title_label.add_theme_font_size_override("font_size", 36)
 	_release_welcome_title_label.add_theme_color_override("font_color", COLOR_TEXT_GOLD)
 	_release_modal_vbox.add_child(_release_welcome_title_label)
@@ -5110,6 +5265,7 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_welcome_body_label.name = "ReleaseWelcomeBodyLabel"
 	_release_welcome_body_label.text = RELEASE_WELCOME_GUIDE_TEXT
 	_release_welcome_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_welcome_body_label.add_theme_font_override(&"font", readable_font)
 	_release_welcome_body_label.add_theme_font_size_override("font_size", 30)
 	_release_welcome_body_label.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	_release_welcome_body_label.add_theme_constant_override("line_spacing", 8)
@@ -5121,6 +5277,7 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_notes_heading_label.name = "ReleaseNotesHeadingLabel"
 	_release_notes_heading_label.text = "NOTAS DE LA VERSIÓN (v%s)" % get_local_app_version()
 	_release_notes_heading_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_notes_heading_label.add_theme_font_override(&"font", readable_font)
 	_release_notes_heading_label.add_theme_font_size_override("font_size", 34)
 	_release_notes_heading_label.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_release_modal_vbox.add_child(_release_notes_heading_label)
@@ -5129,6 +5286,7 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_notes_body_label.name = "ReleaseNotesBodyLabel"
 	_release_notes_body_label.text = DEFAULT_RELEASE_NOTES_SUMMARY
 	_release_notes_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_release_notes_body_label.add_theme_font_override(&"font", readable_font)
 	_release_notes_body_label.add_theme_font_size_override("font_size", 28)
 	_release_notes_body_label.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
 	_release_notes_body_label.add_theme_constant_override("line_spacing", 8)
@@ -5140,11 +5298,42 @@ func _build_release_bell_and_modal_ui() -> void:
 	_release_download_button.visible = false
 	_release_download_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_release_download_button.custom_minimum_size = Vector2(0.0, PLAY_BUTTON_HEIGHT_PX)
-	_release_download_button.add_theme_font_size_override("font_size", 36)
+	_release_download_button.add_theme_font_size_override("font_size", 34)
 	_release_download_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
 	_apply_stylebox_to_button(_release_download_button, _style_play_cta)
 	_release_download_button.pressed.connect(_on_release_download_pressed)
 	_release_modal_vbox.add_child(_release_download_button)
+
+	_release_modal_root_vbox.add_child(_create_white_divider("ReleaseNotesDivider_2", 0))
+
+	# Fixed bottom action bar: MARCAR LEÍDO + CERRAR
+	var footer_row: HBoxContainer = HBoxContainer.new()
+	footer_row.name = "ReleaseNotesFooterRow"
+	footer_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer_row.add_theme_constant_override("separation", 14)
+	_release_modal_root_vbox.add_child(footer_row)
+
+	_release_mark_read_button = Button.new()
+	_release_mark_read_button.name = "ReleaseNotesMarkReadButton"
+	_release_mark_read_button.text = "MARCAR LEÍDO"
+	_release_mark_read_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_mark_read_button.custom_minimum_size = Vector2(0.0, 82.0)
+	_release_mark_read_button.add_theme_font_size_override("font_size", 30)
+	_release_mark_read_button.add_theme_color_override("font_color", COLOR_TEXT_ACTIVE)
+	_apply_stylebox_to_button(_release_mark_read_button, _style_option_active)
+	_release_mark_read_button.pressed.connect(mark_current_release_as_read)
+	footer_row.add_child(_release_mark_read_button)
+
+	_release_modal_close_button = Button.new()
+	_release_modal_close_button.name = "ReleaseNotesCloseButton"
+	_release_modal_close_button.text = "CERRAR"
+	_release_modal_close_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_release_modal_close_button.custom_minimum_size = Vector2(0.0, 82.0)
+	_release_modal_close_button.add_theme_font_size_override("font_size", 30)
+	_release_modal_close_button.add_theme_color_override("font_color", COLOR_TEXT_INACTIVE)
+	_apply_stylebox_to_button(_release_modal_close_button, _style_option_inactive)
+	_release_modal_close_button.pressed.connect(close_release_notes_modal)
+	footer_row.add_child(_release_modal_close_button)
 
 	_configure_touch_scroll_container(_release_modal_scroll)
 
