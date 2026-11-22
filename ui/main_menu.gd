@@ -77,6 +77,8 @@ const TAB_SLIDE_MAIN_DURATION_SEC: float = 0.17
 const TAB_SLIDE_SETTLE_DURATION_SEC: float = 0.05
 const TAB_SLIDE_OVERSHOOT_PX: float = 10.0
 const TAB_INDICATOR_HEIGHT_PX: float = 5.0
+const MENU_LANDSCAPE_MAX_WIDTH_RATIO: float = 0.50
+const MENU_MAX_CONTENT_WIDTH_BASE_PX: float = 960.0
 
 const TITLE_HERO_FONT_SIZE: int = 104
 const TITLE_SUBTITLE_FONT_SIZE: int = 32
@@ -369,6 +371,9 @@ func _ready() -> void:
 	else:
 		apply_hud_safe_rect(Rect2(64.8, 0.0, 950.4, 1920.0))
 
+	_connect_viewport_resize()
+	sync_responsive_viewport_layout()
+
 	if returning_to_selector:
 		_has_played_startup_intro = true
 		_has_shown_photosensitivity_warning = true
@@ -430,6 +435,12 @@ func _process(p_delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.disconnect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root.size_changed.is_connected(_on_viewport_size_changed):
+		tree.root.size_changed.disconnect(_on_viewport_size_changed)
 	if _active_worker_task_id != -1:
 		WorkerThreadPool.wait_for_task_completion(_active_worker_task_id)
 		_active_worker_task_id = -1
@@ -737,13 +748,110 @@ func handle_back_request(p_now_msec: int = -1) -> void:
 	open_exit_confirm_modal()
 
 
+func _connect_viewport_resize() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root != vp:
+		if not tree.root.size_changed.is_connected(_on_viewport_size_changed):
+			tree.root.size_changed.connect(_on_viewport_size_changed)
+
+
+func _on_viewport_size_changed() -> void:
+	sync_responsive_viewport_layout()
+
+
+func _resolve_menu_viewport_size() -> Vector2:
+	if size.x > 1.0 and size.y > 1.0:
+		return size
+	var vp_rect: Rect2 = get_viewport_rect()
+	if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+		return vp_rect.size
+	return Vector2(ScreenSafeAdapter.DEFAULT_VIEWPORT_WIDTH, ScreenSafeAdapter.DEFAULT_VIEWPORT_HEIGHT)
+
+
+func _apply_full_bleed_control(p_ctrl: Control, p_explicit_size: Vector2) -> void:
+	if p_ctrl == null:
+		return
+	if p_explicit_size.x > 1.0 and p_explicit_size.y > 1.0:
+		p_ctrl.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		p_ctrl.position = Vector2.ZERO
+		p_ctrl.size = p_explicit_size
+	else:
+		p_ctrl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+func sync_responsive_viewport_layout(p_explicit_size: Vector2 = Vector2.ZERO) -> void:
+	var has_explicit: bool = p_explicit_size.x > 1.0 and p_explicit_size.y > 1.0
+	var vp_size: Vector2 = p_explicit_size
+	if has_explicit:
+		set_anchors_preset(Control.PRESET_TOP_LEFT)
+		position = Vector2.ZERO
+		size = vp_size
+	else:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			vp_size = vp_rect.size
+		else:
+			vp_size = Vector2(ScreenSafeAdapter.DEFAULT_VIEWPORT_WIDTH, ScreenSafeAdapter.DEFAULT_VIEWPORT_HEIGHT)
+
+	var explicit_arg: Vector2 = vp_size if has_explicit else Vector2.ZERO
+	if reactive_background != null:
+		reactive_background.sync_full_viewport_bounds(explicit_arg)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.sync_full_viewport_bounds(explicit_arg)
+	_apply_full_bleed_control(_photosensitivity_overlay, explicit_arg)
+	if _photosensitivity_overlay != null:
+		_sync_photosensitivity_content_margins(vp_size)
+	_apply_full_bleed_control(_intro_overlay, explicit_arg)
+	_apply_full_bleed_control(_transition_fade_rect, explicit_arg)
+	_apply_full_bleed_control(_touch_preview_layer, explicit_arg)
+	if screen_safe_adapter != null:
+		screen_safe_adapter.recalculate_for_viewport_size(vp_size)
+
+
+func _sync_photosensitivity_content_margins(p_vp_size: Vector2) -> void:
+	if _photosensitivity_content == null:
+		return
+	var max_text_w: float = minf(p_vp_size.x - (PHOTOSENSITIVITY_SIDE_MARGIN_PX * 2.0), MENU_MAX_CONTENT_WIDTH_BASE_PX)
+	var side_margin: float = maxf(PHOTOSENSITIVITY_SIDE_MARGIN_PX, (p_vp_size.x - max_text_w) * 0.5)
+	_photosensitivity_content.offset_left = side_margin
+	_photosensitivity_content.offset_right = -side_margin
+
+
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_ensure_ui_nodes()
-	_safe_container.position = p_hud_safe_rect.position
-	_safe_container.size = p_hud_safe_rect.size
+	var vp_size: Vector2 = _resolve_menu_viewport_size()
 
-	var safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
+	var raw_safe_w: float = maxf(320.0, p_hud_safe_rect.size.x)
 	var safe_h: float = maxf(480.0, p_hud_safe_rect.size.y)
+	var is_landscape: bool = vp_size.x > vp_size.y
+	var safe_w: float = raw_safe_w
+	var container_x: float = p_hud_safe_rect.position.x
+	if is_landscape:
+		var landscape_max_w: float = minf(MENU_MAX_CONTENT_WIDTH_BASE_PX, vp_size.y * MENU_LANDSCAPE_MAX_WIDTH_RATIO)
+		safe_w = clampf(minf(raw_safe_w, landscape_max_w), 320.0, raw_safe_w)
+		container_x = p_hud_safe_rect.position.x + ((raw_safe_w - safe_w) * 0.5)
+
+	_safe_container.position = Vector2(container_x, p_hud_safe_rect.position.y)
+	_safe_container.size = Vector2(safe_w, safe_h)
+
+	var ui_scale: float = clampf(safe_w / 900.0, 0.58, 1.0)
+	var scaled_hero_font: int = maxi(48, int(round(float(TITLE_HERO_FONT_SIZE) * ui_scale)))
+	var scaled_subtitle_font: int = maxi(20, int(round(float(TITLE_SUBTITLE_FONT_SIZE) * ui_scale)))
+	var scaled_play_font: int = maxi(44, int(round(float(TITLE_PLAY_FONT_SIZE) * ui_scale)))
+	var scaled_tab_font: int = maxi(20, int(round(float(TAB_FONT_SIZE) * ui_scale)))
+	_hero_title_label.add_theme_font_size_override("font_size", scaled_hero_font)
+	_hero_subtitle_label.add_theme_font_size_override("font_size", scaled_subtitle_font)
+	_hero_play_button.add_theme_font_size_override("font_size", scaled_play_font)
+	if _tab_songs_button != null:
+		_tab_songs_button.add_theme_font_size_override("font_size", scaled_tab_font)
+	if _tab_import_button != null:
+		_tab_import_button.add_theme_font_size_override("font_size", scaled_tab_font)
+	if _tab_settings_button != null:
+		_tab_settings_button.add_theme_font_size_override("font_size", scaled_tab_font)
 
 	_title_screen_container.position = Vector2.ZERO
 	_title_screen_container.size = Vector2(safe_w, safe_h)
@@ -754,7 +862,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_hero_title_label.size = Vector2(title_w, 120.0)
 	_hero_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var line_count: int = maxi(1, _hero_title_label.get_line_count())
-	var line_h: float = float(maxi(TITLE_HERO_FONT_SIZE, _hero_title_label.get_line_height()))
+	var line_h: float = float(maxi(scaled_hero_font, _hero_title_label.get_line_height()))
 	var computed_title_h: float = (float(line_count) * line_h) + 20.0
 	_hero_title_label.size = Vector2(title_w, computed_title_h)
 	_hero_title_label.position = Vector2(12.0, safe_h * 0.22)
@@ -767,8 +875,8 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_hero_title_label.position.y + _hero_title_label.size.y + 16.0
 	)
 
-	var hero_btn_w: float = minf(560.0, safe_w - 48.0)
-	var hero_btn_h: float = 128.0
+	var hero_btn_w: float = minf(560.0 * ui_scale, safe_w - 48.0)
+	var hero_btn_h: float = maxf(84.0, 128.0 * ui_scale)
 	_hero_play_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_hero_play_button.size = Vector2(hero_btn_w, hero_btn_h)
 	_hero_play_button.position = Vector2((safe_w - hero_btn_w) * 0.5, safe_h * 0.62)
@@ -782,16 +890,18 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		maxf(440.0, safe_h - (pad_y * 2.0))
 	)
 
-	_song_modal_backdrop.position = Vector2.ZERO
-	_song_modal_backdrop.size = Vector2(safe_w, safe_h)
+	# Full-bleed dimmed backdrops covering 100% of viewport with centered modals
+	var full_offset: Vector2 = -_safe_container.position
+	_song_modal_backdrop.position = full_offset
+	_song_modal_backdrop.size = vp_size
 
 	var modal_w: float = minf(900.0, safe_w - 24.0)
 	var modal_h: float = minf(1140.0, safe_h - 48.0)
 	_song_modal_panel.size = Vector2(modal_w, modal_h)
-	_song_modal_panel.position = Vector2((safe_w - modal_w) * 0.5, (safe_h - modal_h) * 0.5)
+	_song_modal_panel.position = Vector2((vp_size.x - modal_w) * 0.5, (vp_size.y - modal_h) * 0.5)
 
 	var modal_inner_w: float = maxf(240.0, modal_w - 52.0)
-	var modal_inner_h: float = maxf(400.0, modal_h - 48.0)
+	var modal_inner_h: float = maxf(360.0, modal_h - 48.0)
 	if _modal_scroll != null:
 		_modal_scroll.position = Vector2(26.0, 24.0)
 		_modal_scroll.size = Vector2(modal_inner_w, modal_inner_h)
@@ -801,8 +911,8 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_modal_vbox.size = Vector2(modal_inner_w, modal_inner_h)
 
 	if _exit_confirm_backdrop != null:
-		_exit_confirm_backdrop.position = Vector2.ZERO
-		_exit_confirm_backdrop.size = Vector2(safe_w, safe_h)
+		_exit_confirm_backdrop.position = full_offset
+		_exit_confirm_backdrop.size = vp_size
 
 	_layout_exit_confirm_panel(safe_w, safe_h)
 	_layout_loading_overlay(safe_w, safe_h)
@@ -814,6 +924,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
 	if _exit_confirm_panel == null:
 		return
+	var vp_size: Vector2 = _resolve_menu_viewport_size()
 	var safe_w: float = maxf(320.0, p_safe_w)
 	var safe_h: float = maxf(480.0, p_safe_h)
 	var target_w: float = minf(860.0, safe_w - 48.0)
@@ -830,10 +941,10 @@ func _layout_exit_confirm_panel(p_safe_w: float, p_safe_h: float) -> void:
 		_exit_confirm_title.size = Vector2(inner_w, title_h)
 	_exit_confirm_panel.custom_minimum_size = Vector2(target_w, 0.0)
 	var min_size: Vector2 = _exit_confirm_panel.get_combined_minimum_size()
-	var panel_w: float = maxf(target_w, min_size.x)
+	var panel_w: float = minf(vp_size.x - 32.0, maxf(target_w, min_size.x))
 	var panel_h: float = minf(safe_h - 64.0, maxf(min_size.y, 240.0))
 	_exit_confirm_panel.size = Vector2(panel_w, panel_h)
-	_exit_confirm_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
+	_exit_confirm_panel.position = Vector2((vp_size.x - panel_w) * 0.5, (vp_size.y - panel_h) * 0.5)
 
 
 func show_title_screen() -> void:
@@ -1668,6 +1779,7 @@ func _start_photosensitivity_warning() -> void:
 	_photosensitivity_hint_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_HINT)
 
 	_photosensitivity_overlay.move_to_front()
+	_sync_photosensitivity_content_margins(_resolve_menu_viewport_size())
 
 	# Deferred launch after layout computes centered icon pivot_offset
 	call_deferred(&"_launch_photosensitivity_entrance_tween")
@@ -2564,16 +2676,18 @@ func _draw_loading_spinner() -> void:
 func _layout_loading_overlay(p_safe_w: float, p_safe_h: float) -> void:
 	if _loading_overlay == null or _loading_panel == null:
 		return
+	var vp_size: Vector2 = _resolve_menu_viewport_size()
 	var safe_w: float = maxf(320.0, p_safe_w)
 	var safe_h: float = maxf(480.0, p_safe_h)
-	_loading_overlay.position = Vector2.ZERO
-	_loading_overlay.size = Vector2(safe_w, safe_h)
+	var full_offset: Vector2 = -_safe_container.position if _safe_container != null else Vector2.ZERO
+	_loading_overlay.position = full_offset
+	_loading_overlay.size = vp_size
 
-	var panel_w: float = minf(760.0, safe_w - 64.0)
-	var panel_h: float = 410.0
+	var panel_w: float = minf(760.0, safe_w - 48.0)
+	var panel_h: float = minf(410.0, safe_h - 64.0)
 	_loading_panel.custom_minimum_size = Vector2(panel_w, panel_h)
 	_loading_panel.size = Vector2(panel_w, panel_h)
-	_loading_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
+	_loading_panel.position = Vector2((vp_size.x - panel_w) * 0.5, (vp_size.y - panel_h) * 0.5)
 
 
 func _on_browse_button_pressed() -> void:

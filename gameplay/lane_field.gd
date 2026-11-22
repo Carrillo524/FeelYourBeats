@@ -641,8 +641,11 @@ func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:
 	var lane_count: int = _get_active_lane_count()
 	_lane_width = maxf(1.0, p_play_rect.size.x / float(lane_count))
 
-	var max_hit_line_y: float = maxf(0.0, p_hud_safe_rect.end.y - bottom_padding_px - HIT_LINE_VERTICAL_LIFT_PX)
-	var target_hit_line_y: float = (p_play_rect.size.y * hit_line_height_ratio) - HIT_LINE_VERTICAL_LIFT_PX
+	var height_ratio: float = clampf(p_play_rect.size.y / DEFAULT_PLAY_HEIGHT, 0.45, 1.25)
+	var scaled_lift_px: float = HIT_LINE_VERTICAL_LIFT_PX * height_ratio
+	var scaled_bottom_pad_px: float = bottom_padding_px * height_ratio
+	var max_hit_line_y: float = maxf(0.0, p_hud_safe_rect.end.y - scaled_bottom_pad_px - scaled_lift_px)
+	var target_hit_line_y: float = (p_play_rect.size.y * hit_line_height_ratio) - scaled_lift_px
 	_hit_line_y = clampf(target_hit_line_y, 0.0, max_hit_line_y)
 
 	var active_count: int = _active_views.size()

@@ -201,7 +201,59 @@ func _ready() -> void:
 	_setup_shader_material()
 	_apply_active_style_mode()
 	connect_dependencies()
+	_connect_viewport_resize()
+	sync_full_viewport_bounds()
+
+
+func _exit_tree() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.disconnect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root.size_changed.is_connected(_on_viewport_size_changed):
+		tree.root.size_changed.disconnect(_on_viewport_size_changed)
+
+
+func _connect_viewport_resize() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root != vp:
+		if not tree.root.size_changed.is_connected(_on_viewport_size_changed):
+			tree.root.size_changed.connect(_on_viewport_size_changed)
+
+
+func _on_viewport_size_changed() -> void:
+	sync_full_viewport_bounds()
+
+
+func sync_full_viewport_bounds(p_explicit_size: Vector2 = Vector2.ZERO) -> void:
+	var target_size: Vector2 = p_explicit_size
+	if target_size.x > 1.0 and target_size.y > 1.0:
+		set_anchors_preset(Control.PRESET_TOP_LEFT)
+		position = Vector2.ZERO
+		size = target_size
+		if _hit_effect_overlay != null:
+			_hit_effect_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+			_hit_effect_overlay.position = Vector2.ZERO
+			_hit_effect_overlay.size = target_size
+	else:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		if _hit_effect_overlay != null:
+			_hit_effect_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			target_size = vp_rect.size
+		elif size.x > 1.0 and size.y > 1.0:
+			target_size = size
+		else:
+			target_size = Vector2(1080.0, 1920.0)
+	_aspect_ratio = clampf(target_size.x / maxf(1.0, target_size.y), 0.25, 4.0)
 	_sync_shader_parameters()
+	queue_redraw()
+	if _hit_effect_overlay != null:
+		_hit_effect_overlay.queue_redraw()
 
 
 func connect_dependencies() -> void:

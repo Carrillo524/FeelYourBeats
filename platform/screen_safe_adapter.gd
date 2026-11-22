@@ -9,6 +9,8 @@ const MIN_LATERAL_MARGIN_RATIO: float = 0.0
 const MAX_LATERAL_MARGIN_RATIO: float = 0.25
 const MAX_COMBINED_SIDE_MARGIN_RATIO: float = 0.35
 const MAX_VERTICAL_SAFE_INSET_RATIO: float = 0.25
+const PLAY_MAX_WIDTH_RATIO: float = 0.94
+const PLAY_LANDSCAPE_HEIGHT_WIDTH_RATIO: float = 0.62
 
 @export_range(0.0, 0.25, 0.005) var lateral_margin_ratio: float = 0.06
 @export var lane_count: int = 4
@@ -21,11 +23,31 @@ func _ready() -> void:
 	var viewport: Viewport = get_viewport()
 	if viewport != null and not viewport.size_changed.is_connected(_on_viewport_size_changed):
 		viewport.size_changed.connect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root != viewport:
+		if not tree.root.size_changed.is_connected(_on_viewport_size_changed):
+			tree.root.size_changed.connect(_on_viewport_size_changed)
 	recalculate_layout()
 
 
+func _exit_tree() -> void:
+	var viewport: Viewport = get_viewport()
+	if viewport != null and viewport.size_changed.is_connected(_on_viewport_size_changed):
+		viewport.size_changed.disconnect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root.size_changed.is_connected(_on_viewport_size_changed):
+		tree.root.size_changed.disconnect(_on_viewport_size_changed)
+
+
 func recalculate_layout() -> void:
-	var viewport_size: Vector2 = _get_active_viewport_size()
+	recalculate_for_viewport_size(_get_active_viewport_size())
+
+
+func recalculate_for_viewport_size(p_viewport_size: Vector2) -> void:
+	var viewport_size: Vector2 = Vector2(
+		maxf(1.0, p_viewport_size.x),
+		maxf(1.0, p_viewport_size.y)
+	)
 	var window_size: Vector2i = DisplayServer.window_get_size()
 	var display_safe: Rect2i = DisplayServer.get_display_safe_area()
 
@@ -74,7 +96,8 @@ func recalculate_layout() -> void:
 		MIN_LATERAL_MARGIN_RATIO,
 		MAX_LATERAL_MARGIN_RATIO
 	)
-	var base_lateral_margin_px: float = viewport_size.x * clamped_margin_ratio
+	var min_axis_px: float = minf(viewport_size.x, viewport_size.y)
+	var base_lateral_margin_px: float = min_axis_px * clamped_margin_ratio
 	var symmetric_horizontal_safe_px: float = maxf(safe_left, safe_right)
 	var combined_side_margin_px: float = clampf(
 		base_lateral_margin_px + symmetric_horizontal_safe_px,
@@ -82,7 +105,12 @@ func recalculate_layout() -> void:
 		viewport_size.x * MAX_COMBINED_SIDE_MARGIN_RATIO
 	)
 
-	var play_width: float = maxf(1.0, viewport_size.x - (combined_side_margin_px * 2.0))
+	var safe_available_w: float = maxf(1.0, viewport_size.x - (combined_side_margin_px * 2.0))
+	var proportional_max_w: float = minf(
+		viewport_size.x * PLAY_MAX_WIDTH_RATIO,
+		viewport_size.y * PLAY_LANDSCAPE_HEIGHT_WIDTH_RATIO
+	)
+	var play_width: float = maxf(1.0, minf(safe_available_w, proportional_max_w))
 	var play_x: float = (viewport_size.x - play_width) * 0.5
 	_play_rect = Rect2(play_x, 0.0, play_width, viewport_size.y)
 

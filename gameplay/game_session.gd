@@ -73,6 +73,8 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_resolve_and_wire_nodes()
+	_connect_viewport_resize()
+	sync_responsive_viewport_layout()
 
 	if not pending_session_config.is_empty():
 		var launch_cfg: Dictionary = pending_session_config.duplicate()
@@ -93,9 +95,62 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.disconnect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root.size_changed.is_connected(_on_viewport_size_changed):
+		tree.root.size_changed.disconnect(_on_viewport_size_changed)
 	if _is_app_backgrounded:
 		AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
 		_is_app_backgrounded = false
+
+
+func _connect_viewport_resize() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root != vp:
+		if not tree.root.size_changed.is_connected(_on_viewport_size_changed):
+			tree.root.size_changed.connect(_on_viewport_size_changed)
+
+
+func _on_viewport_size_changed() -> void:
+	sync_responsive_viewport_layout()
+
+
+func sync_responsive_viewport_layout(p_explicit_size: Vector2 = Vector2.ZERO) -> void:
+	var has_explicit: bool = p_explicit_size.x > 1.0 and p_explicit_size.y > 1.0
+	var vp_size: Vector2 = p_explicit_size
+	if has_explicit:
+		set_anchors_preset(Control.PRESET_TOP_LEFT)
+		position = Vector2.ZERO
+		size = vp_size
+	else:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			vp_size = vp_rect.size
+		else:
+			vp_size = Vector2(ScreenSafeAdapter.DEFAULT_VIEWPORT_WIDTH, ScreenSafeAdapter.DEFAULT_VIEWPORT_HEIGHT)
+
+	var explicit_arg: Vector2 = vp_size if has_explicit else Vector2.ZERO
+	if reactive_background != null:
+		reactive_background.sync_full_viewport_bounds(explicit_arg)
+	if reactive_particles_layer != null:
+		reactive_particles_layer.sync_full_viewport_bounds(explicit_arg)
+	if safe_hud != null:
+		if has_explicit:
+			safe_hud.set_anchors_preset(Control.PRESET_TOP_LEFT)
+			safe_hud.position = Vector2.ZERO
+			safe_hud.size = vp_size
+		else:
+			safe_hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if screen_safe_adapter != null:
+		screen_safe_adapter.recalculate_for_viewport_size(vp_size)
+	sync_lane_geometry_to_background()
+	call_deferred(&"sync_lane_geometry_to_background")
 
 
 func _process(p_delta: float) -> void:

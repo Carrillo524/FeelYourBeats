@@ -106,6 +106,7 @@ var _beat_trigger_count: int = 0
 var _shooting_star_lane_cursor: int = 0
 var _needs_clear_draw: bool = false
 var _vfx_relief_scale: float = 1.0
+var _last_bounds: Vector2 = Vector2.ZERO
 
 # Pre-allocated typed parallel arrays (0 heap allocations per frame)
 var _active_count: int = 0
@@ -133,7 +134,63 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	connect_dependencies()
+	_connect_viewport_resize()
+	sync_full_viewport_bounds()
 	_rebuild_pool()
+
+
+func _exit_tree() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.disconnect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root.size_changed.is_connected(_on_viewport_size_changed):
+		tree.root.size_changed.disconnect(_on_viewport_size_changed)
+
+
+func _connect_viewport_resize() -> void:
+	var vp: Viewport = get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_on_viewport_size_changed):
+		vp.size_changed.connect(_on_viewport_size_changed)
+	var tree: SceneTree = get_tree()
+	if tree != null and tree.root != null and tree.root != vp:
+		if not tree.root.size_changed.is_connected(_on_viewport_size_changed):
+			tree.root.size_changed.connect(_on_viewport_size_changed)
+
+
+func _on_viewport_size_changed() -> void:
+	sync_full_viewport_bounds()
+
+
+func sync_full_viewport_bounds(p_explicit_size: Vector2 = Vector2.ZERO) -> void:
+	var target_size: Vector2 = p_explicit_size
+	if target_size.x > 1.0 and target_size.y > 1.0:
+		set_anchors_preset(Control.PRESET_TOP_LEFT)
+		position = Vector2.ZERO
+		size = target_size
+	else:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			target_size = vp_rect.size
+		elif size.x > 1.0 and size.y > 1.0:
+			target_size = size
+		else:
+			target_size = DEFAULT_VIEWPORT_SIZE
+
+	var prev_bounds: Vector2 = _last_bounds
+	_last_bounds = target_size
+
+	if prev_bounds.x > 1.0 and prev_bounds.y > 1.0 and _active_count > 0:
+		var sx: float = target_size.x / prev_bounds.x
+		var sy: float = target_size.y / prev_bounds.y
+		for i: int in range(mini(_active_count, _pos.size())):
+			var p: Vector2 = _pos[i]
+			_pos[i] = Vector2(
+				clampf(p.x * sx, 0.0, target_size.x),
+				clampf(p.y * sy, 0.0, target_size.y)
+			)
+	queue_redraw()
 
 
 func connect_dependencies() -> void:

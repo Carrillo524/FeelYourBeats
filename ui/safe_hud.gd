@@ -21,6 +21,7 @@ const CENTER_BANNER_HEIGHT_PX: float = 156.0
 const MODAL_WIDTH_PX: float = 640.0
 const MODAL_HEIGHT_PX: float = 490.0
 const RESULTS_WIDTH_RATIO: float = 0.90
+const RESULTS_MAX_WIDTH_PX: float = 920.0
 const RESULTS_HEIGHT_RATIO: float = 0.84
 const RESULTS_BUTTON_MIN_HEIGHT_PX: float = 96.0
 const COUNTDOWN_BOX_WIDTH_PX: float = 280.0
@@ -273,6 +274,17 @@ func connect_dependencies() -> void:
 
 func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 	_ensure_ui_nodes()
+	var vp_size: Vector2 = size
+	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
+		var vp_rect: Rect2 = get_viewport_rect()
+		if vp_rect.size.x > 1.0 and vp_rect.size.y > 1.0:
+			vp_size = vp_rect.size
+		else:
+			vp_size = Vector2(
+				maxf(320.0, p_hud_safe_rect.end.x),
+				maxf(480.0, p_hud_safe_rect.end.y)
+			)
+
 	_safe_container.position = p_hud_safe_rect.position
 	_safe_container.size = p_hud_safe_rect.size
 
@@ -285,7 +297,7 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 
 	_sync_danger_bar_fill_rect()
 
-	var banner_w: float = safe_w * COMBO_MAX_WIDTH_RATIO
+	var banner_w: float = minf(560.0, safe_w * COMBO_MAX_WIDTH_RATIO)
 	var banner_x: float = (safe_w - banner_w) * 0.5
 	var center_y: float = safe_h * 0.28
 
@@ -307,8 +319,9 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 
 	if _song_progress_bar != null:
 		var bar_w: float = maxf(160.0, safe_w - (SONG_PROGRESS_SIDE_INSET_PX * 2.0))
+		var bottom_margin: float = SONG_PROGRESS_BOTTOM_MARGIN_PX * clampf(safe_h / 1920.0, 0.55, 1.0)
 		var bar_y: float = clampf(
-			safe_h - SONG_PROGRESS_BOTTOM_MARGIN_PX - SONG_PROGRESS_CONTROL_HEIGHT_PX,
+			safe_h - bottom_margin - SONG_PROGRESS_CONTROL_HEIGHT_PX,
 			0.0,
 			maxf(0.0, safe_h - SONG_PROGRESS_CONTROL_HEIGHT_PX)
 		)
@@ -316,25 +329,27 @@ func apply_hud_safe_rect(p_hud_safe_rect: Rect2) -> void:
 		_song_progress_bar.size = Vector2(bar_w, SONG_PROGRESS_CONTROL_HEIGHT_PX)
 		_song_progress_bar.queue_redraw()
 
-	_pause_overlay.position = Vector2.ZERO
-	_pause_overlay.size = p_hud_safe_rect.size
+	# Full-bleed modal backdrops covering 100% of viewport with centered dialogs
+	var full_offset: Vector2 = -p_hud_safe_rect.position
+	_pause_overlay.position = full_offset
+	_pause_overlay.size = vp_size
 
 	var panel_w: float = minf(MODAL_WIDTH_PX, safe_w - 32.0)
 	var panel_h: float = minf(MODAL_HEIGHT_PX, safe_h - 64.0)
-	_pause_panel.position = Vector2((safe_w - panel_w) * 0.5, (safe_h - panel_h) * 0.5)
+	_pause_panel.position = Vector2((vp_size.x - panel_w) * 0.5, (vp_size.y - panel_h) * 0.5)
 	_pause_panel.size = Vector2(panel_w, panel_h)
 	_pause_vbox.position = Vector2(28.0, 24.0)
 	_pause_vbox.size = Vector2(maxf(200.0, panel_w - 56.0), maxf(300.0, panel_h - 48.0))
 
-	_results_overlay.position = Vector2.ZERO
-	_results_overlay.size = p_hud_safe_rect.size
+	_results_overlay.position = full_offset
+	_results_overlay.size = vp_size
 
-	var res_w: float = maxf(300.0, safe_w * RESULTS_WIDTH_RATIO)
-	var res_h: float = maxf(460.0, safe_h * RESULTS_HEIGHT_RATIO)
-	_results_panel.position = Vector2((safe_w - res_w) * 0.5, (safe_h - res_h) * 0.5)
+	var res_w: float = minf(RESULTS_MAX_WIDTH_PX, maxf(300.0, safe_w * RESULTS_WIDTH_RATIO))
+	var res_h: float = minf(safe_h - 48.0, maxf(460.0, safe_h * RESULTS_HEIGHT_RATIO))
+	_results_panel.position = Vector2((vp_size.x - res_w) * 0.5, (vp_size.y - res_h) * 0.5)
 	_results_panel.size = Vector2(res_w, res_h)
 	_results_vbox.position = Vector2(30.0, 28.0)
-	_results_vbox.size = Vector2(maxf(240.0, res_w - 60.0), maxf(400.0, res_h - 56.0))
+	_results_vbox.size = Vector2(maxf(240.0, res_w - 60.0), maxf(380.0, res_h - 56.0))
 
 	_apply_banner_visual_transform()
 
