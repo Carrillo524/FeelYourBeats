@@ -40,13 +40,11 @@ const STARTUP_INTRO_SECONDARY_DELAY_SEC: float = 1.64
 const STARTUP_INTRO_TOTAL_SEC: float = 3.00
 const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
 const PHOTOSENSITIVITY_Z_INDEX: int = 110
-const PHOTOSENSITIVITY_FADE_IN_SEC: float = 0.45
-const PHOTOSENSITIVITY_HOLD_SEC: float = 3.95
-const PHOTOSENSITIVITY_FADE_OUT_SEC: float = 0.60
-const PHOTOSENSITIVITY_TOTAL_SEC: float = 5.00
-const PHOTOSENSITIVITY_TAP_ENABLE_SEC: float = 1.50
-const PHOTOSENSITIVITY_SKIP_FADE_SEC: float = 0.25
-const PHOTOSENSITIVITY_HINT_FADE_SEC: float = 0.35
+const PHOTOSENSITIVITY_FADE_IN_SEC: float = 0.40
+const PHOTOSENSITIVITY_FADE_OUT_SEC: float = 0.35
+const PHOTOSENSITIVITY_HINT_BREATH_SPEED: float = 1.6
+const PHOTOSENSITIVITY_HINT_MIN_ALPHA: float = 0.45
+const PHOTOSENSITIVITY_HINT_MAX_ALPHA: float = 0.95
 const PHOTOSENSITIVITY_SIDE_MARGIN_PX: float = 48.0
 const PHOTOSENSITIVITY_TITLE_FONT_SIZE: int = 50
 const PHOTOSENSITIVITY_BODY_FONT_SIZE: int = 34
@@ -54,7 +52,7 @@ const PHOTOSENSITIVITY_HINT_FONT_SIZE: int = 28
 const PHOTOSENSITIVITY_ICON_HEIGHT_PX: float = 176.0
 const PHOTOSENSITIVITY_TITLE_TEXT: String = "AVISO DE FOTOSENSIBILIDAD"
 const PHOTOSENSITIVITY_BODY_TEXT: String = "Este juego contiene destellos luminosos, patrones de alto contraste y efectos visuales rítmicos que pueden provocar molestias o crisis en personas con epilepsia fotosensible. Si experimentas mareos, alteraciones visuales o malestar, detén el juego de inmediato."
-const PHOTOSENSITIVITY_HINT_TEXT: String = "Toca para continuar"
+const PHOTOSENSITIVITY_HINT_TEXT: String = "TOCA PARA CONTINUAR"
 const COLOR_PHOTOSENSITIVITY_AMBER: Color = Color(1.0, 0.78, 0.32, 1.0)
 const COLOR_PHOTOSENSITIVITY_CYAN_GLOW: Color = Color(0.38, 0.92, 1.0, 0.22)
 const COLOR_PHOTOSENSITIVITY_BODY: Color = Color(0.88, 0.92, 0.98, 1.0)
@@ -289,15 +287,15 @@ var _tab_transition_incoming: Control = null
 var _intro_wave_progress: float = 0.0
 var _intro_wave_center: Vector2 = Vector2.ZERO
 var _is_showing_photosensitivity_warning: bool = false
-var _is_skipping_photosensitivity_warning: bool = false
+var _is_dismissing_photosensitivity_warning: bool = false
+var _photosensitivity_input_ready: bool = false
 var _photosensitivity_elapsed_sec: float = 0.0
-var _photosensitivity_hint_revealed: bool = false
+var _photosensitivity_hint_phase: float = 0.0
 var _photosensitivity_overlay: Control = null
 var _photosensitivity_content: VBoxContainer = null
 var _photosensitivity_icon: Control = null
 var _photosensitivity_hint_label: Label = null
 var _photosensitivity_tween: Tween = null
-var _photosensitivity_hint_tween: Tween = null
 var _pending_import_after_permission: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 var _active_worker_task_id: int = -1
@@ -509,6 +507,10 @@ func _handle_app_foregrounded() -> void:
 
 
 func _input(p_event: InputEvent) -> void:
+	if _is_showing_photosensitivity_warning:
+		_handle_photosensitivity_input(p_event)
+		return
+
 	if p_event is InputEventKey:
 		var key_event: InputEventKey = p_event as InputEventKey
 		if key_event.pressed and not key_event.echo:
@@ -518,10 +520,6 @@ func _input(p_event: InputEvent) -> void:
 				if vp != null:
 					vp.set_input_as_handled()
 				handle_back_request()
-		return
-
-	if _is_showing_photosensitivity_warning:
-		_handle_photosensitivity_input(p_event)
 		return
 
 	if not _is_playing_startup_intro:
@@ -1562,20 +1560,21 @@ func get_photosensitivity_overlay() -> Control:
 	return _photosensitivity_overlay
 
 
-func can_skip_photosensitivity_warning() -> bool:
+func can_continue_from_photosensitivity_warning() -> bool:
 	return (
 		_is_showing_photosensitivity_warning
-		and not _is_skipping_photosensitivity_warning
-		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_TAP_ENABLE_SEC
+		and _photosensitivity_input_ready
+		and not _is_dismissing_photosensitivity_warning
 	)
 
 
 func _start_photosensitivity_warning() -> void:
 	_has_shown_photosensitivity_warning = true
 	_is_showing_photosensitivity_warning = true
-	_is_skipping_photosensitivity_warning = false
+	_is_dismissing_photosensitivity_warning = false
+	_photosensitivity_input_ready = false
 	_photosensitivity_elapsed_sec = 0.0
-	_photosensitivity_hint_revealed = false
+	_photosensitivity_hint_phase = 0.0
 	_kill_photosensitivity_tweens()
 	if _photosensitivity_overlay != null:
 		_photosensitivity_overlay.queue_free()
@@ -1636,7 +1635,7 @@ func _start_photosensitivity_warning() -> void:
 	_photosensitivity_hint_label.text = PHOTOSENSITIVITY_HINT_TEXT
 	_photosensitivity_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_photosensitivity_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, PHOTOSENSITIVITY_HINT_MAX_ALPHA)
 	_photosensitivity_content.add_child(_photosensitivity_hint_label)
 
 	if _font_registry != null:
@@ -1656,7 +1655,7 @@ func _start_photosensitivity_warning() -> void:
 
 	_photosensitivity_overlay.move_to_front()
 
-	# Timeline: 0.45s fade-in -> 3.95s static hold -> 0.60s fade-out (5.00s total) -> 3.0s menu intro
+	# Fade-in only (~0.40s); screen remains paused indefinitely until user taps/accepts
 	_photosensitivity_tween = create_tween()
 	_photosensitivity_tween.tween_property(
 		_photosensitivity_content,
@@ -1664,64 +1663,82 @@ func _start_photosensitivity_warning() -> void:
 		1.0,
 		PHOTOSENSITIVITY_FADE_IN_SEC
 	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_HOLD_SEC)
-	_photosensitivity_tween.tween_property(
-		_photosensitivity_content,
-		"modulate:a",
-		0.0,
-		PHOTOSENSITIVITY_FADE_OUT_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	_photosensitivity_tween.tween_callback(_finish_photosensitivity_warning)
+	_photosensitivity_tween.tween_callback(_on_photosensitivity_fade_in_finished)
+
+
+func _on_photosensitivity_fade_in_finished() -> void:
+	_photosensitivity_tween = null
+	if _is_showing_photosensitivity_warning and not _is_dismissing_photosensitivity_warning:
+		_photosensitivity_input_ready = true
 
 
 func _step_photosensitivity_warning(p_delta: float) -> void:
 	_photosensitivity_elapsed_sec += p_delta
 	if (
-		not _photosensitivity_hint_revealed
-		and not _is_skipping_photosensitivity_warning
-		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_TAP_ENABLE_SEC
+		not _photosensitivity_input_ready
+		and not _is_dismissing_photosensitivity_warning
+		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_FADE_IN_SEC
+	):
+		_photosensitivity_input_ready = true
+
+	if (
+		_photosensitivity_input_ready
+		and not _is_dismissing_photosensitivity_warning
 		and _photosensitivity_hint_label != null
 	):
-		_photosensitivity_hint_revealed = true
-		_photosensitivity_hint_tween = create_tween()
-		_photosensitivity_hint_tween.tween_property(
-			_photosensitivity_hint_label,
-			"modulate:a",
-			1.0,
-			PHOTOSENSITIVITY_HINT_FADE_SEC
-		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_photosensitivity_hint_phase += p_delta * PHOTOSENSITIVITY_HINT_BREATH_SPEED
+		var breath_wave: float = 0.5 + (0.5 * cos(_photosensitivity_hint_phase))
+		var hint_alpha: float = lerpf(
+			PHOTOSENSITIVITY_HINT_MIN_ALPHA,
+			PHOTOSENSITIVITY_HINT_MAX_ALPHA,
+			breath_wave
+		)
+		_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, hint_alpha)
 
 
 func _handle_photosensitivity_input(p_event: InputEvent) -> void:
-	var is_tap: bool = false
+	if p_event == null:
+		return
+	var is_continue: bool = false
 	if p_event is InputEventScreenTouch:
-		is_tap = (p_event as InputEventScreenTouch).pressed
+		is_continue = (p_event as InputEventScreenTouch).pressed
 	elif p_event is InputEventMouseButton:
 		var mb: InputEventMouseButton = p_event as InputEventMouseButton
-		is_tap = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
-	# Swallow every pointer event so nothing reaches the menu underneath
+		is_continue = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif p_event.is_action_pressed(&"ui_accept") and not p_event.is_echo():
+		is_continue = true
+
+	# Swallow every input event while warning is active so nothing reaches the menu underneath
 	var vp: Viewport = get_viewport()
 	if vp != null:
 		vp.set_input_as_handled()
-	if is_tap:
-		request_skip_photosensitivity_warning()
+
+	if is_continue:
+		request_continue_from_photosensitivity_warning()
 
 
-func request_skip_photosensitivity_warning() -> bool:
-	if not can_skip_photosensitivity_warning():
+func request_continue_from_photosensitivity_warning() -> bool:
+	if not can_continue_from_photosensitivity_warning():
 		return false
-	_is_skipping_photosensitivity_warning = true
+	_is_dismissing_photosensitivity_warning = true
 	_kill_photosensitivity_tweens()
+
+	var global_sfx: UiSfxPlayer = get_node_or_null("/root/GlobalUiSfx") as UiSfxPlayer
+	if global_sfx != null:
+		global_sfx.play_button_click()
+	elif ui_sfx_player != null:
+		ui_sfx_player.play_button_click()
+
 	_photosensitivity_tween = create_tween()
 	if _photosensitivity_content != null:
 		_photosensitivity_tween.tween_property(
 			_photosensitivity_content,
 			"modulate:a",
 			0.0,
-			PHOTOSENSITIVITY_SKIP_FADE_SEC
+			PHOTOSENSITIVITY_FADE_OUT_SEC
 		).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	else:
-		_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_SKIP_FADE_SEC)
+		_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_FADE_OUT_SEC)
 	_photosensitivity_tween.tween_callback(_finish_photosensitivity_warning)
 	return true
 
@@ -1730,11 +1747,9 @@ func _finish_photosensitivity_warning() -> void:
 	if not _is_showing_photosensitivity_warning:
 		return
 	_is_showing_photosensitivity_warning = false
-	_is_skipping_photosensitivity_warning = false
+	_is_dismissing_photosensitivity_warning = false
+	_photosensitivity_input_ready = false
 	_photosensitivity_tween = null
-	if _photosensitivity_hint_tween != null:
-		_photosensitivity_hint_tween.kill()
-		_photosensitivity_hint_tween = null
 
 	# Start the 3.0s intro first: its opaque dark veil takes over seamlessly from pure black
 	if not _has_played_startup_intro:
@@ -1753,9 +1768,6 @@ func _kill_photosensitivity_tweens() -> void:
 	if _photosensitivity_tween != null:
 		_photosensitivity_tween.kill()
 		_photosensitivity_tween = null
-	if _photosensitivity_hint_tween != null:
-		_photosensitivity_hint_tween.kill()
-		_photosensitivity_hint_tween = null
 
 
 func _draw_photosensitivity_icon() -> void:
