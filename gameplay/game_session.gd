@@ -39,6 +39,8 @@ var _bg_config: ReactiveBackgroundConfig = ReactiveBackgroundConfig.new()
 var _effects_config: GameplayEffectsConfig = GameplayEffectsConfig.new()
 var _last_chart_loaded_from_cache: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
+var _is_app_backgrounded: bool = false
+var _master_was_muted_before_bg: bool = false
 
 
 static func set_pending_session(p_config: Dictionary) -> void:
@@ -76,9 +78,51 @@ func _ready() -> void:
 		start_demo_session(default_note_type_mode)
 
 
+func _exit_tree() -> void:
+	if _is_app_backgrounded:
+		AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
+		_is_app_backgrounded = false
+
+
 func _notification(p_what: int) -> void:
-	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST or p_what == NOTIFICATION_WM_CLOSE_REQUEST:
-		handle_back_request()
+	match p_what:
+		NOTIFICATION_WM_GO_BACK_REQUEST, NOTIFICATION_WM_CLOSE_REQUEST:
+			handle_back_request()
+		NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT:
+			_handle_app_backgrounded()
+		NOTIFICATION_APPLICATION_RESUMED, NOTIFICATION_APPLICATION_FOCUS_IN:
+			_handle_app_foregrounded()
+
+
+func _handle_app_backgrounded() -> void:
+	if _is_app_backgrounded:
+		AudioServer.set_bus_mute(0, true)
+		return
+	_is_app_backgrounded = true
+	_master_was_muted_before_bg = AudioServer.is_bus_mute(0)
+
+	var results_open: bool = safe_hud != null and safe_hud.is_results_overlay_open()
+	var pause_open: bool = safe_hud != null and safe_hud.is_pause_menu_open()
+	var countdown_active: bool = safe_hud != null and safe_hud.is_resume_countdown_active()
+
+	if not results_open:
+		if safe_hud != null:
+			if not pause_open or countdown_active:
+				safe_hud.open_pause_menu()
+		elif dsp_clock != null:
+			dsp_clock.pause()
+
+		if dsp_clock != null and dsp_clock.audio_player != null and dsp_clock.audio_player.playing:
+			dsp_clock.audio_player.stream_paused = true
+
+	AudioServer.set_bus_mute(0, true)
+
+
+func _handle_app_foregrounded() -> void:
+	if not _is_app_backgrounded:
+		return
+	_is_app_backgrounded = false
+	AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
 
 
 func _input(p_event: InputEvent) -> void:

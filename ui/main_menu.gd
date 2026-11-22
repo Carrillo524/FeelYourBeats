@@ -169,6 +169,9 @@ var _tp_variant: PackedInt32Array = PackedInt32Array()
 var _tp_cursor: int = 0
 var _tp_seed: int = 1
 var _last_touch_preview_msec: int = -100
+var _is_app_backgrounded: bool = false
+var _master_was_muted_before_bg: bool = false
+var _background_paused_players: Array[AudioStreamPlayer] = []
 
 # Floating Song Setup Modal
 var _song_modal_backdrop: ColorRect = null
@@ -382,11 +385,77 @@ func _exit_tree() -> void:
 	if _transition_tween != null:
 		_transition_tween.kill()
 		_transition_tween = null
+	if _is_app_backgrounded:
+		AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
+		_is_app_backgrounded = false
+	_background_paused_players.clear()
 
 
 func _notification(p_what: int) -> void:
-	if p_what == NOTIFICATION_WM_GO_BACK_REQUEST or p_what == NOTIFICATION_WM_CLOSE_REQUEST:
-		handle_back_request()
+	match p_what:
+		NOTIFICATION_WM_GO_BACK_REQUEST, NOTIFICATION_WM_CLOSE_REQUEST:
+			handle_back_request()
+		NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT:
+			_handle_app_backgrounded()
+		NOTIFICATION_APPLICATION_RESUMED, NOTIFICATION_APPLICATION_FOCUS_IN:
+			_handle_app_foregrounded()
+
+
+func _collect_menu_audio_players() -> Array[AudioStreamPlayer]:
+	var players: Array[AudioStreamPlayer] = []
+	_append_audio_players_recursive(self, players)
+	return players
+
+
+func _append_audio_players_recursive(p_node: Node, p_out: Array[AudioStreamPlayer]) -> void:
+	if p_node == null:
+		return
+	if p_node is AudioStreamPlayer:
+		var ap: AudioStreamPlayer = p_node as AudioStreamPlayer
+		if not p_out.has(ap):
+			p_out.append(ap)
+	var children: Array[Node] = p_node.get_children()
+	for i: int in range(children.size()):
+		_append_audio_players_recursive(children[i], p_out)
+
+
+func _handle_app_backgrounded() -> void:
+	if _is_app_backgrounded:
+		AudioServer.set_bus_mute(0, true)
+		return
+	_is_app_backgrounded = true
+	_master_was_muted_before_bg = AudioServer.is_bus_mute(0)
+	_background_paused_players.clear()
+
+	var players: Array[AudioStreamPlayer] = _collect_menu_audio_players()
+	for i: int in range(players.size()):
+		var ap: AudioStreamPlayer = players[i]
+		if ap != null and ap.playing and not ap.stream_paused:
+			ap.stream_paused = true
+			_background_paused_players.append(ap)
+
+	AudioServer.set_bus_mute(0, true)
+
+
+func _handle_app_foregrounded() -> void:
+	if not _is_app_backgrounded:
+		return
+	_is_app_backgrounded = false
+	AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
+
+	var bgm_audio_player: AudioStreamPlayer = null
+	if menu_bgm_player != null:
+		bgm_audio_player = menu_bgm_player.get_node_or_null("MenuBgmAudioPlayer") as AudioStreamPlayer
+
+	for i: int in range(_background_paused_players.size()):
+		var ap: AudioStreamPlayer = _background_paused_players[i]
+		if not is_instance_valid(ap):
+			continue
+		if ap == bgm_audio_player and menu_bgm_player != null and not menu_bgm_player.is_bgm_enabled:
+			continue
+		ap.stream_paused = false
+
+	_background_paused_players.clear()
 
 
 func _input(p_event: InputEvent) -> void:
