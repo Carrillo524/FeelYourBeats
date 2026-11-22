@@ -42,7 +42,7 @@ const HOLD_TICK_SPARK_COUNT: int = 6
 const HOLD_SPARK_INTERVAL_SEC: float = 0.045
 const PARTICLE_GRAVITY_PX_PER_SEC2: float = 340.0
 
-const HIT_EFFECT_CLASSIC: String = "classic"
+const HIT_EFFECT_CLASSIC: String = GameplayEffectsConfig.HIT_CLASSIC
 const MAX_HOLD_ABSORB_RINGS: int = 16
 const HOLD_RING_SPAWN_INTERVAL_SEC: float = 0.115
 const HOLD_RING_DURATION_SEC: float = 0.40
@@ -50,6 +50,30 @@ const HOLD_RING_RISE_SPEED_PX_PER_SEC: float = 175.0
 const HOLD_COMPLETE_FLARE_DECAY_RATE: float = 5.2
 const COLOR_HOLD_ABSORB_CYAN: Color = Color(0.18, 0.92, 1.0, 1.0)
 const COLOR_HOLD_ABSORB_TURQUOISE: Color = Color(0.24, 0.98, 0.86, 1.0)
+
+# Fixed-size preallocated Object Pools for note vanish effects (0 allocations per frame)
+const MAX_FIREWORK_RAYS: int = 96
+const FIREWORK_RAYS_PERFECT: int = 11
+const FIREWORK_RAYS_GREAT: int = 9
+const FIREWORK_RAYS_GOOD: int = 8
+const FIREWORK_NEON_COLORS: Array[Color] = [
+	Color(1.0, 0.94, 0.24, 1.0),
+	Color(0.28, 1.0, 0.56, 1.0),
+	Color(1.0, 0.30, 0.78, 1.0),
+	Color(0.24, 0.96, 1.0, 1.0),
+	Color(0.74, 0.48, 1.0, 1.0),
+]
+
+const MAX_ZOOM_FADE_GHOSTS: int = 24
+const ZOOM_FADE_DURATION_SEC: float = 0.22
+const ZOOM_FADE_MAX_SCALE: float = 1.35
+
+const MAX_FRACTURE_SHARDS: int = 84
+const FRACTURE_SHARDS_PERFECT: int = 7
+const FRACTURE_SHARDS_GREAT: int = 6
+const FRACTURE_SHARDS_GOOD: int = 5
+const FRACTURE_DURATION_SEC: float = 0.22
+const FRACTURE_GRAVITY_PX_PER_SEC2: float = 420.0
 
 const COLOR_PERFECT_A: Color = Color(0.35, 1.0, 0.96, 1.0)
 const COLOR_PERFECT_B: Color = Color(1.0, 0.88, 0.28, 1.0)
@@ -94,9 +118,45 @@ var _hold_absorb_rings: Array[Dictionary] = []
 var _hit_particles: Array[Dictionary] = []
 var _hold_spark_accumulator_sec: float = 0.0
 var _hold_ring_accumulator_sec: float = 0.0
-var _hit_effect_style: String = HIT_EFFECT_CLASSIC
+var _hit_effect_style: String = GameplayEffectsConfig.HIT_CLASSIC
+var _touch_effect_style: String = GameplayEffectsConfig.TOUCH_WAVE
+var _vanish_effect_style: String = GameplayEffectsConfig.VANISH_FIREWORK
+var _touch_renderer: TouchEffectRenderer = TouchEffectRenderer.new()
 var _hold_contact_halo_texture: GradientTexture2D = null
 var _fx_seed_counter: int = 1
+
+# Preallocated FireWork ray pool (fixed size = MAX_FIREWORK_RAYS)
+var _fw_active: PackedByteArray = PackedByteArray()
+var _fw_age: PackedFloat32Array = PackedFloat32Array()
+var _fw_duration: PackedFloat32Array = PackedFloat32Array()
+var _fw_origin: PackedVector2Array = PackedVector2Array()
+var _fw_dir: PackedVector2Array = PackedVector2Array()
+var _fw_max_dist: PackedFloat32Array = PackedFloat32Array()
+var _fw_ray_len: PackedFloat32Array = PackedFloat32Array()
+var _fw_color: PackedColorArray = PackedColorArray()
+var _fw_cursor: int = 0
+
+# Preallocated Zoom + Fade ghost pool (fixed size = MAX_ZOOM_FADE_GHOSTS)
+var _zf_active: PackedByteArray = PackedByteArray()
+var _zf_age: PackedFloat32Array = PackedFloat32Array()
+var _zf_duration: PackedFloat32Array = PackedFloat32Array()
+var _zf_center: PackedVector2Array = PackedVector2Array()
+var _zf_base_size: PackedVector2Array = PackedVector2Array()
+var _zf_color: PackedColorArray = PackedColorArray()
+var _zf_cursor: int = 0
+
+# Preallocated Fracture shard pool (fixed size = MAX_FRACTURE_SHARDS, 0 allocs/frame)
+var _fr_active: PackedByteArray = PackedByteArray()
+var _fr_age: PackedFloat32Array = PackedFloat32Array()
+var _fr_duration: PackedFloat32Array = PackedFloat32Array()
+var _fr_pos: PackedVector2Array = PackedVector2Array()
+var _fr_vel: PackedVector2Array = PackedVector2Array()
+var _fr_angle: PackedFloat32Array = PackedFloat32Array()
+var _fr_ang_vel: PackedFloat32Array = PackedFloat32Array()
+var _fr_color: PackedColorArray = PackedColorArray()
+var _fr_local_polys: Array[PackedVector2Array] = []
+var _fr_world_poly_buf: PackedVector2Array = PackedVector2Array()
+var _fr_cursor: int = 0
 var _divider_beat_pulse: float = 0.0
 var _divider_bass_energy: float = 0.0
 var _divider_drop_intensity: float = 0.0
@@ -118,6 +178,7 @@ static func resolve_speed_factor(p_speed_level: int) -> float:
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hold_contact_halo_texture = _create_hold_contact_halo_texture()
+	_init_vanish_effect_pools()
 
 
 func _ready() -> void:
@@ -234,6 +295,9 @@ func _process(p_delta: float) -> void:
 		needs_redraw = true
 		particle_idx -= 1
 
+	if _step_vanish_effect_pools(dt):
+		needs_redraw = true
+
 	if _divider_beat_pulse > 0.002 or _divider_bass_energy > 0.002 or _divider_drop_intensity > 0.002 or _divider_shake_amp_px > 0.02:
 		_divider_beat_pulse *= exp(-DIVIDER_GLOW_DECAY_RATE * dt)
 		if _divider_beat_pulse < 0.002:
@@ -323,6 +387,7 @@ func _draw() -> void:
 
 	_draw_hold_consumption_effects(lane_count)
 	_draw_touch_ripples()
+	_draw_vanish_effects()
 	_draw_hit_particles()
 
 
@@ -404,21 +469,9 @@ func _draw_touch_ripples() -> void:
 		var age: float = ripple["age"] as float
 		var duration: float = maxf(0.01, ripple["duration"] as float)
 		var base_color: Color = ripple["color"] as Color
+		var variant: int = int(ripple.get("variant", 0))
 		var t: float = clampf(age / duration, 0.0, 1.0)
-		var eased_t: float = 1.0 - pow(1.0 - t, 2.4)
-		var radius: float = lerpf(RIPPLE_START_RADIUS_PX, RIPPLE_END_RADIUS_PX, eased_t)
-		var alpha: float = (1.0 - t) * base_color.a
-		var stroke_w: float = lerpf(4.2, 1.4, t)
-
-		var halo_col: Color = Color(base_color.r, base_color.g, base_color.b, alpha * 0.34)
-		var core_col: Color = Color(
-			minf(1.0, base_color.r + 0.25),
-			minf(1.0, base_color.g + 0.25),
-			minf(1.0, base_color.b + 0.25),
-			alpha
-		)
-		draw_arc(pos, radius, 0.0, TAU, 28, halo_col, stroke_w * 2.6)
-		draw_arc(pos, radius, 0.0, TAU, 28, core_col, stroke_w)
+		_touch_renderer.draw_touch_effect(self, pos, t, _touch_effect_style, base_color, variant)
 
 
 func _draw_hit_particles() -> void:
@@ -621,8 +674,58 @@ func get_active_particle_count() -> int:
 	return _hit_particles.size()
 
 
+func apply_gameplay_effects_config(p_config: GameplayEffectsConfig) -> void:
+	if p_config == null:
+		_hit_effect_style = GameplayEffectsConfig.HIT_CLASSIC
+		_touch_effect_style = GameplayEffectsConfig.TOUCH_WAVE
+		_vanish_effect_style = GameplayEffectsConfig.VANISH_FIREWORK
+	else:
+		_hit_effect_style = GameplayEffectsConfig.sanitize_hit_effect(p_config.hit_effect)
+		_touch_effect_style = GameplayEffectsConfig.sanitize_touch_effect(p_config.touch_effect)
+		_vanish_effect_style = GameplayEffectsConfig.sanitize_vanish_effect(p_config.vanish_effect)
+	queue_redraw()
+
+
 func get_hit_effect_style() -> String:
 	return _hit_effect_style
+
+
+func get_touch_effect_style() -> String:
+	return _touch_effect_style
+
+
+func get_vanish_effect_style() -> String:
+	return _vanish_effect_style
+
+
+func get_active_firework_ray_count() -> int:
+	var active: int = 0
+	for i: int in range(_fw_active.size()):
+		if _fw_active[i] != 0:
+			active += 1
+	return active
+
+
+func get_active_zoom_fade_count() -> int:
+	var active: int = 0
+	for i: int in range(_zf_active.size()):
+		if _zf_active[i] != 0:
+			active += 1
+	return active
+
+
+func get_active_fracture_shard_count() -> int:
+	var active: int = 0
+	for i: int in range(_fr_active.size()):
+		if _fr_active[i] != 0:
+			active += 1
+	return active
+
+
+static func compute_zoom_fade_scale(p_progress: float) -> float:
+	var t: float = clampf(p_progress, 0.0, 1.0)
+	var eased: float = 1.0 - pow(1.0 - t, 2.2)
+	return lerpf(1.0, ZOOM_FADE_MAX_SCALE, eased)
 
 
 func get_hold_contact_halo_texture() -> GradientTexture2D:
@@ -881,77 +984,354 @@ func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
 	if _touch_ripples.size() >= MAX_ACTIVE_RIPPLES:
 		_touch_ripples.remove_at(0)
 
+	_fx_seed_counter += 1
+	var variant: int = posmod((_fx_seed_counter * 7) + int(p_pos.x), TouchEffectRenderer.NOTE_VARIANT_COUNT)
 	_touch_ripples.append({
 		"pos": p_pos,
 		"age": 0.0,
-		"duration": RIPPLE_DURATION_SEC,
+		"duration": TouchEffectRenderer.get_duration_for_style(_touch_effect_style),
 		"color": p_color,
+		"variant": variant,
 	})
 	queue_redraw()
 
 
 func _spawn_judgment_particles(p_lane: int, p_grade: int) -> void:
-	var count: int = 0
-	var min_speed: float = 0.0
-	var max_speed: float = 0.0
-	var min_radius: float = 3.0
-	var max_radius: float = 5.0
-	var duration_sec: float = 0.25
+	if p_grade == HitJudge.JudgmentGrade.MISS:
+		return
 
+	match _vanish_effect_style:
+		GameplayEffectsConfig.VANISH_ZOOM_FADE:
+			_spawn_zoom_fade_ghost(p_lane, p_grade)
+		GameplayEffectsConfig.VANISH_FRACTURE:
+			_spawn_fracture_shards(p_lane, p_grade)
+		_:
+			_spawn_firework_rays(p_lane, p_grade)
+
+	queue_redraw()
+
+
+func _init_vanish_effect_pools() -> void:
+	_fw_active.resize(MAX_FIREWORK_RAYS)
+	_fw_age.resize(MAX_FIREWORK_RAYS)
+	_fw_duration.resize(MAX_FIREWORK_RAYS)
+	_fw_origin.resize(MAX_FIREWORK_RAYS)
+	_fw_dir.resize(MAX_FIREWORK_RAYS)
+	_fw_max_dist.resize(MAX_FIREWORK_RAYS)
+	_fw_ray_len.resize(MAX_FIREWORK_RAYS)
+	_fw_color.resize(MAX_FIREWORK_RAYS)
+	for i: int in range(MAX_FIREWORK_RAYS):
+		_fw_active[i] = 0
+		_fw_age[i] = 0.0
+		_fw_duration[i] = 0.30
+		_fw_origin[i] = Vector2.ZERO
+		_fw_dir[i] = Vector2.UP
+		_fw_max_dist[i] = 90.0
+		_fw_ray_len[i] = 24.0
+		_fw_color[i] = Color.WHITE
+
+	_zf_active.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_age.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_duration.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_center.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_base_size.resize(MAX_ZOOM_FADE_GHOSTS)
+	_zf_color.resize(MAX_ZOOM_FADE_GHOSTS)
+	for j: int in range(MAX_ZOOM_FADE_GHOSTS):
+		_zf_active[j] = 0
+		_zf_age[j] = 0.0
+		_zf_duration[j] = ZOOM_FADE_DURATION_SEC
+		_zf_center[j] = Vector2.ZERO
+		_zf_base_size[j] = Vector2(180.0, NoteView.DEFAULT_HEAD_HEIGHT_PX)
+		_zf_color[j] = COLOR_PERFECT_A
+
+	_fr_active.resize(MAX_FRACTURE_SHARDS)
+	_fr_age.resize(MAX_FRACTURE_SHARDS)
+	_fr_duration.resize(MAX_FRACTURE_SHARDS)
+	_fr_pos.resize(MAX_FRACTURE_SHARDS)
+	_fr_vel.resize(MAX_FRACTURE_SHARDS)
+	_fr_angle.resize(MAX_FRACTURE_SHARDS)
+	_fr_ang_vel.resize(MAX_FRACTURE_SHARDS)
+	_fr_color.resize(MAX_FRACTURE_SHARDS)
+	_fr_local_polys.clear()
+	for k: int in range(MAX_FRACTURE_SHARDS):
+		_fr_active[k] = 0
+		_fr_age[k] = 0.0
+		_fr_duration[k] = FRACTURE_DURATION_SEC
+		_fr_pos[k] = Vector2.ZERO
+		_fr_vel[k] = Vector2.ZERO
+		_fr_angle[k] = 0.0
+		_fr_ang_vel[k] = 0.0
+		_fr_color[k] = COLOR_PERFECT_A
+		var poly_slot: PackedVector2Array = PackedVector2Array()
+		poly_slot.resize(4)
+		_fr_local_polys.append(poly_slot)
+	_fr_world_poly_buf.resize(4)
+
+
+func _clear_vanish_effect_pools() -> void:
+	for i: int in range(_fw_active.size()):
+		_fw_active[i] = 0
+	for j: int in range(_zf_active.size()):
+		_zf_active[j] = 0
+	for k: int in range(_fr_active.size()):
+		_fr_active[k] = 0
+	_fw_cursor = 0
+	_zf_cursor = 0
+	_fr_cursor = 0
+
+
+func _step_vanish_effect_pools(p_dt: float) -> bool:
+	var any_active: bool = false
+
+	for i: int in range(_fw_active.size()):
+		if _fw_active[i] == 0:
+			continue
+		var next_age: float = _fw_age[i] + p_dt
+		if next_age >= _fw_duration[i]:
+			_fw_active[i] = 0
+		else:
+			_fw_age[i] = next_age
+		any_active = true
+
+	for j: int in range(_zf_active.size()):
+		if _zf_active[j] == 0:
+			continue
+		var next_age: float = _zf_age[j] + p_dt
+		if next_age >= _zf_duration[j]:
+			_zf_active[j] = 0
+		else:
+			_zf_age[j] = next_age
+		any_active = true
+
+	for k: int in range(_fr_active.size()):
+		if _fr_active[k] == 0:
+			continue
+		var next_age: float = _fr_age[k] + p_dt
+		if next_age >= _fr_duration[k]:
+			_fr_active[k] = 0
+		else:
+			_fr_age[k] = next_age
+			var vel: Vector2 = _fr_vel[k]
+			vel.y += FRACTURE_GRAVITY_PX_PER_SEC2 * p_dt
+			_fr_vel[k] = vel
+			_fr_pos[k] = _fr_pos[k] + (vel * p_dt)
+			_fr_angle[k] = _fr_angle[k] + (_fr_ang_vel[k] * p_dt)
+		any_active = true
+
+	return any_active
+
+
+func _spawn_firework_rays(p_lane: int, p_grade: int) -> void:
+	var ray_count: int = FIREWORK_RAYS_GOOD
+	var max_dist_base: float = 82.0
+	var ray_len_base: float = 22.0
+	var dur_sec: float = 0.26
 	match p_grade:
 		HitJudge.JudgmentGrade.PERFECT:
-			count = PERFECT_PARTICLE_COUNT
-			min_speed = 230.0
-			max_speed = 460.0
-			min_radius = 5.2
-			max_radius = 8.4
-			duration_sec = 0.36
+			ray_count = FIREWORK_RAYS_PERFECT
+			max_dist_base = 122.0
+			ray_len_base = 34.0
+			dur_sec = 0.34
 		HitJudge.JudgmentGrade.GREAT:
-			count = GREAT_PARTICLE_COUNT
-			min_speed = 155.0
-			max_speed = 310.0
-			min_radius = 4.2
-			max_radius = 6.4
-			duration_sec = 0.29
+			ray_count = FIREWORK_RAYS_GREAT
+			max_dist_base = 100.0
+			ray_len_base = 28.0
+			dur_sec = 0.30
 		HitJudge.JudgmentGrade.GOOD:
-			count = GOOD_PARTICLE_COUNT
-			min_speed = 95.0
-			max_speed = 190.0
-			min_radius = 3.2
-			max_radius = 4.8
-			duration_sec = 0.22
+			ray_count = FIREWORK_RAYS_GOOD
+			max_dist_base = 82.0
+			ray_len_base = 22.0
+			dur_sec = 0.26
 		_:
 			return
 
 	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
-	if p_grade == HitJudge.JudgmentGrade.PERFECT:
-		_spawn_touch_ripple(origin, COLOR_PERFECT_B)
+	var palette_len: int = FIREWORK_NEON_COLORS.size()
+	var phase_rot: float = _pseudo_rand_signed(_fx_seed_counter + (p_lane * 37)) * 0.35
 
-	for i: int in range(count):
+	for i: int in range(ray_count):
 		_fx_seed_counter += 1
-		var angle_norm: float = float(i) / float(maxi(1, count))
-		var jitter: float = _pseudo_rand_signed(_fx_seed_counter + i * 17) * 0.28
-		var angle_rad: float = lerpf(-PI * 0.92, -PI * 0.08, angle_norm) + jitter
-		var speed_ratio: float = 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 13 + i * 31)
-		var speed: float = lerpf(min_speed, max_speed, speed_ratio)
-		var vel: Vector2 = Vector2(cos(angle_rad), sin(angle_rad)) * speed
-		var radius: float = lerpf(min_radius, max_radius, speed_ratio)
+		var slot: int = _fw_cursor
+		_fw_cursor = (_fw_cursor + 1) % MAX_FIREWORK_RAYS
 
-		var col: Color = COLOR_GOOD_A
-		if p_grade == HitJudge.JudgmentGrade.PERFECT:
-			var mod3: int = i % 3
-			if mod3 == 0:
-				col = COLOR_PERFECT_A
-			elif mod3 == 1:
-				col = COLOR_PERFECT_B
-			else:
-				col = COLOR_PERFECT_C
-		elif p_grade == HitJudge.JudgmentGrade.GREAT:
-			col = COLOR_GREAT_A if (i % 2) == 0 else COLOR_GREAT_B
+		var angle_rad: float = ((float(i) / float(ray_count)) * TAU) + phase_rot + (_pseudo_rand_signed(_fx_seed_counter * 13) * 0.16)
+		var dist_jitter: float = 0.80 + (0.40 * (0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 29)))
+		var col: Color = FIREWORK_NEON_COLORS[posmod(i + _fx_seed_counter, palette_len)]
 
-		_append_particle(origin, vel, radius, duration_sec, col)
+		_fw_active[slot] = 1
+		_fw_age[slot] = 0.0
+		_fw_duration[slot] = dur_sec * (0.90 + (0.18 * (0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 17))))
+		_fw_origin[slot] = origin
+		_fw_dir[slot] = Vector2(cos(angle_rad), sin(angle_rad))
+		_fw_max_dist[slot] = max_dist_base * dist_jitter
+		_fw_ray_len[slot] = ray_len_base * dist_jitter
+		_fw_color[slot] = col
 
-	queue_redraw()
+
+func _spawn_zoom_fade_ghost(p_lane: int, p_grade: int) -> void:
+	var col: Color = COLOR_GOOD_A
+	match p_grade:
+		HitJudge.JudgmentGrade.PERFECT:
+			col = COLOR_PERFECT_A
+		HitJudge.JudgmentGrade.GREAT:
+			col = COLOR_GREAT_B
+		HitJudge.JudgmentGrade.GOOD:
+			col = COLOR_GOOD_A
+		_:
+			return
+
+	var slot: int = _zf_cursor
+	_zf_cursor = (_zf_cursor + 1) % MAX_ZOOM_FADE_GHOSTS
+	var visual_w: float = maxf(12.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
+	_zf_active[slot] = 1
+	_zf_age[slot] = 0.0
+	_zf_duration[slot] = ZOOM_FADE_DURATION_SEC
+	_zf_center[slot] = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	_zf_base_size[slot] = Vector2(visual_w, NoteView.DEFAULT_HEAD_HEIGHT_PX)
+	_zf_color[slot] = col
+
+
+func _spawn_fracture_shards(p_lane: int, p_grade: int) -> void:
+	var shard_count: int = FRACTURE_SHARDS_GOOD
+	var tint: Color = COLOR_GOOD_A
+	match p_grade:
+		HitJudge.JudgmentGrade.PERFECT:
+			shard_count = FRACTURE_SHARDS_PERFECT
+			tint = Color(0.42, 0.98, 1.0, 1.0)
+		HitJudge.JudgmentGrade.GREAT:
+			shard_count = FRACTURE_SHARDS_GREAT
+			tint = Color(0.32, 0.94, 0.88, 1.0)
+		HitJudge.JudgmentGrade.GOOD:
+			shard_count = FRACTURE_SHARDS_GOOD
+			tint = COLOR_GOOD_A
+		_:
+			return
+
+	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	var visual_w: float = maxf(24.0, _lane_width - (NoteView.HORIZONTAL_PADDING_PX * 2.0))
+	var half_w: float = visual_w * 0.5
+	var half_h: float = NoteView.DEFAULT_HEAD_HEIGHT_PX * 0.5
+	var step_w: float = visual_w / float(shard_count)
+
+	var prev_top_x: float = -half_w
+	var prev_bot_x: float = -half_w
+	for i: int in range(shard_count):
+		_fx_seed_counter += 1
+		var slot: int = _fr_cursor
+		_fr_cursor = (_fr_cursor + 1) % MAX_FRACTURE_SHARDS
+
+		var next_top_x: float = half_w
+		var next_bot_x: float = half_w
+		if i < shard_count - 1:
+			var base_cut: float = -half_w + (float(i + 1) * step_w)
+			next_top_x = clampf(base_cut + (_pseudo_rand_signed(_fx_seed_counter * 11) * step_w * 0.34), prev_top_x + 4.0, half_w - 4.0)
+			next_bot_x = clampf(base_cut + (_pseudo_rand_signed(_fx_seed_counter * 23) * step_w * 0.34), prev_bot_x + 4.0, half_w - 4.0)
+
+		var top_y_l: float = -half_h + (_pseudo_rand_signed(_fx_seed_counter * 7) * 3.0)
+		var top_y_r: float = -half_h + (_pseudo_rand_signed(_fx_seed_counter * 19) * 3.0)
+		var bot_y_r: float = half_h + (_pseudo_rand_signed(_fx_seed_counter * 31) * 3.0)
+		var bot_y_l: float = half_h + (_pseudo_rand_signed(_fx_seed_counter * 41) * 3.0)
+
+		var cx: float = (prev_top_x + next_top_x + next_bot_x + prev_bot_x) * 0.25
+		var cy: float = (top_y_l + top_y_r + bot_y_r + bot_y_l) * 0.25
+
+		var local_poly: PackedVector2Array = _fr_local_polys[slot]
+		local_poly[0] = Vector2(prev_top_x - cx, top_y_l - cy)
+		local_poly[1] = Vector2(next_top_x - cx, top_y_r - cy)
+		local_poly[2] = Vector2(next_bot_x - cx, bot_y_r - cy)
+		local_poly[3] = Vector2(prev_bot_x - cx, bot_y_l - cy)
+
+		var norm_x: float = clampf(cx / maxf(1.0, half_w), -1.0, 1.0)
+		var vx: float = (norm_x * 165.0) + (_pseudo_rand_signed(_fx_seed_counter * 53) * 55.0)
+		var vy: float = lerpf(-210.0, -75.0, 0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 61))
+
+		_fr_active[slot] = 1
+		_fr_age[slot] = 0.0
+		_fr_duration[slot] = FRACTURE_DURATION_SEC * (0.90 + (0.20 * (0.5 + 0.5 * _pseudo_rand_signed(_fx_seed_counter * 71))))
+		_fr_pos[slot] = origin + Vector2(cx, cy)
+		_fr_vel[slot] = Vector2(vx, vy)
+		_fr_angle[slot] = 0.0
+		_fr_ang_vel[slot] = _pseudo_rand_signed(_fx_seed_counter * 79) * 4.8
+		_fr_color[slot] = tint.lerp(Color(0.84, 0.99, 1.0, 1.0), 0.28 if (i % 2) == 0 else 0.0)
+
+		prev_top_x = next_top_x
+		prev_bot_x = next_bot_x
+
+
+func _draw_vanish_effects() -> void:
+	# 1. FireWork radial neon streaks
+	for i: int in range(_fw_active.size()):
+		if _fw_active[i] == 0:
+			continue
+		var dur: float = maxf(0.01, _fw_duration[i])
+		var t: float = clampf(_fw_age[i] / dur, 0.0, 1.0)
+		var eased_head: float = 1.0 - pow(1.0 - t, 2.5)
+		var head_dist: float = _fw_max_dist[i] * eased_head
+		var curr_len: float = _fw_ray_len[i] * (1.0 - (t * 0.72))
+		var tail_dist: float = maxf(0.0, head_dist - curr_len)
+		var dir: Vector2 = _fw_dir[i]
+		var origin: Vector2 = _fw_origin[i]
+		var p_tail: Vector2 = origin + (dir * tail_dist)
+		var p_head: Vector2 = origin + (dir * head_dist)
+		var fade: float = (1.0 - t) * (1.0 - (t * 0.25))
+		var base_col: Color = _fw_color[i]
+		var halo_col: Color = Color(base_col.r, base_col.g, base_col.b, fade * 0.32)
+		var core_col: Color = Color(
+			lerpf(base_col.r, 1.0, 0.32),
+			lerpf(base_col.g, 1.0, 0.32),
+			lerpf(base_col.b, 1.0, 0.32),
+			fade * 0.96
+		)
+		var stroke_w: float = lerpf(3.6, 1.4, t)
+		draw_line(p_tail, p_head, halo_col, stroke_w * 2.8, true)
+		draw_line(p_tail, p_head, core_col, stroke_w, true)
+
+	# 2. Zoom + Fade expanding ghosts (scale 1.0 -> 1.35, alpha 1.0 -> 0.0)
+	for j: int in range(_zf_active.size()):
+		if _zf_active[j] == 0:
+			continue
+		var dur: float = maxf(0.01, _zf_duration[j])
+		var t: float = clampf(_zf_age[j] / dur, 0.0, 1.0)
+		var scale_f: float = compute_zoom_fade_scale(t)
+		var fade: float = (1.0 - t) * (1.0 - (t * 0.30))
+		var sz: Vector2 = _zf_base_size[j] * scale_f
+		var center: Vector2 = _zf_center[j]
+		var col: Color = _zf_color[j]
+
+		var halo_sz: Vector2 = sz + Vector2(16.0, 12.0)
+		draw_rect(
+			Rect2(center - (halo_sz * 0.5), halo_sz),
+			Color(col.r, col.g, col.b, fade * 0.26),
+			true
+		)
+		draw_rect(
+			Rect2(center - (sz * 0.5), sz),
+			Color(lerpf(col.r, 1.0, 0.25), lerpf(col.g, 1.0, 0.25), lerpf(col.b, 1.0, 0.25), fade * 0.85),
+			true
+		)
+
+	# 3. Fracture polygonal shards (zero allocations via reused _fr_world_poly_buf)
+	for k: int in range(_fr_active.size()):
+		if _fr_active[k] == 0:
+			continue
+		var dur: float = maxf(0.01, _fr_duration[k])
+		var t: float = clampf(_fr_age[k] / dur, 0.0, 1.0)
+		var fade: float = (1.0 - t) * (1.0 - (t * 0.35))
+		var pos: Vector2 = _fr_pos[k]
+		var cos_a: float = cos(_fr_angle[k])
+		var sin_a: float = sin(_fr_angle[k])
+		var local_poly: PackedVector2Array = _fr_local_polys[k]
+		for v_idx: int in range(4):
+			var lp: Vector2 = local_poly[v_idx]
+			_fr_world_poly_buf[v_idx] = pos + Vector2(
+				(lp.x * cos_a) - (lp.y * sin_a),
+				(lp.x * sin_a) + (lp.y * cos_a)
+			)
+		var col: Color = _fr_color[k]
+		draw_colored_polygon(
+			_fr_world_poly_buf,
+			Color(col.r, col.g, col.b, fade * 0.90)
+		)
 
 
 func _spawn_hold_sparks(p_lane: int, p_count: int) -> void:
@@ -1015,6 +1395,7 @@ func _reset_lane_visual_states() -> void:
 	_touch_ripples.clear()
 	_hold_absorb_rings.clear()
 	_hit_particles.clear()
+	_clear_vanish_effect_pools()
 	_hold_spark_accumulator_sec = 0.0
 	_hold_ring_accumulator_sec = 0.0
 	_divider_beat_pulse = 0.0

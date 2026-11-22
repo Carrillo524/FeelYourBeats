@@ -21,6 +21,7 @@ static var pending_session_config: Dictionary = {}
 @export var safe_hud: SafeHud = null
 @export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var background_settings_path: String = ReactiveBackgroundConfig.DEFAULT_SETTINGS_PATH
+@export var effects_settings_path: String = GameplayEffectsConfig.DEFAULT_SETTINGS_PATH
 @export var custom_audio_path: String = ""
 @export var default_difficulty: int = AutoChartGenerator.Difficulty.NORMAL
 @export var default_note_type_mode: int = AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
@@ -35,6 +36,7 @@ var _active_speed_multiplier: int = LaneField.MIN_SPEED_MULTIPLIER
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _particles_config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
 var _bg_config: ReactiveBackgroundConfig = ReactiveBackgroundConfig.new()
+var _effects_config: GameplayEffectsConfig = GameplayEffectsConfig.new()
 var _last_chart_loaded_from_cache: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 
@@ -348,6 +350,14 @@ func reload_background_settings() -> void:
 		reactive_background.apply_background_config(_bg_config)
 
 
+func reload_gameplay_effects_settings() -> void:
+	_effects_config.load_from_file(effects_settings_path)
+	if reactive_background != null:
+		reactive_background.apply_gameplay_effects_config(_effects_config)
+	if lane_field != null:
+		lane_field.apply_gameplay_effects_config(_effects_config)
+
+
 func _start_from_pending_config(p_cfg: Dictionary) -> void:
 	var is_demo: bool = p_cfg.get("is_demo", false) as bool
 	var difficulty: int = int(p_cfg.get("difficulty", default_difficulty))
@@ -460,6 +470,12 @@ func _resolve_and_wire_nodes() -> void:
 				screen_safe_adapter.get_play_rect(),
 				screen_safe_adapter.get_hud_safe_rect()
 			)
+		if reactive_background != null:
+			var vp_h: float = maxf(1.0, get_viewport_rect().size.y)
+			var norm_hit_y: float = (lane_field.position.y + lane_field.get_hit_line_y()) / vp_h
+			reactive_background.set_hit_line_normalized_y(norm_hit_y)
+
+	reload_gameplay_effects_settings()
 
 	if hit_judge != null:
 		hit_judge.set_difficulty(_active_difficulty)

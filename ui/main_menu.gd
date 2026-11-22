@@ -34,6 +34,8 @@ const STARTUP_INTRO_WAVE_SEC: float = 0.72
 const STARTUP_INTRO_TOTAL_SEC: float = 1.50
 const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
 const LOADING_OVERLAY_Z_INDEX: int = 90
+const TOUCH_PREVIEW_Z_INDEX: int = 85
+const MAX_MENU_TOUCH_PREVIEWS: int = 12
 const BGM_FADEOUT_DURATION_SEC: float = 0.35
 const USEC_TO_SEC: float = 0.000001
 const BACK_DEBOUNCE_MSEC: int = 300
@@ -95,11 +97,13 @@ const COLOR_WHITE_DIVIDER: Color = Color(1.0, 1.0, 1.0, 0.24)
 @export var audio_analyzer: AudioAnalyzer = null
 @export var particles_settings_path: String = ReactiveParticlesConfig.DEFAULT_SETTINGS_PATH
 @export var background_settings_path: String = ReactiveBackgroundConfig.DEFAULT_SETTINGS_PATH
+@export var effects_settings_path: String = GameplayEffectsConfig.DEFAULT_SETTINGS_PATH
 @export var allow_scene_change: bool = true
 
 var _chart_cache_repo: ChartCacheRepository = ChartCacheRepository.new()
 var _particles_config: ReactiveParticlesConfig = ReactiveParticlesConfig.new()
 var _bg_config: ReactiveBackgroundConfig = ReactiveBackgroundConfig.new()
+var _effects_config: GameplayEffectsConfig = GameplayEffectsConfig.new()
 var _font_registry: UiFontRegistry = null
 var _recent_tracks_path: String = RECENT_TRACKS_CONFIG_PATH
 var _imported_songs_dir: String = IMPORTED_SONGS_DIR_PATH
@@ -150,6 +154,21 @@ var _particles_reactivity_row: HBoxContainer = null
 var _particles_reactivity_buttons: Dictionary = {}
 var _bg_style_buttons: Dictionary = {}
 var _bg_reactivity_buttons: Dictionary = {}
+var _hit_effect_buttons: Dictionary = {}
+var _touch_effect_buttons: Dictionary = {}
+var _vanish_effect_buttons: Dictionary = {}
+
+# Immediate touch effect preview overlay (fixed pool, 0 allocs/frame)
+var _touch_preview_layer: Control = null
+var _touch_preview_renderer: TouchEffectRenderer = TouchEffectRenderer.new()
+var _tp_active: PackedByteArray = PackedByteArray()
+var _tp_age: PackedFloat32Array = PackedFloat32Array()
+var _tp_duration: PackedFloat32Array = PackedFloat32Array()
+var _tp_pos: PackedVector2Array = PackedVector2Array()
+var _tp_variant: PackedInt32Array = PackedInt32Array()
+var _tp_cursor: int = 0
+var _tp_seed: int = 1
+var _last_touch_preview_msec: int = -100
 
 # Floating Song Setup Modal
 var _song_modal_backdrop: ColorRect = null
@@ -261,6 +280,7 @@ var _last_launch_sequence: Array[String] = []
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_init_touch_preview_pool()
 
 
 func _ready() -> void:
@@ -275,12 +295,14 @@ func _ready() -> void:
 	_ensure_ui_nodes()
 	_apply_external_fonts()
 	_connect_dependencies()
+	reload_gameplay_effects_settings()
 	_reload_all_track_lists()
 	_refresh_tab_visuals()
 	_refresh_modal_option_styles()
 	_refresh_bgm_controls()
 	_refresh_particle_controls()
 	_refresh_background_controls()
+	_refresh_gameplay_effects_controls()
 	_sync_live_audio_monitoring()
 	var returning_to_selector: bool = open_directly_to_selector
 	if open_directly_to_selector:
@@ -344,6 +366,8 @@ func _process(p_delta: float) -> void:
 	if _loading_overlay != null and _loading_overlay.visible:
 		_step_loading_overlay_animation(dt)
 
+	_step_touch_preview_pool(dt)
+
 
 func _exit_tree() -> void:
 	if _active_worker_task_id != -1:
@@ -376,6 +400,19 @@ func _input(p_event: InputEvent) -> void:
 					vp.set_input_as_handled()
 				handle_back_request()
 		return
+
+	if not _is_playing_startup_intro:
+		if p_event is InputEventScreenTouch:
+			var st: InputEventScreenTouch = p_event as InputEventScreenTouch
+			if st.pressed:
+				_last_touch_preview_msec = Time.get_ticks_msec()
+				spawn_touch_effect_preview(st.position)
+		elif p_event is InputEventMouseButton:
+			var mb: InputEventMouseButton = p_event as InputEventMouseButton
+			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+				var now_msec: int = Time.get_ticks_msec()
+				if now_msec - _last_touch_preview_msec > 30:
+					spawn_touch_effect_preview(mb.position)
 
 	_handle_touch_scroll_input(p_event)
 
@@ -2307,6 +2344,128 @@ func _on_bg_reactivity_selected(p_reactivity: String) -> void:
 	_apply_and_persist_background_settings()
 
 
+func get_gameplay_effects_config_snapshot() -> GameplayEffectsConfig:
+	return _effects_config.duplicate_config()
+
+
+func set_effects_settings_path(p_path: String) -> void:
+	effects_settings_path = p_path
+	reload_gameplay_effects_settings()
+
+
+func reload_gameplay_effects_settings() -> void:
+	_effects_config.load_from_file(effects_settings_path)
+	if reactive_background != null:
+		reactive_background.apply_gameplay_effects_config(_effects_config)
+	_refresh_gameplay_effects_controls()
+
+
+func _apply_and_persist_gameplay_effects_settings() -> void:
+	_effects_config.save_to_file(effects_settings_path)
+	if reactive_background != null:
+		reactive_background.apply_gameplay_effects_config(_effects_config)
+	_refresh_gameplay_effects_controls()
+
+
+func _on_hit_effect_selected(p_style: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_effects_config.hit_effect = GameplayEffectsConfig.sanitize_hit_effect(p_style)
+	_apply_and_persist_gameplay_effects_settings()
+
+
+func _on_touch_effect_selected(p_style: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_effects_config.touch_effect = GameplayEffectsConfig.sanitize_touch_effect(p_style)
+	_apply_and_persist_gameplay_effects_settings()
+	var btn: Button = _touch_effect_buttons.get(_effects_config.touch_effect, null) as Button
+	if btn != null:
+		var btn_rect: Rect2 = btn.get_global_rect()
+		spawn_touch_effect_preview(btn_rect.position + (btn_rect.size * 0.5))
+
+
+func _on_vanish_effect_selected(p_style: String) -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	_effects_config.vanish_effect = GameplayEffectsConfig.sanitize_vanish_effect(p_style)
+	_apply_and_persist_gameplay_effects_settings()
+
+
+func _init_touch_preview_pool() -> void:
+	_tp_active.resize(MAX_MENU_TOUCH_PREVIEWS)
+	_tp_age.resize(MAX_MENU_TOUCH_PREVIEWS)
+	_tp_duration.resize(MAX_MENU_TOUCH_PREVIEWS)
+	_tp_pos.resize(MAX_MENU_TOUCH_PREVIEWS)
+	_tp_variant.resize(MAX_MENU_TOUCH_PREVIEWS)
+	for i: int in range(MAX_MENU_TOUCH_PREVIEWS):
+		_tp_active[i] = 0
+		_tp_age[i] = 0.0
+		_tp_duration[i] = TouchEffectRenderer.WAVE_DURATION_SEC
+		_tp_pos[i] = Vector2.ZERO
+		_tp_variant[i] = 0
+	_tp_cursor = 0
+
+
+func spawn_touch_effect_preview(p_global_pos: Vector2) -> void:
+	if _tp_active.size() != MAX_MENU_TOUCH_PREVIEWS:
+		_init_touch_preview_pool()
+	_tp_seed += 1
+	var slot: int = _tp_cursor
+	_tp_cursor = (_tp_cursor + 1) % MAX_MENU_TOUCH_PREVIEWS
+	var local_pos: Vector2 = p_global_pos - global_position
+	_tp_active[slot] = 1
+	_tp_age[slot] = 0.0
+	_tp_duration[slot] = TouchEffectRenderer.get_duration_for_style(_effects_config.touch_effect)
+	_tp_pos[slot] = local_pos
+	_tp_variant[slot] = posmod((_tp_seed * 5) + int(local_pos.x), TouchEffectRenderer.NOTE_VARIANT_COUNT)
+	if _touch_preview_layer != null:
+		_touch_preview_layer.queue_redraw()
+
+
+func get_active_touch_preview_count() -> int:
+	var count: int = 0
+	for i: int in range(_tp_active.size()):
+		if _tp_active[i] != 0:
+			count += 1
+	return count
+
+
+func _step_touch_preview_pool(p_dt: float) -> void:
+	var any_active: bool = false
+	for i: int in range(_tp_active.size()):
+		if _tp_active[i] == 0:
+			continue
+		var next_age: float = _tp_age[i] + p_dt
+		if next_age >= _tp_duration[i]:
+			_tp_active[i] = 0
+		else:
+			_tp_age[i] = next_age
+		any_active = true
+	if any_active and _touch_preview_layer != null:
+		_touch_preview_layer.queue_redraw()
+
+
+func _draw_touch_preview_layer() -> void:
+	if _touch_preview_layer == null:
+		return
+	var style: String = _effects_config.touch_effect
+	var base_col: Color = Color(0.38, 0.94, 1.0, 0.92)
+	for i: int in range(_tp_active.size()):
+		if _tp_active[i] == 0:
+			continue
+		var dur: float = maxf(0.01, _tp_duration[i])
+		var t: float = clampf(_tp_age[i] / dur, 0.0, 1.0)
+		_touch_preview_renderer.draw_touch_effect(
+			_touch_preview_layer,
+			_tp_pos[i],
+			t,
+			style,
+			base_col,
+			_tp_variant[i]
+		)
+
+
 func _on_bass_kick_pulsed(p_strength: float) -> void:
 	_title_bass_boost = maxf(_title_bass_boost, clampf(p_strength, 0.0, 1.0))
 
@@ -3212,6 +3371,26 @@ func _refresh_background_controls() -> void:
 			_set_option_highlight(level_btn, _bg_config.reactivity == level_id)
 
 
+func _refresh_gameplay_effects_controls() -> void:
+	for i: int in range(GameplayEffectsConfig.SUPPORTED_HIT_EFFECTS.size()):
+		var hit_id: String = GameplayEffectsConfig.SUPPORTED_HIT_EFFECTS[i]
+		var hit_btn: Button = _hit_effect_buttons.get(hit_id, null) as Button
+		if hit_btn != null:
+			_set_option_highlight(hit_btn, _effects_config.hit_effect == hit_id)
+
+	for j: int in range(GameplayEffectsConfig.SUPPORTED_TOUCH_EFFECTS.size()):
+		var touch_id: String = GameplayEffectsConfig.SUPPORTED_TOUCH_EFFECTS[j]
+		var touch_btn: Button = _touch_effect_buttons.get(touch_id, null) as Button
+		if touch_btn != null:
+			_set_option_highlight(touch_btn, _effects_config.touch_effect == touch_id)
+
+	for k: int in range(GameplayEffectsConfig.SUPPORTED_VANISH_EFFECTS.size()):
+		var vanish_id: String = GameplayEffectsConfig.SUPPORTED_VANISH_EFFECTS[k]
+		var vanish_btn: Button = _vanish_effect_buttons.get(vanish_id, null) as Button
+		if vanish_btn != null:
+			_set_option_highlight(vanish_btn, _effects_config.vanish_effect == vanish_id)
+
+
 func _set_option_highlight(p_button: Button, p_is_active: bool) -> void:
 	if p_button == null:
 		return
@@ -3401,6 +3580,14 @@ func _ensure_ui_nodes() -> void:
 	_transition_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_transition_fade_rect)
 	_transition_fade_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	_touch_preview_layer = Control.new()
+	_touch_preview_layer.name = "TouchPreviewLayer"
+	_touch_preview_layer.z_index = TOUCH_PREVIEW_Z_INDEX
+	_touch_preview_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_touch_preview_layer.draw.connect(_draw_touch_preview_layer)
+	add_child(_touch_preview_layer)
+	_touch_preview_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 
 func _build_title_screen_ui() -> void:
@@ -3817,6 +4004,88 @@ func _build_browser_screen_ui() -> void:
 		br_btn.pressed.connect(_on_bg_reactivity_selected.bind(br_id))
 		bg_react_row.add_child(br_btn)
 		_bg_reactivity_buttons[br_id] = br_btn
+
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_4", 0))
+
+	var hit_fx_header: Label = Label.new()
+	hit_fx_header.name = "SettingsHitEffectHeader"
+	hit_fx_header.text = "EFECTO DE ACIERTO"
+	hit_fx_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	hit_fx_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	settings_vbox.add_child(hit_fx_header)
+
+	_hit_effect_buttons.clear()
+	var hit_fx_row: HBoxContainer = HBoxContainer.new()
+	hit_fx_row.name = "HitEffectRow"
+	hit_fx_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(hit_fx_row)
+
+	for hf_idx: int in range(GameplayEffectsConfig.SUPPORTED_HIT_EFFECTS.size()):
+		var hf_id: String = GameplayEffectsConfig.SUPPORTED_HIT_EFFECTS[hf_idx]
+		var hf_btn: Button = _create_compact_settings_button(
+			"HitEffect_%s" % hf_id,
+			GameplayEffectsConfig.hit_effect_to_label(hf_id)
+		)
+		hf_btn.pressed.connect(_on_hit_effect_selected.bind(hf_id))
+		hit_fx_row.add_child(hf_btn)
+		_hit_effect_buttons[hf_id] = hf_btn
+
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_5", 0))
+
+	var touch_fx_header: Label = Label.new()
+	touch_fx_header.name = "SettingsTouchEffectHeader"
+	touch_fx_header.text = "EFECTO TÁCTIL"
+	touch_fx_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	touch_fx_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	settings_vbox.add_child(touch_fx_header)
+
+	_touch_effect_buttons.clear()
+	var touch_fx_rows: Array[PackedStringArray] = [
+		PackedStringArray([GameplayEffectsConfig.TOUCH_WAVE, GameplayEffectsConfig.TOUCH_DOUBLE_DIAMOND]),
+		PackedStringArray([GameplayEffectsConfig.TOUCH_MUSICAL_NOTE]),
+	]
+	for tf_row_idx: int in range(touch_fx_rows.size()):
+		var tf_row: HBoxContainer = HBoxContainer.new()
+		tf_row.name = "TouchEffectRow%d" % (tf_row_idx + 1)
+		tf_row.add_theme_constant_override("separation", 12)
+		settings_vbox.add_child(tf_row)
+
+		var row_touch_ids: PackedStringArray = touch_fx_rows[tf_row_idx]
+		for tf_col_idx: int in range(row_touch_ids.size()):
+			var tf_id: String = row_touch_ids[tf_col_idx]
+			var tf_btn: Button = _create_compact_settings_button(
+				"TouchEffect_%s" % tf_id,
+				GameplayEffectsConfig.touch_effect_to_label(tf_id)
+			)
+			tf_btn.pressed.connect(_on_touch_effect_selected.bind(tf_id))
+			tf_row.add_child(tf_btn)
+			_touch_effect_buttons[tf_id] = tf_btn
+
+	settings_vbox.add_child(_create_white_divider("SettingsDivider_6", 0))
+
+	var vanish_fx_header: Label = Label.new()
+	vanish_fx_header.name = "SettingsVanishEffectHeader"
+	vanish_fx_header.text = "EFECTO DE DESVANECIMIENTO"
+	vanish_fx_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	vanish_fx_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	settings_vbox.add_child(vanish_fx_header)
+
+	_vanish_effect_buttons.clear()
+	var vanish_fx_row: HBoxContainer = HBoxContainer.new()
+	vanish_fx_row.name = "VanishEffectRow"
+	vanish_fx_row.add_theme_constant_override("separation", 12)
+	settings_vbox.add_child(vanish_fx_row)
+
+	for vf_idx: int in range(GameplayEffectsConfig.SUPPORTED_VANISH_EFFECTS.size()):
+		var vf_id: String = GameplayEffectsConfig.SUPPORTED_VANISH_EFFECTS[vf_idx]
+		var vf_btn: Button = _create_compact_settings_button(
+			"VanishEffect_%s" % vf_id,
+			GameplayEffectsConfig.vanish_effect_to_label(vf_id)
+		)
+		vf_btn.add_theme_font_size_override("font_size", 28)
+		vf_btn.pressed.connect(_on_vanish_effect_selected.bind(vf_id))
+		vanish_fx_row.add_child(vf_btn)
+		_vanish_effect_buttons[vf_id] = vf_btn
 
 	_configure_touch_scroll_container(_settings_scroll)
 
