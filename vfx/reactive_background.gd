@@ -144,6 +144,9 @@ var _aurora_vertical_texture: GradientTexture2D = null
 var _aurora_horizontal_texture: GradientTexture2D = null
 var _hit_effect_style: String = HIT_EFFECT_CLASSIC
 var _hit_line_normalized_y: float = DEFAULT_HIT_LINE_NORMALIZED_Y
+var _lane_local_rects: Array[Rect2] = []
+var _has_synced_lane_geometry: bool = false
+var _judgment_line_local_y: float = -1.0
 var _hit_effect_overlay: Control = null
 var _hit_beam_texture: GradientTexture2D = null
 var _hit_beam_vertical_texture: GradientTexture2D = null
@@ -432,6 +435,41 @@ func set_hit_line_normalized_y(p_norm_y: float) -> void:
 		_hit_effect_overlay.queue_redraw()
 
 
+func sync_lane_geometry_from_global(
+	p_lane_global_rects: Array[Rect2],
+	p_judgment_global_y: float
+) -> void:
+	var bg_global_pos: Vector2 = global_position if is_inside_tree() else position
+	_lane_local_rects.clear()
+	for i: int in range(p_lane_global_rects.size()):
+		var g_rect: Rect2 = p_lane_global_rects[i]
+		_lane_local_rects.append(Rect2(g_rect.position - bg_global_pos, g_rect.size))
+	_judgment_line_local_y = p_judgment_global_y - bg_global_pos.y
+	_has_synced_lane_geometry = _lane_local_rects.size() >= 4
+	var bounds_h: float = maxf(1.0, _resolve_draw_bounds().y)
+	if _judgment_line_local_y >= 0.0:
+		_hit_line_normalized_y = clampf(_judgment_line_local_y / bounds_h, 0.25, 0.94)
+	queue_redraw()
+	if _hit_effect_overlay != null:
+		_hit_effect_overlay.queue_redraw()
+
+
+func has_synced_lane_geometry() -> bool:
+	return _has_synced_lane_geometry
+
+
+func get_synced_lane_local_rect(p_lane: int) -> Rect2:
+	if p_lane < 0 or p_lane >= _lane_local_rects.size():
+		return Rect2()
+	return _lane_local_rects[p_lane]
+
+
+func get_synced_judgment_line_local_y() -> float:
+	if _has_synced_lane_geometry and _judgment_line_local_y >= 0.0:
+		return _judgment_line_local_y
+	return _resolve_draw_bounds().y * _hit_line_normalized_y
+
+
 func get_hit_effect_style() -> String:
 	return _hit_effect_style
 
@@ -477,16 +515,25 @@ func compute_crown_draw_width(p_lane_width: float) -> float:
 
 func compute_crown_lane_rect(p_lane_idx: int, p_bounds: Vector2) -> Rect2:
 	var clamped_lane: int = clampi(p_lane_idx, 0, 3)
+	var reach_mult: float = get_hit_effect_reach_multiplier()
+	var crown_height: float = p_bounds.y * 0.42 * reach_mult
+
+	if _has_synced_lane_geometry and clamped_lane < _lane_local_rects.size():
+		var lane_rect: Rect2 = _lane_local_rects[clamped_lane]
+		var judgment_y: float = _judgment_line_local_y if _judgment_line_local_y >= 0.0 else (p_bounds.y * _hit_line_normalized_y)
+		var top_y: float = maxf(0.0, judgment_y - crown_height)
+		var x_left: float = lane_rect.position.x
+		var x_right: float = maxf(x_left + 1.0, lane_rect.end.x)
+		return Rect2(x_left, top_y, x_right - x_left, maxf(0.0, judgment_y - top_y))
+
 	var lane_w: float = maxf(4.0, p_bounds.x * 0.25)
 	var lane_left: float = float(clamped_lane) * lane_w
 	var lane_right: float = lane_left + lane_w
 	var draw_left: float = lane_left + CROWN_LANE_INSET_PX
 	var draw_right: float = maxf(draw_left + 1.0, lane_right - CROWN_LANE_INSET_PX)
 	var hit_zone_y: float = p_bounds.y * _hit_line_normalized_y
-	var reach_mult: float = get_hit_effect_reach_multiplier()
-	var crown_height: float = p_bounds.y * 0.42 * reach_mult
-	var top_y: float = maxf(0.0, hit_zone_y - crown_height)
-	return Rect2(draw_left, top_y, draw_right - draw_left, maxf(0.0, hit_zone_y - top_y))
+	var fallback_top_y: float = maxf(0.0, hit_zone_y - crown_height)
+	return Rect2(draw_left, fallback_top_y, draw_right - draw_left, maxf(0.0, hit_zone_y - fallback_top_y))
 
 
 static func get_star_arm_directions() -> PackedVector2Array:

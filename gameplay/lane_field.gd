@@ -660,6 +660,20 @@ func get_lane_width() -> float:
 	return _lane_width
 
 
+func get_lane_global_rect(p_lane: int) -> Rect2:
+	var lane_count: int = _get_active_lane_count()
+	var clamped_lane: int = clampi(p_lane, 0, lane_count - 1)
+	var field_global_pos: Vector2 = global_position if is_inside_tree() else position
+	var field_height: float = size.y if size.y > 1.0 else DEFAULT_PLAY_HEIGHT
+	var lane_left_x: float = field_global_pos.x + (float(clamped_lane) * _lane_width)
+	return Rect2(lane_left_x, field_global_pos.y, _lane_width, field_height)
+
+
+func get_judgment_line_global_y() -> float:
+	var field_global_pos: Vector2 = global_position if is_inside_tree() else position
+	return field_global_pos.y + _hit_line_y
+
+
 func get_active_note_views() -> Array[NoteView]:
 	return _active_views
 

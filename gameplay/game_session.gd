@@ -255,6 +255,7 @@ func start_chart_session(p_chart: ChartData) -> bool:
 
 	if screen_safe_adapter != null:
 		screen_safe_adapter.recalculate_layout()
+	sync_lane_geometry_to_background()
 
 	if audio_analyzer != null:
 		audio_analyzer.set_live_monitoring(true)
@@ -356,6 +357,17 @@ func reload_gameplay_effects_settings() -> void:
 		reactive_background.apply_gameplay_effects_config(_effects_config)
 	if lane_field != null:
 		lane_field.apply_gameplay_effects_config(_effects_config)
+	sync_lane_geometry_to_background()
+
+
+func sync_lane_geometry_to_background() -> void:
+	if lane_field == null or reactive_background == null:
+		return
+	var lane_rects: Array[Rect2] = []
+	for lane_idx: int in range(4):
+		lane_rects.append(lane_field.get_lane_global_rect(lane_idx))
+	var judgment_global_y: float = lane_field.get_judgment_line_global_y()
+	reactive_background.sync_lane_geometry_from_global(lane_rects, judgment_global_y)
 
 
 func _start_from_pending_config(p_cfg: Dictionary) -> void:
@@ -465,15 +477,16 @@ func _resolve_and_wire_nodes() -> void:
 		lane_field.hit_judge = hit_judge
 		lane_field.audio_analyzer = audio_analyzer
 		lane_field.connect_dependencies()
+		if not lane_field.resized.is_connected(sync_lane_geometry_to_background):
+			lane_field.resized.connect(sync_lane_geometry_to_background)
 		if screen_safe_adapter != null:
 			lane_field.apply_safe_layout(
 				screen_safe_adapter.get_play_rect(),
 				screen_safe_adapter.get_hud_safe_rect()
 			)
-		if reactive_background != null:
-			var vp_h: float = maxf(1.0, get_viewport_rect().size.y)
-			var norm_hit_y: float = (lane_field.position.y + lane_field.get_hit_line_y()) / vp_h
-			reactive_background.set_hit_line_normalized_y(norm_hit_y)
+			if not screen_safe_adapter.safe_play_rect_changed.is_connected(_on_safe_play_rect_changed_for_background):
+				screen_safe_adapter.safe_play_rect_changed.connect(_on_safe_play_rect_changed_for_background)
+		sync_lane_geometry_to_background()
 
 	reload_gameplay_effects_settings()
 
@@ -481,6 +494,8 @@ func _resolve_and_wire_nodes() -> void:
 		hit_judge.set_difficulty(_active_difficulty)
 		if not hit_judge.danger_overflowed.is_connected(_on_danger_overflowed):
 			hit_judge.danger_overflowed.connect(_on_danger_overflowed)
+		if not hit_judge.note_judged.is_connected(_on_note_judged_sync_background):
+			hit_judge.note_judged.connect(_on_note_judged_sync_background)
 
 	if safe_hud != null:
 		safe_hud.screen_safe_adapter = screen_safe_adapter
@@ -515,6 +530,15 @@ func _on_screen_shake_updated(p_offset: Vector2) -> void:
 		lane_field.position = base_pos
 	else:
 		lane_field.position = base_pos + p_offset
+	sync_lane_geometry_to_background()
+
+
+func _on_safe_play_rect_changed_for_background(_p_play_rect: Rect2, _p_hud_safe_rect: Rect2) -> void:
+	sync_lane_geometry_to_background()
+
+
+func _on_note_judged_sync_background(_p_lane: int, _p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
+	sync_lane_geometry_to_background()
 
 
 func _on_pause_requested() -> void:
