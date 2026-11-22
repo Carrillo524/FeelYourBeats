@@ -28,6 +28,13 @@ const ELASTIC_SNAP_GRID_RATIO: float = 0.42
 const DOMINANT_PEAK_REPLACE_RATIO: float = 1.08
 const ONSET_LEAD_COMPENSATION_SEC: float = AudioAnalyzer.ONSET_LEAD_COMPENSATION_SEC
 const ERGONOMIC_EPSILON_SEC: float = 0.0005
+const COMBINED_TARGET_HOLD_RATIO: float = 0.30
+const COMBINED_TARGET_DOUBLE_RATIO: float = 0.29
+const COMBINED_MAX_HOLD_RATIO: float = 0.35
+const COMBINED_MAX_DOUBLE_RATIO: float = 0.34
+const COMBINED_MIN_SINGLE_RATIO: float = 0.35
+const COMBINED_MIN_HOLD_OPPOSITE_LEAD_SEC: float = 0.14
+const COMBINED_HOLD_DIP_TOLERANCE_FRAMES: int = 2
 
 
 static func lane_to_thumb(p_lane: int) -> int:
@@ -90,6 +97,7 @@ static func validate_two_thumb_ergonomics(
 	var hold_thumb_collisions: int = 0
 	var same_thumb_chords: int = 0
 	var same_thumb_gap_violations: int = 0
+	var three_finger_violations: int = 0
 
 	if p_chart == null:
 		violations.append("ChartData is null.")
@@ -99,6 +107,7 @@ static func validate_two_thumb_ergonomics(
 			"hold_thumb_collisions": 0,
 			"same_thumb_chords": 0,
 			"same_thumb_gap_violations": 0,
+			"three_finger_violations": 0,
 		}
 
 	var safe_margin: float = maxf(0.0, p_release_margin_sec)
@@ -152,12 +161,44 @@ static func validate_two_thumb_ergonomics(
 				active_hold_end[thumb] = hold_end_sec
 				active_hold_lane[thumb] = note.lane
 
+	# Check maximum simultaneous finger load across all timestamps (active holds incl. release margin + new presses <= 2)
+	var group_start: int = 0
+	while group_start < note_count:
+		var anchor_note: NoteData = p_chart.notes[group_start]
+		if anchor_note == null:
+			group_start += 1
+			continue
+		var t_group: float = anchor_note.time_sec
+		var group_end: int = group_start + 1
+		while group_end < note_count:
+			var next_note: NoteData = p_chart.notes[group_end]
+			if next_note != null and absf(next_note.time_sec - t_group) <= TIME_DEDUP_EPSILON_SEC:
+				group_end += 1
+			else:
+				break
+		var presses_at_t: int = group_end - group_start
+		var prior_active_holds: int = 0
+		for h_idx: int in range(group_start):
+			var prev_note: NoteData = p_chart.notes[h_idx]
+			if prev_note != null and prev_note.duration_sec > 0.0:
+				var prev_lock_until: float = prev_note.time_sec + prev_note.duration_sec + safe_margin
+				if t_group < prev_lock_until - ERGONOMIC_EPSILON_SEC:
+					prior_active_holds += 1
+		if prior_active_holds + presses_at_t > 2:
+			three_finger_violations += 1
+			violations.append(
+				"Three-finger simultaneous load at %.4fs (%d active holds + %d presses)."
+				% [t_group, prior_active_holds, presses_at_t]
+			)
+		group_start = group_end
+
 	return {
 		"valid": violations.is_empty(),
 		"violations": violations,
 		"hold_thumb_collisions": hold_thumb_collisions,
 		"same_thumb_chords": same_thumb_chords,
 		"same_thumb_gap_violations": same_thumb_gap_violations,
+		"three_finger_violations": three_finger_violations,
 	}
 
 
@@ -218,40 +259,58 @@ func generate_from_analysis(
 		p_note_type_mode == NoteTypeMode.TAP_AND_HOLD
 		or p_note_type_mode == NoteTypeMode.HOLD_AND_DOUBLE_TAP
 	)
-
-	var notes: Array[NoteData] = _assign_lanes_ergonomically(
-		raw_candidates,
-		p_difficulty,
-		allow_chords,
-		rng
-	)
+	var is_combined_mode: bool = p_note_type_mode == NoteTypeMode.HOLD_AND_DOUBLE_TAP
 
 	var release_margin_sec: float = get_release_margin_for_difficulty(p_difficulty)
 	var same_thumb_min_gap_sec: float = get_same_thumb_min_gap_for_difficulty(p_difficulty)
 	var sibling_cross_penalty_sec: float = get_sibling_cross_penalty_for_difficulty(p_difficulty)
 
-	if allow_holds:
-		_apply_hold_durations(
-			notes,
+	var notes: Array[NoteData] = []
+	if is_combined_mode:
+		notes = _generate_balanced_hold_and_double_notes(
+			raw_candidates,
 			rms_frames,
 			hop_sec,
 			duration_sec,
 			beat_sec,
 			p_difficulty,
 			intensity_blocks,
-			release_margin_sec
+			release_margin_sec,
+			same_thumb_min_gap_sec,
+			sibling_cross_penalty_sec,
+			rng
 		)
 	else:
-		var note_count: int = notes.size()
-		for i: int in range(note_count):
-			notes[i].duration_sec = 0.0
+		notes = _assign_lanes_ergonomically(
+			raw_candidates,
+			p_difficulty,
+			allow_chords,
+			rng
+		)
+
+		if allow_holds:
+			_apply_hold_durations(
+				notes,
+				rms_frames,
+				hop_sec,
+				duration_sec,
+				beat_sec,
+				p_difficulty,
+				intensity_blocks,
+				release_margin_sec
+			)
+		else:
+			var note_count: int = notes.size()
+			for i: int in range(note_count):
+				notes[i].duration_sec = 0.0
 
 	notes = _sanitize_two_thumb_ergonomics(
 		notes,
 		release_margin_sec,
 		same_thumb_min_gap_sec,
 		sibling_cross_penalty_sec,
-		allow_chords
+		allow_chords,
+		is_combined_mode
 	)
 
 	var safe_id: String = p_song_id if not p_song_id.is_empty() else "auto_song"
@@ -567,6 +626,461 @@ func _assign_lanes_ergonomically(
 	return deduplicated_notes
 
 
+func _generate_balanced_hold_and_double_notes(
+	p_candidates: Array[Dictionary],
+	p_rms_frames: PackedFloat32Array,
+	p_hop_sec: float,
+	p_duration_sec: float,
+	p_beat_sec: float,
+	p_difficulty: int,
+	p_intensity_blocks: Array[IntensityBlock],
+	p_release_margin_sec: float,
+	p_same_thumb_min_gap_sec: float,
+	p_sibling_cross_penalty_sec: float,
+	p_rng: RandomNumberGenerator
+) -> Array[NoteData]:
+	var generated_notes: Array[NoteData] = []
+	var candidate_count: int = p_candidates.size()
+	if candidate_count == 0:
+		return generated_notes
+
+	var rms_count: int = p_rms_frames.size()
+	var mean_rms: float = 0.5
+	if rms_count > 0:
+		var sum_rms: float = 0.0
+		for r_idx: int in range(rms_count):
+			sum_rms += p_rms_frames[r_idx]
+		mean_rms = sum_rms / float(rms_count)
+	var sustain_threshold: float = maxf(0.18, mean_rms * 0.72)
+
+	var max_hold_cap_sec: float = get_max_hold_duration_for_difficulty(p_difficulty)
+	var musical_max_hold_sec: float = minf(
+		max_hold_cap_sec,
+		maxf(MIN_HOLD_DURATION_SEC + 0.20, p_beat_sec * 2.25)
+	)
+	var hold_cooldown_sec: float = maxf(
+		p_release_margin_sec,
+		minf(HOLD_CASCADE_COOLDOWN_SEC, p_beat_sec * 0.55)
+	)
+
+	var chord_strength_threshold: float = _compute_adaptive_chord_threshold(
+		p_candidates,
+		p_difficulty,
+		true
+	)
+	var min_ergonomic_double_gap: float = p_same_thumb_min_gap_sec + p_sibling_cross_penalty_sec + 0.04
+	var base_chord_cooldown_sec: float = maxf(
+		min_ergonomic_double_gap,
+		minf(_get_chord_cooldown_for_difficulty(p_difficulty, false), p_beat_sec * 1.25)
+	)
+	var drop_chord_cooldown_sec: float = maxf(
+		min_ergonomic_double_gap,
+		minf(_get_chord_cooldown_for_difficulty(p_difficulty, true), p_beat_sec * 0.95)
+	)
+	var opp_hold_lead_sec: float = maxf(
+		COMBINED_MIN_HOLD_OPPOSITE_LEAD_SEC,
+		p_same_thumb_min_gap_sec * 0.80
+	)
+	var opp_hold_min_tap_gap: float = maxf(
+		p_same_thumb_min_gap_sec + p_sibling_cross_penalty_sec,
+		p_beat_sec * (0.45 if p_difficulty != Difficulty.HARD else 0.35)
+	)
+
+	var thumb_last_time: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
+	var thumb_last_lane: PackedInt32Array = PackedInt32Array([-1, -1])
+	var active_hold_start: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
+	var active_hold_end: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
+	var active_hold_lock_until: PackedFloat32Array = PackedFloat32Array([-999.0, -999.0])
+	var opp_hold_tail_guard_sec: float = maxf(0.04, p_same_thumb_min_gap_sec * 0.35)
+
+	var last_thumb: int = -1
+	var last_hold_thumb: int = -1
+	var global_last_hold_end: float = -999.0
+	var last_chord_time: float = -999.0
+
+	var event_count: int = 0
+	var hold_events: int = 0
+	var double_events: int = 0
+	var single_events: int = 0
+	var events_since_last_hold: int = 2
+	var events_since_last_double: int = 1
+	var opp_taps_during_hold: int = 0
+
+	for i: int in range(candidate_count):
+		var item: Dictionary = p_candidates[i]
+		var t_sec: float = item["time_sec"] as float
+		var strength: float = item["strength"] as float
+		var bass_val: float = item["bass"] as float
+		var mid_val: float = item["mid"] as float
+		var high_val: float = item["high"] as float
+		var tier: int = item["tier"] as int
+
+		var left_hold_busy: bool = t_sec < active_hold_lock_until[THUMB_LEFT] - ERGONOMIC_EPSILON_SEC
+		var right_hold_busy: bool = t_sec < active_hold_lock_until[THUMB_RIGHT] - ERGONOMIC_EPSILON_SEC
+
+		# Rule 1 & 2: While a Hold is active (including release margin), NEVER emit a Double Tap
+		# and NEVER cancel the Hold; instead allow ergonomic Single Taps on the opposite thumb.
+		if left_hold_busy or right_hold_busy:
+			if left_hold_busy and right_hold_busy:
+				continue
+			var busy_thumb: int = THUMB_LEFT if left_hold_busy else THUMB_RIGHT
+			var free_thumb: int = 1 - busy_thumb
+			if (t_sec - active_hold_start[busy_thumb]) < opp_hold_lead_sec - ERGONOMIC_EPSILON_SEC:
+				continue
+			if t_sec > active_hold_end[busy_thumb] - opp_hold_tail_guard_sec + ERGONOMIC_EPSILON_SEC:
+				continue
+			if (
+				thumb_last_time[free_thumb] >= 0.0
+				and (t_sec - thumb_last_time[free_thumb]) < opp_hold_min_tap_gap - ERGONOMIC_EPSILON_SEC
+			):
+				continue
+			var max_opp_taps: int = 1 if (event_count >= 4 and (float(single_events) / float(event_count)) >= 0.42) else 2
+			if opp_taps_during_hold >= max_opp_taps:
+				continue
+
+			var free_lane: int = _find_playable_lane_on_thumb(
+				free_thumb,
+				t_sec,
+				bass_val,
+				mid_val,
+				high_val,
+				thumb_last_time,
+				thumb_last_lane,
+				p_same_thumb_min_gap_sec,
+				p_sibling_cross_penalty_sec,
+				p_rng
+			)
+			if free_lane >= 0:
+				generated_notes.append(NoteData.new(t_sec, free_lane, 0.0, strength))
+				thumb_last_time[free_thumb] = t_sec
+				thumb_last_lane[free_thumb] = free_lane
+				last_thumb = free_thumb
+				event_count += 1
+				single_events += 1
+				events_since_last_hold += 1
+				events_since_last_double += 1
+				opp_taps_during_hold += 1
+			continue
+
+		# Both thumbs are free and rested past any previous Hold release margin.
+		var hold_ratio: float = float(hold_events) / float(maxi(1, event_count))
+		var double_ratio: float = float(double_events) / float(maxi(1, event_count))
+		var single_ratio: float = float(single_events) / float(maxi(1, event_count))
+		var hold_deficit: float = COMBINED_TARGET_HOLD_RATIO - (float(hold_events) / float(event_count + 2))
+		var double_deficit: float = COMBINED_TARGET_DOUBLE_RATIO - (float(double_events) / float(event_count + 2))
+
+		var force_single_for_balance: bool = (
+			event_count >= 3
+			and single_ratio < COMBINED_MIN_SINGLE_RATIO
+			and hold_deficit < 0.09
+			and double_deficit < 0.09
+		)
+
+		var left_lane: int = _find_playable_lane_on_thumb(
+			THUMB_LEFT,
+			t_sec,
+			bass_val,
+			mid_val,
+			high_val,
+			thumb_last_time,
+			thumb_last_lane,
+			p_same_thumb_min_gap_sec,
+			p_sibling_cross_penalty_sec,
+			p_rng
+		)
+		var right_lane: int = _find_playable_lane_on_thumb(
+			THUMB_RIGHT,
+			t_sec,
+			bass_val,
+			mid_val,
+			high_val,
+			thumb_last_time,
+			thumb_last_lane,
+			p_same_thumb_min_gap_sec,
+			p_sibling_cross_penalty_sec,
+			p_rng
+		)
+
+		var active_chord_cooldown: float = drop_chord_cooldown_sec if tier >= 2 else base_chord_cooldown_sec
+		var active_chord_threshold: float = chord_strength_threshold * (0.90 if tier >= 2 else 1.0)
+		var double_cooldown_ok: bool = (t_sec - last_chord_time) >= active_chord_cooldown - ERGONOMIC_EPSILON_SEC
+		var double_cap_ok: bool = event_count < 2 or double_ratio < COMBINED_MAX_DOUBLE_RATIO
+		var double_wanted: bool = (
+			(strength >= active_chord_threshold and double_deficit >= -0.025)
+			or double_deficit >= 0.035
+			or (events_since_last_double >= 4 and double_deficit >= -0.01)
+		)
+		var can_double: bool = (
+			not force_single_for_balance
+			and left_lane >= 0
+			and right_lane >= 0
+			and double_cooldown_ok
+			and double_cap_ok
+			and double_wanted
+		)
+
+		var remaining_song_sec: float = (p_duration_sec - TRACK_END_MARGIN_SEC) - t_sec
+		var max_hold_here: float = minf(musical_max_hold_sec, remaining_song_sec)
+		var hold_cooldown_ok: bool = t_sec >= global_last_hold_end + hold_cooldown_sec - ERGONOMIC_EPSILON_SEC
+		var hold_cap_ok: bool = event_count < 2 or hold_ratio < COMBINED_MAX_HOLD_RATIO
+
+		var preferred_hold_thumb: int = (
+			(1 - last_hold_thumb)
+			if last_hold_thumb >= 0
+			else _choose_preferred_thumb(bass_val, mid_val, high_val, last_thumb, p_rng)
+		)
+		var hold_lane: int = left_lane if preferred_hold_thumb == THUMB_LEFT else right_lane
+		if hold_lane < 0:
+			hold_lane = right_lane if preferred_hold_thumb == THUMB_LEFT else left_lane
+
+		var sustain_sec: float = 0.0
+		var hold_duration_sec: float = 0.0
+		if (
+			not force_single_for_balance
+			and hold_lane >= 0
+			and max_hold_here >= MIN_HOLD_DURATION_SEC
+			and hold_cooldown_ok
+			and hold_cap_ok
+		):
+			sustain_sec = _measure_sustain_with_dip_tolerance(
+				t_sec,
+				max_hold_here,
+				p_rms_frames,
+				p_hop_sec,
+				sustain_threshold
+			)
+			var force_musical_hold: bool = (
+				hold_deficit >= 0.03
+				or (events_since_last_hold >= 4 and hold_deficit >= -0.01)
+			)
+			var hold_wanted: bool = (
+				(sustain_sec >= MIN_HOLD_DURATION_SEC and hold_deficit >= -0.025)
+				or force_musical_hold
+			)
+			if hold_wanted:
+				hold_duration_sec = _compute_combined_hold_duration(
+					sustain_sec,
+					max_hold_here,
+					p_beat_sec,
+					p_difficulty,
+					tier,
+					force_musical_hold
+				)
+		var can_hold: bool = hold_duration_sec >= MIN_HOLD_DURATION_SEC
+
+		var choose_hold: bool = false
+		var choose_double: bool = false
+		if can_hold and can_double:
+			if hold_deficit > double_deficit + 0.015:
+				choose_hold = true
+			elif double_deficit > hold_deficit + 0.015:
+				choose_double = true
+			elif events_since_last_hold > events_since_last_double:
+				choose_hold = true
+			elif events_since_last_double > events_since_last_hold:
+				choose_double = true
+			elif sustain_sec >= MIN_HOLD_DURATION_SEC:
+				choose_hold = true
+			else:
+				choose_double = true
+		elif can_hold:
+			choose_hold = true
+		elif can_double:
+			choose_double = true
+
+		if choose_hold:
+			var hold_thumb: int = lane_to_thumb(hold_lane)
+			var hold_end_sec: float = t_sec + hold_duration_sec
+			generated_notes.append(NoteData.new(t_sec, hold_lane, hold_duration_sec, strength))
+			thumb_last_time[hold_thumb] = t_sec
+			thumb_last_lane[hold_thumb] = hold_lane
+			active_hold_start[hold_thumb] = t_sec
+			active_hold_end[hold_thumb] = hold_end_sec
+			active_hold_lock_until[hold_thumb] = hold_end_sec + p_release_margin_sec
+			global_last_hold_end = maxf(global_last_hold_end, hold_end_sec)
+			last_hold_thumb = hold_thumb
+			last_thumb = hold_thumb
+			opp_taps_during_hold = 0
+			event_count += 1
+			hold_events += 1
+			events_since_last_hold = 0
+			events_since_last_double += 1
+			continue
+
+		if choose_double:
+			generated_notes.append(NoteData.new(t_sec, left_lane, 0.0, strength))
+			generated_notes.append(NoteData.new(t_sec, right_lane, 0.0, strength))
+			thumb_last_time[THUMB_LEFT] = t_sec
+			thumb_last_lane[THUMB_LEFT] = left_lane
+			thumb_last_time[THUMB_RIGHT] = t_sec
+			thumb_last_lane[THUMB_RIGHT] = right_lane
+			last_chord_time = t_sec
+			last_thumb = -1
+			event_count += 1
+			double_events += 1
+			events_since_last_double = 0
+			events_since_last_hold += 1
+			continue
+
+		# If Double Tap has a strong deficit and one thumb only needs a brief rest before the next close beat,
+		# skip an off-beat single that would re-lock the alternate thumb and starve Double Taps on fast tracks.
+		if (
+			double_deficit >= 0.07
+			and double_cooldown_ok
+			and double_cap_ok
+			and (left_lane < 0 or right_lane < 0)
+			and i + 1 < candidate_count
+		):
+			var next_t: float = p_candidates[i + 1]["time_sec"] as float
+			var dt_to_next: float = next_t - t_sec
+			if dt_to_next > 0.0 and dt_to_next <= p_beat_sec * 0.85:
+				var both_ready_next: bool = (
+					(thumb_last_time[THUMB_LEFT] < 0.0 or (next_t - thumb_last_time[THUMB_LEFT]) >= p_same_thumb_min_gap_sec + p_sibling_cross_penalty_sec - ERGONOMIC_EPSILON_SEC)
+					and (thumb_last_time[THUMB_RIGHT] < 0.0 or (next_t - thumb_last_time[THUMB_RIGHT]) >= p_same_thumb_min_gap_sec + p_sibling_cross_penalty_sec - ERGONOMIC_EPSILON_SEC)
+				)
+				if both_ready_next:
+					continue
+
+		# Single Tap emission with natural alternating thumb ergonomics
+		var preferred_thumb: int = _choose_preferred_thumb(
+			bass_val,
+			mid_val,
+			high_val,
+			last_thumb,
+			p_rng
+		)
+		if last_thumb >= 0:
+			var dt_from_last: float = t_sec - thumb_last_time[last_thumb]
+			var fast_alternation_limit: float = p_same_thumb_min_gap_sec + p_sibling_cross_penalty_sec + 0.04
+			if preferred_thumb == last_thumb and dt_from_last < fast_alternation_limit:
+				preferred_thumb = 1 - last_thumb
+
+		var chosen_lane: int = left_lane if preferred_thumb == THUMB_LEFT else right_lane
+		if chosen_lane < 0:
+			chosen_lane = right_lane if preferred_thumb == THUMB_LEFT else left_lane
+		if chosen_lane < 0:
+			continue
+
+		var chosen_thumb: int = lane_to_thumb(chosen_lane)
+		thumb_last_time[chosen_thumb] = t_sec
+		thumb_last_lane[chosen_thumb] = chosen_lane
+		last_thumb = chosen_thumb
+		generated_notes.append(NoteData.new(t_sec, chosen_lane, 0.0, strength))
+		event_count += 1
+		single_events += 1
+		events_since_last_hold += 1
+		events_since_last_double += 1
+
+	generated_notes.sort_custom(_compare_notes_chronologically)
+	return generated_notes
+
+
+func _find_playable_lane_on_thumb(
+	p_thumb: int,
+	p_time_sec: float,
+	p_bass: float,
+	p_mid: float,
+	p_high: float,
+	p_thumb_last_time: PackedFloat32Array,
+	p_thumb_last_lane: PackedInt32Array,
+	p_same_thumb_min_gap_sec: float,
+	p_sibling_cross_penalty_sec: float,
+	p_rng: RandomNumberGenerator
+) -> int:
+	var primary_lane: int = _choose_lane_within_thumb(
+		p_thumb,
+		p_bass,
+		p_mid,
+		p_high,
+		p_thumb_last_lane[p_thumb],
+		p_rng
+	)
+	if _can_thumb_hit_lane(
+		p_thumb,
+		primary_lane,
+		p_time_sec,
+		p_thumb_last_time,
+		p_thumb_last_lane,
+		p_same_thumb_min_gap_sec,
+		p_sibling_cross_penalty_sec
+	):
+		return primary_lane
+	var secondary_lane: int = get_sibling_lane(primary_lane)
+	if _can_thumb_hit_lane(
+		p_thumb,
+		secondary_lane,
+		p_time_sec,
+		p_thumb_last_time,
+		p_thumb_last_lane,
+		p_same_thumb_min_gap_sec,
+		p_sibling_cross_penalty_sec
+	):
+		return secondary_lane
+	return -1
+
+
+func _measure_sustain_with_dip_tolerance(
+	p_time_sec: float,
+	p_max_hold_sec: float,
+	p_rms_frames: PackedFloat32Array,
+	p_hop_sec: float,
+	p_sustain_threshold: float
+) -> float:
+	var rms_count: int = p_rms_frames.size()
+	if rms_count == 0 or p_max_hold_sec < MIN_HOLD_DURATION_SEC:
+		return 0.0
+	var start_frame: int = clampi(int(round(p_time_sec / p_hop_sec)), 0, rms_count - 1)
+	var max_frames: int = maxi(1, int(ceil(p_max_hold_sec / p_hop_sec)) + 1)
+	var cursor: int = start_frame
+	var scanned: int = 0
+	var dip_streak: int = 0
+	var last_strong_span: int = 0
+	while cursor < rms_count and scanned < max_frames:
+		scanned += 1
+		if p_rms_frames[cursor] >= p_sustain_threshold:
+			dip_streak = 0
+			last_strong_span = scanned
+		else:
+			dip_streak += 1
+			if dip_streak > COMBINED_HOLD_DIP_TOLERANCE_FRAMES:
+				break
+		cursor += 1
+	return float(last_strong_span) * p_hop_sec
+
+
+func _compute_combined_hold_duration(
+	p_sustain_sec: float,
+	p_max_allowed_sec: float,
+	p_beat_sec: float,
+	p_difficulty: int,
+	p_tier: int,
+	p_force_musical: bool
+) -> float:
+	if p_max_allowed_sec < MIN_HOLD_DURATION_SEC:
+		return 0.0
+	var hold_grid_sec: float = maxf(
+		0.125,
+		_get_grid_step_for_difficulty_and_tier(p_beat_sec, p_difficulty, p_tier)
+	)
+	if p_sustain_sec >= MIN_HOLD_DURATION_SEC:
+		var quantized: float = floor(p_sustain_sec / hold_grid_sec) * hold_grid_sec
+		if quantized < MIN_HOLD_DURATION_SEC:
+			quantized = MIN_HOLD_DURATION_SEC
+		return minf(quantized, p_max_allowed_sec)
+
+	if not p_force_musical:
+		return 0.0
+
+	var beat_mult: float = 1.25 if p_tier <= 1 else 1.0
+	var target_sec: float = clampf(
+		p_beat_sec * beat_mult,
+		MIN_HOLD_DURATION_SEC,
+		minf(p_max_allowed_sec, maxf(MIN_HOLD_DURATION_SEC, p_beat_sec * 1.5))
+	)
+	var snapped_sec: float = round(target_sec / hold_grid_sec) * hold_grid_sec
+	return clampf(snapped_sec, MIN_HOLD_DURATION_SEC, p_max_allowed_sec)
+
+
 func _apply_hold_durations(
 	p_notes: Array[NoteData],
 	p_rms_frames: PackedFloat32Array,
@@ -660,7 +1174,8 @@ func _sanitize_two_thumb_ergonomics(
 	p_release_margin_sec: float,
 	p_same_thumb_min_gap_sec: float,
 	p_sibling_cross_penalty_sec: float,
-	p_allow_chords: bool = true
+	p_allow_chords: bool = true,
+	p_protect_holds: bool = false
 ) -> Array[NoteData]:
 	if p_notes.is_empty():
 		return p_notes
@@ -730,6 +1245,9 @@ func _sanitize_two_thumb_ergonomics(
 				note.lane = moved_for_hold
 				thumb = opp_thumb
 				opp_thumb = 1 - thumb
+			elif p_protect_holds:
+				# Preserve active Hold rather than cancelling/trimming it when a chord or tap collides.
+				continue
 			else:
 				var prev_hold: NoteData = sanitized[active_hold_idx[thumb]]
 				var trimmed_dur: float = (t_sec - p_release_margin_sec) - prev_hold.time_sec
@@ -740,6 +1258,22 @@ func _sanitize_two_thumb_ergonomics(
 					prev_hold.duration_sec = 0.0
 					active_hold_idx[thumb] = -1
 					active_hold_lock_until[thumb] = -999.0
+
+		# Guarantee <= 2 simultaneous fingers (active holds incl. release margin + notes at t_sec <= 2)
+		if p_protect_holds:
+			var active_holds_now: int = 0
+			if active_hold_idx[THUMB_LEFT] >= 0 and t_sec < active_hold_lock_until[THUMB_LEFT] - ERGONOMIC_EPSILON_SEC:
+				active_holds_now += 1
+			if active_hold_idx[THUMB_RIGHT] >= 0 and t_sec < active_hold_lock_until[THUMB_RIGHT] - ERGONOMIC_EPSILON_SEC:
+				active_holds_now += 1
+			var simultaneous_already_added: int = 0
+			for rev_idx: int in range(sanitized.size() - 1, -1, -1):
+				if absf(t_sec - sanitized[rev_idx].time_sec) <= TIME_DEDUP_EPSILON_SEC:
+					simultaneous_already_added += 1
+				else:
+					break
+			if active_holds_now + simultaneous_already_added + 1 > 2:
+				continue
 
 		if not _can_thumb_hit_lane(
 			thumb,

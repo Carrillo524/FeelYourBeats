@@ -500,14 +500,31 @@ func build_demo_chart(
 		p_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
 		or p_note_type_mode == AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP
 	)
+	var is_combined_mode: bool = p_note_type_mode == AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP
 	var lane_pattern: PackedInt32Array = PackedInt32Array([0, 2, 1, 3])
 
 	for step_idx: int in range(28):
 		var note_time_sec: float = float(step_idx + 1) * beat_sec
 		var lane_idx: int = lane_pattern[step_idx % 4]
+		var strength: float = 1.0 if (step_idx % 4) == 0 else 0.75
+
+		if is_combined_mode:
+			var cycle_pos: int = step_idx % 7
+			var is_combined_hold: bool = cycle_pos == 1 or cycle_pos == 4
+			var is_combined_double: bool = cycle_pos == 0 or cycle_pos == 3
+			var combined_dur: float = beat_sec * 1.25 if is_combined_hold else 0.0
+			if is_combined_double:
+				var opp_lane: int = (2 if (step_idx % 4) == 0 else 3) if lane_idx <= 1 else (0 if (step_idx % 4) == 1 else 1)
+				var first_lane: int = mini(lane_idx, opp_lane)
+				var second_lane: int = maxi(lane_idx, opp_lane)
+				notes.append(NoteData.new(note_time_sec, first_lane, 0.0, strength))
+				notes.append(NoteData.new(note_time_sec, second_lane, 0.0, strength))
+			else:
+				notes.append(NoteData.new(note_time_sec, lane_idx, combined_dur, strength))
+			continue
+
 		var is_hold_step: bool = allow_holds and ((step_idx % 7) == 3)
 		var duration_sec: float = beat_sec * 1.5 if is_hold_step else 0.0
-		var strength: float = 1.0 if (step_idx % 4) == 0 else 0.75
 		var note: NoteData = NoteData.new(note_time_sec, lane_idx, duration_sec, strength)
 		notes.append(note)
 
