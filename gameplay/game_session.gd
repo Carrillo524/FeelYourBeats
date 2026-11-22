@@ -7,6 +7,11 @@ const DEMO_BPM: float = 128.0
 const DEMO_DURATION_SEC: float = 15.0
 const DEMO_SAMPLE_RATE: int = 8000
 const BACK_DEBOUNCE_MSEC: int = 300
+const SMOOTH_CLOCK_DRIFT_CORRECTION_RATE: float = 4.5
+const SMOOTH_CLOCK_HARD_CORRECTION_RATE: float = 9.0
+const SMOOTH_CLOCK_PHASE_TOLERANCE_SEC: float = 0.012
+const SMOOTH_CLOCK_SNAP_THRESHOLD_SEC: float = 0.080
+const SMOOTH_CLOCK_MAX_DELTA_SEC: float = 0.05
 
 static var pending_session_config: Dictionary = {}
 
@@ -41,6 +46,8 @@ var _last_chart_loaded_from_cache: bool = false
 var _last_back_msec: int = -BACK_DEBOUNCE_MSEC
 var _is_app_backgrounded: bool = false
 var _master_was_muted_before_bg: bool = false
+var smooth_song_time: float = 0.0
+var _smooth_song_time_initialized: bool = false
 
 
 static func set_pending_session(p_config: Dictionary) -> void:
@@ -82,6 +89,65 @@ func _exit_tree() -> void:
 	if _is_app_backgrounded:
 		AudioServer.set_bus_mute(0, _master_was_muted_before_bg)
 		_is_app_backgrounded = false
+
+
+func _process(p_delta: float) -> void:
+	if dsp_clock == null or not dsp_clock.is_playing():
+		return
+	var target_audio_time: float = _sample_real_audio_clock_sec()
+	step_smooth_song_time_for_test(p_delta, target_audio_time)
+	if lane_field != null:
+		lane_field.set_smooth_visual_time(smooth_song_time)
+
+
+func get_smooth_song_time() -> float:
+	return smooth_song_time
+
+
+func reset_smooth_song_time(p_time_sec: float = 0.0) -> void:
+	smooth_song_time = p_time_sec
+	_smooth_song_time_initialized = true
+	if lane_field != null:
+		lane_field.set_smooth_visual_time(smooth_song_time)
+
+
+func step_smooth_song_time_for_test(p_delta: float, p_target_audio_time_sec: float) -> float:
+	var dt: float = clampf(p_delta, 0.0, SMOOTH_CLOCK_MAX_DELTA_SEC)
+	if not _smooth_song_time_initialized:
+		smooth_song_time = p_target_audio_time_sec
+		_smooth_song_time_initialized = true
+		return smooth_song_time
+
+	var prev_time: float = smooth_song_time
+	var predicted_time: float = prev_time + dt
+	var drift_sec: float = p_target_audio_time_sec - predicted_time
+	var abs_drift_sec: float = absf(drift_sec)
+
+	if abs_drift_sec >= SMOOTH_CLOCK_SNAP_THRESHOLD_SEC:
+		smooth_song_time = p_target_audio_time_sec
+	elif abs_drift_sec <= SMOOTH_CLOCK_PHASE_TOLERANCE_SEC:
+		var soft_alpha: float = clampf(SMOOTH_CLOCK_DRIFT_CORRECTION_RATE * dt, 0.0, 1.0)
+		smooth_song_time = maxf(prev_time, lerpf(predicted_time, p_target_audio_time_sec, soft_alpha))
+	else:
+		var pull_alpha: float = clampf(SMOOTH_CLOCK_HARD_CORRECTION_RATE * dt, 0.0, 1.0)
+		smooth_song_time = maxf(prev_time, lerpf(predicted_time, p_target_audio_time_sec, pull_alpha))
+	return smooth_song_time
+
+
+func _sample_real_audio_clock_sec() -> float:
+	if dsp_clock == null:
+		return smooth_song_time
+	if dsp_clock.audio_player != null and dsp_clock.audio_player.stream != null and dsp_clock.audio_player.playing and not dsp_clock.audio_player.stream_paused:
+		var chart_offset: float = _active_chart.offset_sec if _active_chart != null else 0.0
+		var raw_audio_time: float = (
+			dsp_clock.audio_player.get_playback_position()
+			+ maxf(0.0, AudioServer.get_time_since_last_mix())
+			- AudioServer.get_output_latency()
+			- chart_offset
+			- dsp_clock.user_offset_sec
+		)
+		return maxf(dsp_clock.get_current_dsp_time(), raw_audio_time)
+	return dsp_clock.get_current_dsp_time()
 
 
 func _notification(p_what: int) -> void:
@@ -306,6 +372,7 @@ func start_chart_session(p_chart: ChartData) -> bool:
 
 	if dsp_clock != null:
 		dsp_clock.start()
+		reset_smooth_song_time(dsp_clock.get_current_dsp_time())
 
 	return true
 

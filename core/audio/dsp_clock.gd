@@ -9,10 +9,10 @@ signal playback_finished()
 
 const USEC_TO_SEC: float = 0.000001
 const SECONDS_PER_MINUTE: float = 60.0
-const VISUAL_PHASE_LOCK_TOLERANCE_SEC: float = 0.006
-const VISUAL_SOFT_CORRECTION_RATE: float = 8.0
-const VISUAL_HARD_CORRECTION_RATE: float = 20.0
-const VISUAL_SNAP_THRESHOLD_SEC: float = 0.045
+const VISUAL_PHASE_LOCK_TOLERANCE_SEC: float = 0.012
+const VISUAL_SOFT_CORRECTION_RATE: float = 4.5
+const VISUAL_HARD_CORRECTION_RATE: float = 9.0
+const VISUAL_SNAP_THRESHOLD_SEC: float = 0.080
 const MAX_VISUAL_FRAME_DELTA_SEC: float = 0.05
 
 @export var audio_player: AudioStreamPlayer = null
@@ -237,7 +237,8 @@ func _advance_visual_clock(p_delta: float, p_target_dsp_time_sec: float) -> void
 		_visual_time_initialized = true
 		return
 
-	var predicted_sec: float = _visual_time_sec + dt
+	var prev_visual_sec: float = _visual_time_sec
+	var predicted_sec: float = prev_visual_sec + dt
 	var phase_error_sec: float = p_target_dsp_time_sec - predicted_sec
 	var abs_error_sec: float = absf(phase_error_sec)
 
@@ -245,10 +246,10 @@ func _advance_visual_clock(p_delta: float, p_target_dsp_time_sec: float) -> void
 		_visual_time_sec = p_target_dsp_time_sec
 	elif abs_error_sec <= VISUAL_PHASE_LOCK_TOLERANCE_SEC:
 		var soft_alpha: float = clampf(VISUAL_SOFT_CORRECTION_RATE * dt, 0.0, 1.0)
-		_visual_time_sec = lerpf(predicted_sec, p_target_dsp_time_sec, soft_alpha)
+		_visual_time_sec = maxf(prev_visual_sec, lerpf(predicted_sec, p_target_dsp_time_sec, soft_alpha))
 	else:
 		var pull_alpha: float = clampf(VISUAL_HARD_CORRECTION_RATE * dt, 0.0, 1.0)
-		_visual_time_sec = lerpf(predicted_sec, p_target_dsp_time_sec, pull_alpha)
+		_visual_time_sec = maxf(prev_visual_sec, lerpf(predicted_sec, p_target_dsp_time_sec, pull_alpha))
 
 
 func _ensure_audio_player() -> void:

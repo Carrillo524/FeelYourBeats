@@ -12,11 +12,16 @@ config_version=5
 
 config/name="FeelYourBeats (FyB)"
 config/version="1.0.4"
+run/main_scene="res://ui/main_menu.tscn"
+run/max_fps=0
 config/auto_accept_quit=false
 config/quit_on_go_back=false
-run/main_scene="res://ui/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="uid://b06gsyb3dk40g"
+
+[autoload]
+
+GlobalUiSfx="*res://ui/ui_sfx_player.gd"
 
 [display]
 
@@ -28,6 +33,7 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="keep_width"
 window/handheld/orientation=1
 window/size/edge_to_edge=true
+window/vsync/vsync_mode=1
 
 [rendering]
 

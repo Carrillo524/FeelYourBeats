@@ -588,6 +588,7 @@ func _handle_touch_scroll_input(p_event: InputEvent) -> void:
 			_active_scroll_touch_index = -1
 			_active_scroll_container = null
 			_touch_scroll_drag_active = false
+		UiSfxPlayer.set_touch_scroll_suppressed(_touch_scroll_drag_active or _suppress_scroll_button_press)
 		return
 
 	if p_event is InputEventScreenDrag:
@@ -614,18 +615,22 @@ func _handle_touch_scroll_input(p_event: InputEvent) -> void:
 			var vp: Viewport = get_viewport()
 			if vp != null:
 				vp.set_input_as_handled()
+		UiSfxPlayer.set_touch_scroll_suppressed(_touch_scroll_drag_active or _suppress_scroll_button_press)
 		return
 
 	if p_event is InputEventMouseButton:
 		var mb: InputEventMouseButton = p_event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _active_scroll_touch_index == -1:
 			_suppress_scroll_button_press = false
+	UiSfxPlayer.set_touch_scroll_suppressed(_touch_scroll_drag_active or _suppress_scroll_button_press)
 
 
 func _consume_suppressed_scroll_press() -> bool:
 	if _touch_scroll_drag_active or _suppress_scroll_button_press:
 		_suppress_scroll_button_press = false
+		UiSfxPlayer.set_touch_scroll_suppressed(_touch_scroll_drag_active)
 		return true
+	UiSfxPlayer.set_touch_scroll_suppressed(false)
 	return false
 
 
@@ -634,8 +639,6 @@ func _on_song_row_pressed(p_entry: Dictionary) -> void:
 		return
 	if _consume_suppressed_scroll_press():
 		return
-	if ui_sfx_player != null:
-		ui_sfx_player.play_button_click()
 	open_song_setup_modal(p_entry)
 
 
@@ -2581,8 +2584,6 @@ func _on_exit_confirm_cancel_pressed() -> void:
 
 
 func _on_exit_confirm_quit_pressed() -> void:
-	if ui_sfx_player != null:
-		ui_sfx_player.play_button_click()
 	if menu_bgm_player != null:
 		menu_bgm_player.stop_bgm()
 	if audio_analyzer != null:
@@ -2606,7 +2607,11 @@ func _resolve_scene_nodes() -> void:
 	if menu_bgm_player == null:
 		menu_bgm_player = get_node_or_null("MenuBgmPlayer") as MenuBgmPlayer
 	if ui_sfx_player == null:
-		ui_sfx_player = get_node_or_null("UiSfxPlayer") as UiSfxPlayer
+		var global_sfx: Node = get_node_or_null("/root/GlobalUiSfx")
+		if global_sfx is UiSfxPlayer:
+			ui_sfx_player = global_sfx as UiSfxPlayer
+		else:
+			ui_sfx_player = get_node_or_null("UiSfxPlayer") as UiSfxPlayer
 	if audio_analyzer == null:
 		audio_analyzer = get_node_or_null("AudioAnalyzer") as AudioAnalyzer
 
@@ -2680,13 +2685,13 @@ func _connect_dependencies() -> void:
 		if not tree.is_connected("on_request_permissions_result", _on_android_permissions_result):
 			tree.connect("on_request_permissions_result", _on_android_permissions_result)
 
-	if ui_sfx_player != null and _safe_container != null:
+	if ui_sfx_player != null:
 		var excluded: Array[BaseButton] = []
 		if _play_button != null:
+			UiSfxPlayer.mark_button_excluded(_play_button)
 			excluded.append(_play_button)
-		if _exit_confirm_button != null:
-			excluded.append(_exit_confirm_button)
-		ui_sfx_player.bind_buttons_in_tree(_safe_container, excluded)
+		ui_sfx_player.enable_global_button_wiring()
+		ui_sfx_player.bind_buttons_in_tree(self, excluded)
 
 
 func _sync_live_audio_monitoring() -> void:

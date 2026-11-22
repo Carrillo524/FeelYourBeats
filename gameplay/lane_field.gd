@@ -104,6 +104,8 @@ var _hit_line_y: float = (DEFAULT_PLAY_HEIGHT * 0.84) - HIT_LINE_VERTICAL_LIFT_P
 var _lane_width: float = DEFAULT_PLAY_WIDTH / float(DEFAULT_LANE_COUNT)
 var _current_dsp_time_sec: float = 0.0
 var _visual_time_sec: float = 0.0
+var _use_external_smooth_time: bool = false
+var _external_smooth_time_sec: float = 0.0
 var _next_spawn_index: int = 0
 var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
@@ -207,7 +209,7 @@ func _process(p_delta: float) -> void:
 	var needs_redraw: bool = false
 
 	if _chart != null and dsp_clock != null and dsp_clock.is_playing():
-		_visual_time_sec = dsp_clock.get_visual_time_sec()
+		_visual_time_sec = _external_smooth_time_sec if _use_external_smooth_time else dsp_clock.get_visual_time_sec()
 		_ensure_pool()
 		_spawn_visible_notes(_visual_time_sec)
 		_update_and_cull_active_views(_visual_time_sec)
@@ -577,9 +579,21 @@ func load_chart(p_chart: ChartData) -> bool:
 	_reset_lane_visual_states()
 	_chart = p_chart
 	_next_spawn_index = 0
+	_use_external_smooth_time = false
 	_visual_time_sec = dsp_clock.get_visual_time_sec() if dsp_clock != null else 0.0
+	_external_smooth_time_sec = _visual_time_sec
 	queue_redraw()
 	return true
+
+
+func set_smooth_visual_time(p_smooth_time_sec: float) -> void:
+	_use_external_smooth_time = true
+	_external_smooth_time_sec = p_smooth_time_sec
+	_visual_time_sec = p_smooth_time_sec
+
+
+func get_visual_time_sec() -> float:
+	return _visual_time_sec
 
 
 func apply_safe_layout(p_play_rect: Rect2, p_hud_safe_rect: Rect2) -> void:

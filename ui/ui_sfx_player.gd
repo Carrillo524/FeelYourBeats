@@ -9,18 +9,63 @@ const SUPPORTED_EXTENSIONS: PackedStringArray = ["ogg", "wav", "mp3"]
 const DEFAULT_AUDIO_BUS: StringName = &"Master"
 const DEFAULT_VOLUME_DB: float = 0.0
 const DEFAULT_TRANSITION_DURATION_SEC: float = 2.5
+const META_CLICK_WIRED: StringName = &"ui_click_wired"
+const META_CLICK_EXCLUDED: StringName = &"ui_click_excluded"
+
+static var _touch_scroll_suppressed: bool = false
 
 @export var sfx_dir_path: String = DEFAULT_SFX_DIR
+@export var auto_wire_scene_tree: bool = false
 
 var _click_player: AudioStreamPlayer = null
 var _cassette_player: AudioStreamPlayer = null
 var _button_click_stream: AudioStream = null
 var _cassette_insert_stream: AudioStream = null
+var _global_wiring_active: bool = false
+var _click_play_count: int = 0
+
+
+static func set_touch_scroll_suppressed(p_suppressed: bool) -> void:
+	_touch_scroll_suppressed = p_suppressed
+
+
+static func is_touch_scroll_suppressed() -> bool:
+	return _touch_scroll_suppressed
+
+
+static func mark_button_excluded(p_button: BaseButton) -> void:
+	if p_button == null:
+		return
+	p_button.set_meta(META_CLICK_EXCLUDED, true)
 
 
 func _ready() -> void:
 	_ensure_players()
 	reload_sfx()
+	var tree: SceneTree = get_tree()
+	var is_autoload_root_child: bool = tree != null and get_parent() == tree.root and name == &"GlobalUiSfx"
+	if auto_wire_scene_tree or is_autoload_root_child:
+		enable_global_button_wiring()
+
+
+func _exit_tree() -> void:
+	if _global_wiring_active:
+		var tree: SceneTree = get_tree()
+		if tree != null and tree.node_added.is_connected(_on_tree_node_added):
+			tree.node_added.disconnect(_on_tree_node_added)
+		_global_wiring_active = false
+
+
+func enable_global_button_wiring() -> void:
+	var tree: SceneTree = get_tree()
+	if tree == null:
+		return
+	if not _global_wiring_active:
+		_global_wiring_active = true
+		if not tree.node_added.is_connected(_on_tree_node_added):
+			tree.node_added.connect(_on_tree_node_added)
+	if tree.root != null:
+		bind_buttons_in_tree(tree.root)
 
 
 func reload_sfx() -> void:
@@ -35,12 +80,24 @@ func reload_sfx() -> void:
 
 func play_button_click() -> void:
 	_ensure_players()
+	_click_play_count += 1
 	if _button_click_stream == null or _click_player == null:
+		return
+	var bus_idx: int = AudioServer.get_bus_index(DEFAULT_AUDIO_BUS)
+	if bus_idx >= 0 and AudioServer.is_bus_mute(bus_idx):
 		return
 	_click_player.bus = DEFAULT_AUDIO_BUS
 	_click_player.volume_db = DEFAULT_VOLUME_DB
 	_click_player.stream = _button_click_stream
 	_click_player.play()
+
+
+func get_click_play_count() -> int:
+	return _click_play_count
+
+
+func reset_click_play_count() -> void:
+	_click_play_count = 0
 
 
 func play_cassette_insert() -> void:
@@ -56,8 +113,14 @@ func play_cassette_insert() -> void:
 func bind_button(p_button: BaseButton) -> void:
 	if p_button == null:
 		return
-	if not p_button.pressed.is_connected(play_button_click):
-		p_button.pressed.connect(play_button_click)
+	if p_button.has_meta(META_CLICK_EXCLUDED) and bool(p_button.get_meta(META_CLICK_EXCLUDED)):
+		return
+	if p_button.has_meta(META_CLICK_WIRED) and bool(p_button.get_meta(META_CLICK_WIRED)):
+		return
+	p_button.set_meta(META_CLICK_WIRED, true)
+	var cb: Callable = _on_wired_button_pressed.bind(p_button)
+	if not p_button.pressed.is_connected(cb):
+		p_button.pressed.connect(cb)
 
 
 func bind_buttons_in_tree(p_root: Node, p_excluded_buttons: Array[BaseButton] = []) -> void:
@@ -66,13 +129,39 @@ func bind_buttons_in_tree(p_root: Node, p_excluded_buttons: Array[BaseButton] = 
 
 	if p_root is BaseButton:
 		var btn: BaseButton = p_root as BaseButton
-		if not p_excluded_buttons.has(btn):
+		if p_excluded_buttons.has(btn):
+			mark_button_excluded(btn)
+		else:
 			bind_button(btn)
 
 	var children: Array[Node] = p_root.get_children()
 	var child_count: int = children.size()
 	for i: int in range(child_count):
 		bind_buttons_in_tree(children[i], p_excluded_buttons)
+
+
+func _on_tree_node_added(p_node: Node) -> void:
+	if p_node is BaseButton:
+		bind_button(p_node as BaseButton)
+
+
+func _on_wired_button_pressed(p_button: BaseButton) -> void:
+	if not is_instance_valid(p_button):
+		return
+	if p_button.has_meta(META_CLICK_EXCLUDED) and bool(p_button.get_meta(META_CLICK_EXCLUDED)):
+		return
+	if _touch_scroll_suppressed and _is_inside_scroll_container(p_button):
+		return
+	play_button_click()
+
+
+func _is_inside_scroll_container(p_node: Node) -> bool:
+	var cur: Node = p_node.get_parent()
+	while cur != null:
+		if cur is ScrollContainer:
+			return true
+		cur = cur.get_parent()
+	return false
 
 
 func has_button_click() -> bool:

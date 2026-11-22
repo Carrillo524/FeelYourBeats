@@ -996,9 +996,13 @@ func _ensure_ui_nodes() -> void:
 		return
 
 	if ui_sfx_player == null:
-		ui_sfx_player = UiSfxPlayer.new()
-		ui_sfx_player.name = "HudUiSfxPlayer"
-		add_child(ui_sfx_player)
+		var global_sfx: Node = get_node_or_null("/root/GlobalUiSfx")
+		if global_sfx is UiSfxPlayer:
+			ui_sfx_player = global_sfx as UiSfxPlayer
+		else:
+			ui_sfx_player = UiSfxPlayer.new()
+			ui_sfx_player.name = "HudUiSfxPlayer"
+			add_child(ui_sfx_player)
 
 	_safe_container = Control.new()
 	_safe_container.name = "SafeAreaContainer"
@@ -1282,7 +1286,8 @@ func _ensure_ui_nodes() -> void:
 	_results_menu_button.pressed.connect(request_main_menu)
 	_results_vbox.add_child(_results_menu_button)
 
-	ui_sfx_player.bind_buttons_in_tree(_safe_container)
+	ui_sfx_player.enable_global_button_wiring()
+	ui_sfx_player.bind_buttons_in_tree(self)
 	_refresh_labels()
 	_apply_banner_visual_transform()
 
