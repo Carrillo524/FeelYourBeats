@@ -40,7 +40,15 @@ const STARTUP_INTRO_SECONDARY_DELAY_SEC: float = 1.64
 const STARTUP_INTRO_TOTAL_SEC: float = 3.00
 const STARTUP_INTRO_TITLE_OFFSET_Y_PX: float = 22.0
 const PHOTOSENSITIVITY_Z_INDEX: int = 110
-const PHOTOSENSITIVITY_FADE_IN_SEC: float = 0.40
+const PHOTOSENSITIVITY_ICON_DELAY_SEC: float = 0.15
+const PHOTOSENSITIVITY_ICON_DURATION_SEC: float = 0.85
+const PHOTOSENSITIVITY_TITLE_DELAY_SEC: float = 0.55
+const PHOTOSENSITIVITY_TITLE_DURATION_SEC: float = 0.80
+const PHOTOSENSITIVITY_BODY_DELAY_SEC: float = 1.25
+const PHOTOSENSITIVITY_BODY_DURATION_SEC: float = 1.00
+const PHOTOSENSITIVITY_HINT_DELAY_SEC: float = 2.35
+const PHOTOSENSITIVITY_HINT_DURATION_SEC: float = 0.65
+const PHOTOSENSITIVITY_ENTRANCE_TOTAL_SEC: float = 3.00
 const PHOTOSENSITIVITY_FADE_OUT_SEC: float = 0.35
 const PHOTOSENSITIVITY_HINT_BREATH_SPEED: float = 1.6
 const PHOTOSENSITIVITY_HINT_MIN_ALPHA: float = 0.45
@@ -294,6 +302,8 @@ var _photosensitivity_hint_phase: float = 0.0
 var _photosensitivity_overlay: Control = null
 var _photosensitivity_content: VBoxContainer = null
 var _photosensitivity_icon: Control = null
+var _photosensitivity_title_label: Label = null
+var _photosensitivity_body_label: Label = null
 var _photosensitivity_hint_label: Label = null
 var _photosensitivity_tween: Tween = null
 var _pending_import_after_permission: bool = false
@@ -1601,7 +1611,7 @@ func _start_photosensitivity_warning() -> void:
 	_photosensitivity_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_photosensitivity_content.alignment = BoxContainer.ALIGNMENT_CENTER
 	_photosensitivity_content.add_theme_constant_override("separation", 40)
-	_photosensitivity_content.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_content.modulate = Color(1.0, 1.0, 1.0, 1.0)
 	_photosensitivity_overlay.add_child(_photosensitivity_content)
 	_photosensitivity_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_photosensitivity_content.offset_left = PHOTOSENSITIVITY_SIDE_MARGIN_PX
@@ -1611,64 +1621,132 @@ func _start_photosensitivity_warning() -> void:
 	_photosensitivity_icon.name = "PhotosensitivityWarningIcon"
 	_photosensitivity_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_photosensitivity_icon.custom_minimum_size = Vector2(0.0, PHOTOSENSITIVITY_ICON_HEIGHT_PX)
+	_photosensitivity_icon.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_icon.scale = Vector2(0.88, 0.88)
 	_photosensitivity_icon.draw.connect(_draw_photosensitivity_icon)
 	_photosensitivity_content.add_child(_photosensitivity_icon)
 
-	var title_label: Label = Label.new()
-	title_label.name = "PhotosensitivityTitle"
-	title_label.text = PHOTOSENSITIVITY_TITLE_TEXT
-	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_photosensitivity_content.add_child(title_label)
+	_photosensitivity_title_label = Label.new()
+	_photosensitivity_title_label.name = "PhotosensitivityTitle"
+	_photosensitivity_title_label.text = PHOTOSENSITIVITY_TITLE_TEXT
+	_photosensitivity_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_photosensitivity_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_photosensitivity_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_title_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_content.add_child(_photosensitivity_title_label)
 
-	var body_label: Label = Label.new()
-	body_label.name = "PhotosensitivityBody"
-	body_label.text = PHOTOSENSITIVITY_BODY_TEXT
-	body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_photosensitivity_content.add_child(body_label)
+	_photosensitivity_body_label = Label.new()
+	_photosensitivity_body_label.name = "PhotosensitivityBody"
+	_photosensitivity_body_label.text = PHOTOSENSITIVITY_BODY_TEXT
+	_photosensitivity_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_photosensitivity_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_photosensitivity_body_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_photosensitivity_body_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_photosensitivity_content.add_child(_photosensitivity_body_label)
 
 	_photosensitivity_hint_label = Label.new()
 	_photosensitivity_hint_label.name = "PhotosensitivityHint"
 	_photosensitivity_hint_label.text = PHOTOSENSITIVITY_HINT_TEXT
 	_photosensitivity_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_photosensitivity_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, PHOTOSENSITIVITY_HINT_MAX_ALPHA)
+	_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, 0.0)
 	_photosensitivity_content.add_child(_photosensitivity_hint_label)
 
 	if _font_registry != null:
-		_font_registry.apply_global_font_override(title_label, 0)
-		_font_registry.apply_global_font_override(body_label, 0)
+		_font_registry.apply_global_font_override(_photosensitivity_title_label, 0)
+		_font_registry.apply_global_font_override(_photosensitivity_body_label, 0)
 		_font_registry.apply_global_font_override(_photosensitivity_hint_label, 0)
 	# Faux-bold title via same-color outline (clean, no glow flicker)
-	title_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_TITLE_FONT_SIZE)
-	title_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_AMBER)
-	title_label.add_theme_constant_override("outline_size", 3)
-	title_label.add_theme_color_override("font_outline_color", COLOR_PHOTOSENSITIVITY_AMBER)
-	body_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_BODY_FONT_SIZE)
-	body_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_BODY)
-	body_label.add_theme_constant_override("line_spacing", 10)
+	_photosensitivity_title_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_TITLE_FONT_SIZE)
+	_photosensitivity_title_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_AMBER)
+	_photosensitivity_title_label.add_theme_constant_override("outline_size", 3)
+	_photosensitivity_title_label.add_theme_color_override("font_outline_color", COLOR_PHOTOSENSITIVITY_AMBER)
+	_photosensitivity_body_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_BODY_FONT_SIZE)
+	_photosensitivity_body_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_BODY)
+	_photosensitivity_body_label.add_theme_constant_override("line_spacing", 10)
 	_photosensitivity_hint_label.add_theme_font_size_override("font_size", PHOTOSENSITIVITY_HINT_FONT_SIZE)
 	_photosensitivity_hint_label.add_theme_color_override("font_color", COLOR_PHOTOSENSITIVITY_HINT)
 
 	_photosensitivity_overlay.move_to_front()
 
-	# Fade-in only (~0.40s); screen remains paused indefinitely until user taps/accepts
+	# Deferred launch after layout computes centered icon pivot_offset
+	call_deferred(&"_launch_photosensitivity_entrance_tween")
+
+
+func _launch_photosensitivity_entrance_tween() -> void:
+	if (
+		not _is_showing_photosensitivity_warning
+		or _is_dismissing_photosensitivity_warning
+		or not is_inside_tree()
+	):
+		return
+
+	if _photosensitivity_icon != null:
+		_photosensitivity_icon.pivot_offset = _photosensitivity_icon.size * 0.5
+
+	# Staggered ~3.0s reveal: warning emblem + title -> body text -> enable tap to continue
+	# No auto-close: remains paused indefinitely after 3.0s until user interacts.
 	_photosensitivity_tween = create_tween()
-	_photosensitivity_tween.tween_property(
-		_photosensitivity_content,
-		"modulate:a",
-		1.0,
-		PHOTOSENSITIVITY_FADE_IN_SEC
-	).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_photosensitivity_tween.tween_callback(_on_photosensitivity_fade_in_finished)
+	_photosensitivity_tween.set_parallel(true)
+
+	# 1. Warning emblem (0.15s -> 1.00s) + title (0.55s -> 1.35s)
+	if _photosensitivity_icon != null:
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_icon,
+			"modulate:a",
+			1.0,
+			PHOTOSENSITIVITY_ICON_DURATION_SEC
+		).set_delay(PHOTOSENSITIVITY_ICON_DELAY_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_icon,
+			"scale",
+			Vector2.ONE,
+			PHOTOSENSITIVITY_ICON_DURATION_SEC
+		).set_delay(PHOTOSENSITIVITY_ICON_DELAY_SEC).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
+
+	if _photosensitivity_title_label != null:
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_title_label,
+			"modulate:a",
+			1.0,
+			PHOTOSENSITIVITY_TITLE_DURATION_SEC
+		).set_delay(PHOTOSENSITIVITY_TITLE_DELAY_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# 2. Warning body text (1.25s -> 2.25s)
+	if _photosensitivity_body_label != null:
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_body_label,
+			"modulate:a",
+			1.0,
+			PHOTOSENSITIVITY_BODY_DURATION_SEC
+		).set_delay(PHOTOSENSITIVITY_BODY_DELAY_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	# 3. Tap-to-continue prompt reveal (2.35s -> 3.00s), then enable interaction
+	if _photosensitivity_hint_label != null:
+		_photosensitivity_tween.tween_property(
+			_photosensitivity_hint_label,
+			"modulate:a",
+			PHOTOSENSITIVITY_HINT_MAX_ALPHA,
+			PHOTOSENSITIVITY_HINT_DURATION_SEC
+		).set_delay(PHOTOSENSITIVITY_HINT_DELAY_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	_photosensitivity_tween.tween_interval(PHOTOSENSITIVITY_ENTRANCE_TOTAL_SEC)
+	_photosensitivity_tween.chain().tween_callback(_on_photosensitivity_entrance_finished)
 
 
-func _on_photosensitivity_fade_in_finished() -> void:
+func _on_photosensitivity_entrance_finished() -> void:
 	_photosensitivity_tween = null
 	if _is_showing_photosensitivity_warning and not _is_dismissing_photosensitivity_warning:
+		if _photosensitivity_icon != null:
+			_photosensitivity_icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
+			_photosensitivity_icon.scale = Vector2.ONE
+		if _photosensitivity_title_label != null:
+			_photosensitivity_title_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		if _photosensitivity_body_label != null:
+			_photosensitivity_body_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		if _photosensitivity_hint_label != null:
+			_photosensitivity_hint_label.modulate = Color(1.0, 1.0, 1.0, PHOTOSENSITIVITY_HINT_MAX_ALPHA)
+		_photosensitivity_hint_phase = 0.0
 		_photosensitivity_input_ready = true
 
 
@@ -1677,9 +1755,9 @@ func _step_photosensitivity_warning(p_delta: float) -> void:
 	if (
 		not _photosensitivity_input_ready
 		and not _is_dismissing_photosensitivity_warning
-		and _photosensitivity_elapsed_sec >= PHOTOSENSITIVITY_FADE_IN_SEC
+		and _photosensitivity_elapsed_sec >= (PHOTOSENSITIVITY_ENTRANCE_TOTAL_SEC + 0.25)
 	):
-		_photosensitivity_input_ready = true
+		_on_photosensitivity_entrance_finished()
 
 	if (
 		_photosensitivity_input_ready
@@ -1760,6 +1838,8 @@ func _finish_photosensitivity_warning() -> void:
 		_photosensitivity_overlay = null
 		_photosensitivity_content = null
 		_photosensitivity_icon = null
+		_photosensitivity_title_label = null
+		_photosensitivity_body_label = null
 		_photosensitivity_hint_label = null
 		overlay_to_free.queue_free()
 
