@@ -28,6 +28,10 @@ const RAIL_HOLD_CORE_COLOR: Color = Color(0.80, 1.0, 0.94, 1.0)
 const RAIL_HOLD_GLOW_COLOR: Color = Color(0.28, 1.0, 0.85, 0.95)
 const CONTINUOUS_CORE_THICKNESS: float = 2.6
 const CONTINUOUS_GLOW_SCALE: float = 1.25
+const RAIL_ACTIVE_HOLD_THICKNESS: float = 3.4
+const RAIL_ACTIVE_PRESS_THICKNESS: float = 3.0
+const RAIL_ACTIVE_HOLD_GLOW_SCALE: float = 1.55
+const RAIL_ACTIVE_PRESS_GLOW_SCALE: float = 1.40
 
 const MAX_ACTIVE_RIPPLES: int = 16
 const RIPPLE_DURATION_SEC: float = 0.34
@@ -106,7 +110,10 @@ var _current_dsp_time_sec: float = 0.0
 var _visual_time_sec: float = 0.0
 var _use_external_smooth_time: bool = false
 var _external_smooth_time_sec: float = 0.0
+var _visible_start_idx: int = 0
 var _next_spawn_index: int = 0
+var _last_window_time_sec: float = -999.0
+var _last_frame_processed_notes: int = 0
 var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
 var _lane_pressed_states: Array[bool] = [false, false, false, false]
@@ -116,9 +123,33 @@ var _lane_hold_phase: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.
 var _lane_hold_energy: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 var _lane_hold_complete_flare: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 var _touch_ripple_consumed_for_lane: Array[bool] = [false, false, false, false]
-var _touch_ripples: Array[Dictionary] = []
-var _hold_absorb_rings: Array[Dictionary] = []
-var _hit_particles: Array[Dictionary] = []
+
+# Preallocated touch ripple pool (0 heap allocations per frame)
+var _rip_active: PackedByteArray = PackedByteArray()
+var _rip_age: PackedFloat32Array = PackedFloat32Array()
+var _rip_duration: PackedFloat32Array = PackedFloat32Array()
+var _rip_pos: PackedVector2Array = PackedVector2Array()
+var _rip_color: PackedColorArray = PackedColorArray()
+var _rip_variant: PackedInt32Array = PackedInt32Array()
+var _rip_cursor: int = 0
+
+# Preallocated hold absorb ring pool (0 heap allocations per frame)
+var _ring_active: PackedByteArray = PackedByteArray()
+var _ring_age: PackedFloat32Array = PackedFloat32Array()
+var _ring_duration: PackedFloat32Array = PackedFloat32Array()
+var _ring_origin: PackedVector2Array = PackedVector2Array()
+var _ring_completion: PackedByteArray = PackedByteArray()
+var _ring_cursor: int = 0
+
+# Preallocated hold spark particle pool (0 heap allocations per frame)
+var _part_active: PackedByteArray = PackedByteArray()
+var _part_age: PackedFloat32Array = PackedFloat32Array()
+var _part_duration: PackedFloat32Array = PackedFloat32Array()
+var _part_pos: PackedVector2Array = PackedVector2Array()
+var _part_vel: PackedVector2Array = PackedVector2Array()
+var _part_radius: PackedFloat32Array = PackedFloat32Array()
+var _part_color: PackedColorArray = PackedColorArray()
+var _part_cursor: int = 0
 var _hold_spark_accumulator_sec: float = 0.0
 var _hold_ring_accumulator_sec: float = 0.0
 var _hit_effect_style: String = GameplayEffectsConfig.HIT_CLASSIC
@@ -211,6 +242,7 @@ func _process(p_delta: float) -> void:
 	if _chart != null and dsp_clock != null and dsp_clock.is_playing():
 		_visual_time_sec = _external_smooth_time_sec if _use_external_smooth_time else dsp_clock.get_visual_time_sec()
 		_ensure_pool()
+		_advance_visible_window(_visual_time_sec)
 		_spawn_visible_notes(_visual_time_sec)
 		_update_and_cull_active_views(_visual_time_sec)
 
@@ -254,50 +286,39 @@ func _process(p_delta: float) -> void:
 		_hold_spark_accumulator_sec = 0.0
 		_hold_ring_accumulator_sec = 0.0
 
-	var ring_idx: int = _hold_absorb_rings.size() - 1
-	while ring_idx >= 0:
-		var ring: Dictionary = _hold_absorb_rings[ring_idx]
-		var next_age: float = (ring["age"] as float) + dt
-		var duration: float = maxf(0.01, ring["duration"] as float)
-		if next_age >= duration:
-			_hold_absorb_rings.remove_at(ring_idx)
+	for ring_i: int in range(_ring_active.size()):
+		if _ring_active[ring_i] == 0:
+			continue
+		var next_age: float = _ring_age[ring_i] + dt
+		if next_age >= _ring_duration[ring_i]:
+			_ring_active[ring_i] = 0
 		else:
-			ring["age"] = next_age
-			_hold_absorb_rings[ring_idx] = ring
+			_ring_age[ring_i] = next_age
 		needs_redraw = true
-		ring_idx -= 1
 
-	var ripple_idx: int = _touch_ripples.size() - 1
-	while ripple_idx >= 0:
-		var ripple: Dictionary = _touch_ripples[ripple_idx]
-		var next_age: float = (ripple["age"] as float) + dt
-		var duration: float = maxf(0.01, ripple["duration"] as float)
-		if next_age >= duration:
-			_touch_ripples.remove_at(ripple_idx)
+	for rip_i: int in range(_rip_active.size()):
+		if _rip_active[rip_i] == 0:
+			continue
+		var next_age: float = _rip_age[rip_i] + dt
+		if next_age >= _rip_duration[rip_i]:
+			_rip_active[rip_i] = 0
 		else:
-			ripple["age"] = next_age
-			_touch_ripples[ripple_idx] = ripple
+			_rip_age[rip_i] = next_age
 		needs_redraw = true
-		ripple_idx -= 1
 
-	var particle_idx: int = _hit_particles.size() - 1
-	while particle_idx >= 0:
-		var particle: Dictionary = _hit_particles[particle_idx]
-		var next_age: float = (particle["age"] as float) + dt
-		var duration: float = maxf(0.01, particle["duration"] as float)
-		if next_age >= duration:
-			_hit_particles.remove_at(particle_idx)
+	for part_i: int in range(_part_active.size()):
+		if _part_active[part_i] == 0:
+			continue
+		var next_age: float = _part_age[part_i] + dt
+		if next_age >= _part_duration[part_i]:
+			_part_active[part_i] = 0
 		else:
-			var pos: Vector2 = particle["pos"] as Vector2
-			var vel: Vector2 = particle["vel"] as Vector2
+			var vel: Vector2 = _part_vel[part_i]
 			vel.y += PARTICLE_GRAVITY_PX_PER_SEC2 * dt
-			pos += vel * dt
-			particle["age"] = next_age
-			particle["pos"] = pos
-			particle["vel"] = vel
-			_hit_particles[particle_idx] = particle
+			_part_vel[part_i] = vel
+			_part_pos[part_i] = _part_pos[part_i] + (vel * dt)
+			_part_age[part_i] = next_age
 		needs_redraw = true
-		particle_idx -= 1
 
 	if _step_vanish_effect_pools(dt):
 		needs_redraw = true
@@ -367,8 +388,8 @@ func _draw() -> void:
 		var lane_end_x: float = lane_start_x + _lane_width
 		var active_core: Color = RAIL_HOLD_CORE_COLOR if is_holding else RAIL_PRESSED_CORE_COLOR
 		var active_glow: Color = RAIL_HOLD_GLOW_COLOR if is_holding else RAIL_PRESSED_GLOW_COLOR
-		var active_thickness: float = 3.4 if is_holding else 3.0
-		var active_scale: float = 1.55 if is_holding else 1.40
+		var active_thickness: float = RAIL_ACTIVE_HOLD_THICKNESS if is_holding else RAIL_ACTIVE_PRESS_THICKNESS
+		var active_scale: float = RAIL_ACTIVE_HOLD_GLOW_SCALE if is_holding else RAIL_ACTIVE_PRESS_GLOW_SCALE
 
 		_draw_glowing_horizontal_line(
 			lane_start_x,
@@ -441,14 +462,14 @@ func _draw_classic_hold_consumption_effects(p_lane_count: int) -> void:
 				Color(halo_col.r, halo_col.g, halo_col.b, inner_alpha)
 			)
 
-	# Soft ascending cyan/turquoise absorption rings drifting upward from contact point
-	var ring_count: int = _hold_absorb_rings.size()
-	for i: int in range(ring_count):
-		var ring: Dictionary = _hold_absorb_rings[i]
-		var origin: Vector2 = ring["origin"] as Vector2
-		var age: float = ring["age"] as float
-		var duration: float = maxf(0.01, ring["duration"] as float)
-		var is_completion: bool = ring["is_completion"] as bool
+	# Soft ascending cyan/turquoise absorption rings drifting upward from contact point (0 allocs/frame)
+	for i: int in range(_ring_active.size()):
+		if _ring_active[i] == 0:
+			continue
+		var origin: Vector2 = _ring_origin[i]
+		var age: float = _ring_age[i]
+		var duration: float = maxf(0.01, _ring_duration[i])
+		var is_completion: bool = _ring_completion[i] != 0
 		var t: float = clampf(age / duration, 0.0, 1.0)
 		var eased_t: float = 1.0 - pow(1.0 - t, 2.2)
 		var rise_speed: float = HOLD_RING_RISE_SPEED_PX_PER_SEC * (1.35 if is_completion else 1.0)
@@ -466,28 +487,28 @@ func _draw_classic_hold_consumption_effects(p_lane_count: int) -> void:
 
 
 func _draw_touch_ripples() -> void:
-	var ripple_count: int = _touch_ripples.size()
-	for i: int in range(ripple_count):
-		var ripple: Dictionary = _touch_ripples[i]
-		var pos: Vector2 = ripple["pos"] as Vector2
-		var age: float = ripple["age"] as float
-		var duration: float = maxf(0.01, ripple["duration"] as float)
-		var base_color: Color = ripple["color"] as Color
-		var variant: int = int(ripple.get("variant", 0))
+	for i: int in range(_rip_active.size()):
+		if _rip_active[i] == 0:
+			continue
+		var pos: Vector2 = _rip_pos[i]
+		var age: float = _rip_age[i]
+		var duration: float = maxf(0.01, _rip_duration[i])
+		var base_color: Color = _rip_color[i]
+		var variant: int = _rip_variant[i]
 		var t: float = clampf(age / duration, 0.0, 1.0)
 		_touch_renderer.draw_touch_effect(self, pos, t, _touch_effect_style, base_color, variant)
 
 
 func _draw_hit_particles() -> void:
-	var particle_count: int = _hit_particles.size()
-	for i: int in range(particle_count):
-		var particle: Dictionary = _hit_particles[i]
-		var pos: Vector2 = particle["pos"] as Vector2
-		var vel: Vector2 = particle["vel"] as Vector2
-		var age: float = particle["age"] as float
-		var duration: float = maxf(0.01, particle["duration"] as float)
-		var radius: float = particle["radius"] as float
-		var base_color: Color = particle["color"] as Color
+	for i: int in range(_part_active.size()):
+		if _part_active[i] == 0:
+			continue
+		var pos: Vector2 = _part_pos[i]
+		var vel: Vector2 = _part_vel[i]
+		var age: float = _part_age[i]
+		var duration: float = maxf(0.01, _part_duration[i])
+		var radius: float = _part_radius[i]
+		var base_color: Color = _part_color[i]
 		var t: float = clampf(age / duration, 0.0, 1.0)
 		var fade: float = 1.0 - (t * t)
 		var curr_radius: float = maxf(1.2, radius * (1.0 - t * 0.55))
@@ -578,12 +599,27 @@ func load_chart(p_chart: ChartData) -> bool:
 	_recycle_all_active_views()
 	_reset_lane_visual_states()
 	_chart = p_chart
-	_next_spawn_index = 0
+	reset_visible_window_cursor()
 	_use_external_smooth_time = false
 	_visual_time_sec = dsp_clock.get_visual_time_sec() if dsp_clock != null else 0.0
 	_external_smooth_time_sec = _visual_time_sec
 	queue_redraw()
 	return true
+
+
+func reset_visible_window_cursor() -> void:
+	_visible_start_idx = 0
+	_next_spawn_index = 0
+	_last_window_time_sec = -999.0
+	_last_frame_processed_notes = 0
+
+
+func get_visible_start_idx() -> int:
+	return _visible_start_idx
+
+
+func get_last_frame_processed_note_count() -> int:
+	return _last_frame_processed_notes
 
 
 func set_smooth_visual_time(p_smooth_time_sec: float) -> void:
@@ -632,6 +668,7 @@ func update_field_at_time(p_dsp_time_sec: float) -> void:
 		return
 
 	_ensure_pool()
+	_advance_visible_window(_visual_time_sec)
 	_spawn_visible_notes(_visual_time_sec)
 	_update_and_cull_active_views(_visual_time_sec)
 
@@ -697,11 +734,19 @@ func get_free_pool_count() -> int:
 
 
 func get_active_ripple_count() -> int:
-	return _touch_ripples.size()
+	var count: int = 0
+	for i: int in range(_rip_active.size()):
+		if _rip_active[i] != 0:
+			count += 1
+	return count
 
 
 func get_active_particle_count() -> int:
-	return _hit_particles.size()
+	var count: int = 0
+	for i: int in range(_part_active.size()):
+		if _part_active[i] != 0:
+			count += 1
+	return count
 
 
 func apply_gameplay_effects_config(p_config: GameplayEffectsConfig) -> void:
@@ -809,7 +854,11 @@ func get_lane_hold_complete_flare(p_lane: int) -> float:
 
 
 func get_active_hold_absorb_ring_count() -> int:
-	return _hold_absorb_rings.size()
+	var count: int = 0
+	for i: int in range(_ring_active.size()):
+		if _ring_active[i] != 0:
+			count += 1
+	return count
 
 
 func get_divider_shake_offset_x() -> float:
@@ -1012,15 +1061,15 @@ func _trigger_hold_completion_flare(p_lane: int) -> void:
 
 
 func _spawn_hold_absorb_ring(p_lane: int, p_is_completion: bool) -> void:
-	if _hold_absorb_rings.size() >= MAX_HOLD_ABSORB_RINGS:
-		_hold_absorb_rings.remove_at(0)
-	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
-	_hold_absorb_rings.append({
-		"origin": origin,
-		"age": 0.0,
-		"duration": HOLD_RING_DURATION_SEC * (1.20 if p_is_completion else 1.0),
-		"is_completion": p_is_completion,
-	})
+	if _ring_active.size() != MAX_HOLD_ABSORB_RINGS:
+		return
+	var slot: int = _ring_cursor
+	_ring_cursor = (_ring_cursor + 1) % MAX_HOLD_ABSORB_RINGS
+	_ring_active[slot] = 1
+	_ring_age[slot] = 0.0
+	_ring_duration[slot] = HOLD_RING_DURATION_SEC * (1.20 if p_is_completion else 1.0)
+	_ring_origin[slot] = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	_ring_completion[slot] = 1 if p_is_completion else 0
 	queue_redraw()
 
 
@@ -1045,18 +1094,17 @@ func _create_hold_contact_halo_texture() -> GradientTexture2D:
 
 
 func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
-	if _touch_ripples.size() >= MAX_ACTIVE_RIPPLES:
-		_touch_ripples.remove_at(0)
-
+	if _rip_active.size() != MAX_ACTIVE_RIPPLES:
+		return
 	_fx_seed_counter += 1
-	var variant: int = posmod((_fx_seed_counter * 7) + int(p_pos.x), TouchEffectRenderer.NOTE_VARIANT_COUNT)
-	_touch_ripples.append({
-		"pos": p_pos,
-		"age": 0.0,
-		"duration": TouchEffectRenderer.get_duration_for_style(_touch_effect_style),
-		"color": p_color,
-		"variant": variant,
-	})
+	var slot: int = _rip_cursor
+	_rip_cursor = (_rip_cursor + 1) % MAX_ACTIVE_RIPPLES
+	_rip_active[slot] = 1
+	_rip_age[slot] = 0.0
+	_rip_duration[slot] = TouchEffectRenderer.get_duration_for_style(_touch_effect_style)
+	_rip_pos[slot] = p_pos
+	_rip_color[slot] = p_color
+	_rip_variant[slot] = posmod((_fx_seed_counter * 7) + int(p_pos.x), TouchEffectRenderer.NOTE_VARIANT_COUNT)
 	queue_redraw()
 
 
@@ -1132,6 +1180,48 @@ func _init_vanish_effect_pools() -> void:
 		_fr_local_polys.append(poly_slot)
 	_fr_world_poly_buf.resize(4)
 
+	_rip_active.resize(MAX_ACTIVE_RIPPLES)
+	_rip_age.resize(MAX_ACTIVE_RIPPLES)
+	_rip_duration.resize(MAX_ACTIVE_RIPPLES)
+	_rip_pos.resize(MAX_ACTIVE_RIPPLES)
+	_rip_color.resize(MAX_ACTIVE_RIPPLES)
+	_rip_variant.resize(MAX_ACTIVE_RIPPLES)
+	for r_i: int in range(MAX_ACTIVE_RIPPLES):
+		_rip_active[r_i] = 0
+		_rip_age[r_i] = 0.0
+		_rip_duration[r_i] = RIPPLE_DURATION_SEC
+		_rip_pos[r_i] = Vector2.ZERO
+		_rip_color[r_i] = COLOR_TOUCH_RIPPLE
+		_rip_variant[r_i] = 0
+
+	_ring_active.resize(MAX_HOLD_ABSORB_RINGS)
+	_ring_age.resize(MAX_HOLD_ABSORB_RINGS)
+	_ring_duration.resize(MAX_HOLD_ABSORB_RINGS)
+	_ring_origin.resize(MAX_HOLD_ABSORB_RINGS)
+	_ring_completion.resize(MAX_HOLD_ABSORB_RINGS)
+	for h_i: int in range(MAX_HOLD_ABSORB_RINGS):
+		_ring_active[h_i] = 0
+		_ring_age[h_i] = 0.0
+		_ring_duration[h_i] = HOLD_RING_DURATION_SEC
+		_ring_origin[h_i] = Vector2.ZERO
+		_ring_completion[h_i] = 0
+
+	_part_active.resize(MAX_ACTIVE_PARTICLES)
+	_part_age.resize(MAX_ACTIVE_PARTICLES)
+	_part_duration.resize(MAX_ACTIVE_PARTICLES)
+	_part_pos.resize(MAX_ACTIVE_PARTICLES)
+	_part_vel.resize(MAX_ACTIVE_PARTICLES)
+	_part_radius.resize(MAX_ACTIVE_PARTICLES)
+	_part_color.resize(MAX_ACTIVE_PARTICLES)
+	for p_i: int in range(MAX_ACTIVE_PARTICLES):
+		_part_active[p_i] = 0
+		_part_age[p_i] = 0.0
+		_part_duration[p_i] = 0.24
+		_part_pos[p_i] = Vector2.ZERO
+		_part_vel[p_i] = Vector2.ZERO
+		_part_radius[p_i] = 4.0
+		_part_color[p_i] = COLOR_HOLD_SPARK
+
 
 func _clear_vanish_effect_pools() -> void:
 	for i: int in range(_fw_active.size()):
@@ -1140,9 +1230,18 @@ func _clear_vanish_effect_pools() -> void:
 		_zf_active[j] = 0
 	for k: int in range(_fr_active.size()):
 		_fr_active[k] = 0
+	for r_i: int in range(_rip_active.size()):
+		_rip_active[r_i] = 0
+	for h_i: int in range(_ring_active.size()):
+		_ring_active[h_i] = 0
+	for p_i: int in range(_part_active.size()):
+		_part_active[p_i] = 0
 	_fw_cursor = 0
 	_zf_cursor = 0
 	_fr_cursor = 0
+	_rip_cursor = 0
+	_ring_cursor = 0
+	_part_cursor = 0
 
 
 func _step_vanish_effect_pools(p_dt: float) -> bool:
@@ -1442,17 +1541,17 @@ func _append_particle(
 	p_duration: float,
 	p_color: Color
 ) -> void:
-	if _hit_particles.size() >= MAX_ACTIVE_PARTICLES:
-		_hit_particles.remove_at(0)
-
-	_hit_particles.append({
-		"pos": p_pos,
-		"vel": p_vel,
-		"age": 0.0,
-		"duration": p_duration,
-		"radius": p_radius,
-		"color": p_color,
-	})
+	if _part_active.size() != MAX_ACTIVE_PARTICLES:
+		return
+	var slot: int = _part_cursor
+	_part_cursor = (_part_cursor + 1) % MAX_ACTIVE_PARTICLES
+	_part_active[slot] = 1
+	_part_age[slot] = 0.0
+	_part_duration[slot] = p_duration
+	_part_pos[slot] = p_pos
+	_part_vel[slot] = p_vel
+	_part_radius[slot] = p_radius
+	_part_color[slot] = p_color
 
 
 func _pseudo_rand_signed(p_seed: int) -> float:
@@ -1477,9 +1576,6 @@ func _reset_lane_visual_states() -> void:
 		_lane_hold_complete_flare[j] = 0.0
 	for k: int in range(_touch_ripple_consumed_for_lane.size()):
 		_touch_ripple_consumed_for_lane[k] = false
-	_touch_ripples.clear()
-	_hold_absorb_rings.clear()
-	_hit_particles.clear()
 	_clear_vanish_effect_pools()
 	_hold_spark_accumulator_sec = 0.0
 	_hold_ring_accumulator_sec = 0.0
@@ -1492,6 +1588,41 @@ func _reset_lane_visual_states() -> void:
 	_divider_tier = 0
 
 
+func _advance_visible_window(p_song_time_sec: float) -> void:
+	if _chart == null:
+		return
+	if _last_window_time_sec > -900.0 and p_song_time_sec < _last_window_time_sec - 0.05:
+		_recycle_all_active_views()
+		_visible_start_idx = 0
+		_next_spawn_index = 0
+	_last_window_time_sec = p_song_time_sec
+
+	var safe_speed: float = maxf(1.0, scroll_speed_px_per_sec)
+	var past_cutoff_sec: float = p_song_time_sec - (despawn_past_hit_line_px / safe_speed)
+	var notes: Array[NoteData] = _chart.notes
+	var note_count: int = notes.size()
+
+	while _visible_start_idx < note_count:
+		var candidate: NoteData = notes[_visible_start_idx]
+		if candidate == null:
+			_visible_start_idx += 1
+			continue
+
+		var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(candidate)
+		if is_holding:
+			break
+
+		var is_resolved: bool = hit_judge != null and hit_judge.is_note_resolved(candidate)
+		var tail_end_sec: float = candidate.time_sec + maxf(0.0, candidate.duration_sec)
+		if is_resolved or tail_end_sec < past_cutoff_sec:
+			_visible_start_idx += 1
+		else:
+			break
+
+	if _next_spawn_index < _visible_start_idx:
+		_next_spawn_index = _visible_start_idx
+
+
 func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
 	var safe_speed: float = maxf(1.0, scroll_speed_px_per_sec)
 	var lookahead_sec: float = (_hit_line_y + TOP_SPAWN_MARGIN_PX) / safe_speed
@@ -1499,6 +1630,8 @@ func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
 
 	var notes: Array[NoteData] = _chart.notes
 	var note_count: int = notes.size()
+	var inspected_count: int = 0
+
 	while _next_spawn_index < note_count:
 		var candidate: NoteData = notes[_next_spawn_index]
 		if candidate == null:
@@ -1509,6 +1642,7 @@ func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
 			break
 
 		_next_spawn_index += 1
+		inspected_count += 1
 
 		if hit_judge != null and hit_judge.is_note_resolved(candidate):
 			continue
@@ -1523,6 +1657,8 @@ func _spawn_visible_notes(p_dsp_time_sec: float) -> void:
 		var is_holding: bool = hit_judge != null and hit_judge.is_note_actively_held(candidate)
 		view.update_position(p_dsp_time_sec, _hit_line_y, is_holding)
 		_active_views.append(view)
+
+	_last_frame_processed_notes = inspected_count + _active_views.size()
 
 
 func _update_and_cull_active_views(p_dsp_time_sec: float) -> void:

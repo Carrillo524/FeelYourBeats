@@ -7,9 +7,9 @@ const DEMO_BPM: float = 128.0
 const DEMO_DURATION_SEC: float = 15.0
 const DEMO_SAMPLE_RATE: int = 8000
 const BACK_DEBOUNCE_MSEC: int = 300
-const SMOOTH_CLOCK_DRIFT_CORRECTION_RATE: float = 4.5
-const SMOOTH_CLOCK_HARD_CORRECTION_RATE: float = 9.0
-const SMOOTH_CLOCK_PHASE_TOLERANCE_SEC: float = 0.012
+const SMOOTH_CLOCK_DEADZONE_SEC: float = 0.006
+const SMOOTH_CLOCK_DRIFT_CORRECTION_RATE: float = 4.0
+const SMOOTH_CLOCK_MAX_CORRECTION_ALPHA: float = 0.08
 const SMOOTH_CLOCK_SNAP_THRESHOLD_SEC: float = 0.080
 const SMOOTH_CLOCK_MAX_DELTA_SEC: float = 0.05
 
@@ -123,14 +123,17 @@ func step_smooth_song_time_for_test(p_delta: float, p_target_audio_time_sec: flo
 	var drift_sec: float = p_target_audio_time_sec - predicted_time
 	var abs_drift_sec: float = absf(drift_sec)
 
-	if abs_drift_sec >= SMOOTH_CLOCK_SNAP_THRESHOLD_SEC:
+	if abs_drift_sec > SMOOTH_CLOCK_SNAP_THRESHOLD_SEC:
 		smooth_song_time = p_target_audio_time_sec
-	elif abs_drift_sec <= SMOOTH_CLOCK_PHASE_TOLERANCE_SEC:
-		var soft_alpha: float = clampf(SMOOTH_CLOCK_DRIFT_CORRECTION_RATE * dt, 0.0, 1.0)
-		smooth_song_time = maxf(prev_time, lerpf(predicted_time, p_target_audio_time_sec, soft_alpha))
+	elif abs_drift_sec < SMOOTH_CLOCK_DEADZONE_SEC:
+		smooth_song_time = predicted_time
 	else:
-		var pull_alpha: float = clampf(SMOOTH_CLOCK_HARD_CORRECTION_RATE * dt, 0.0, 1.0)
-		smooth_song_time = maxf(prev_time, lerpf(predicted_time, p_target_audio_time_sec, pull_alpha))
+		var corr_alpha: float = clampf(
+			dt * SMOOTH_CLOCK_DRIFT_CORRECTION_RATE,
+			0.0,
+			SMOOTH_CLOCK_MAX_CORRECTION_ALPHA
+		)
+		smooth_song_time = maxf(prev_time, lerpf(predicted_time, p_target_audio_time_sec, corr_alpha))
 	return smooth_song_time
 
 
@@ -139,14 +142,13 @@ func _sample_real_audio_clock_sec() -> float:
 		return smooth_song_time
 	if dsp_clock.audio_player != null and dsp_clock.audio_player.stream != null and dsp_clock.audio_player.playing and not dsp_clock.audio_player.stream_paused:
 		var chart_offset: float = _active_chart.offset_sec if _active_chart != null else 0.0
-		var raw_audio_time: float = (
+		return (
 			dsp_clock.audio_player.get_playback_position()
 			+ maxf(0.0, AudioServer.get_time_since_last_mix())
 			- AudioServer.get_output_latency()
 			- chart_offset
 			- dsp_clock.user_offset_sec
 		)
-		return maxf(dsp_clock.get_current_dsp_time(), raw_audio_time)
 	return dsp_clock.get_current_dsp_time()
 
 
