@@ -42,13 +42,22 @@ const HOLD_TICK_SPARK_COUNT: int = 6
 const HOLD_SPARK_INTERVAL_SEC: float = 0.045
 const PARTICLE_GRAVITY_PX_PER_SEC2: float = 340.0
 
+const HIT_EFFECT_CLASSIC: String = "classic"
+const MAX_HOLD_ABSORB_RINGS: int = 16
+const HOLD_RING_SPAWN_INTERVAL_SEC: float = 0.115
+const HOLD_RING_DURATION_SEC: float = 0.40
+const HOLD_RING_RISE_SPEED_PX_PER_SEC: float = 175.0
+const HOLD_COMPLETE_FLARE_DECAY_RATE: float = 5.2
+const COLOR_HOLD_ABSORB_CYAN: Color = Color(0.18, 0.92, 1.0, 1.0)
+const COLOR_HOLD_ABSORB_TURQUOISE: Color = Color(0.24, 0.98, 0.86, 1.0)
+
 const COLOR_PERFECT_A: Color = Color(0.35, 1.0, 0.96, 1.0)
 const COLOR_PERFECT_B: Color = Color(1.0, 0.88, 0.28, 1.0)
 const COLOR_PERFECT_C: Color = Color(1.0, 0.36, 0.86, 1.0)
 const COLOR_GREAT_A: Color = Color(0.30, 1.0, 0.62, 1.0)
 const COLOR_GREAT_B: Color = Color(0.25, 0.90, 1.0, 1.0)
 const COLOR_GOOD_A: Color = Color(0.38, 0.76, 1.0, 0.92)
-const COLOR_HOLD_SPARK: Color = Color(0.55, 1.0, 0.92, 1.0)
+const COLOR_HOLD_SPARK: Color = Color(0.26, 0.98, 0.88, 1.0)
 const COLOR_TOUCH_RIPPLE: Color = Color(0.38, 0.94, 1.0, 0.88)
 
 @export var dsp_clock: DSPClock = null
@@ -75,10 +84,18 @@ var _free_pool: Array[NoteView] = []
 var _active_views: Array[NoteView] = []
 var _lane_pressed_states: Array[bool] = [false, false, false, false]
 var _lane_hold_states: Array[bool] = [false, false, false, false]
+var _lane_pending_hold_completion: Array[bool] = [false, false, false, false]
+var _lane_hold_phase: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+var _lane_hold_energy: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+var _lane_hold_complete_flare: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 var _touch_ripple_consumed_for_lane: Array[bool] = [false, false, false, false]
 var _touch_ripples: Array[Dictionary] = []
+var _hold_absorb_rings: Array[Dictionary] = []
 var _hit_particles: Array[Dictionary] = []
 var _hold_spark_accumulator_sec: float = 0.0
+var _hold_ring_accumulator_sec: float = 0.0
+var _hit_effect_style: String = HIT_EFFECT_CLASSIC
+var _hold_contact_halo_texture: GradientTexture2D = null
 var _fx_seed_counter: int = 1
 var _divider_beat_pulse: float = 0.0
 var _divider_bass_energy: float = 0.0
@@ -98,8 +115,15 @@ static func resolve_speed_factor(p_speed_level: int) -> float:
 	return float(clamped_level)
 
 
+func _init() -> void:
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hold_contact_halo_texture = _create_hold_contact_halo_texture()
+
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _hold_contact_halo_texture == null:
+		_hold_contact_halo_texture = _create_hold_contact_halo_texture()
 	if not _speed_multiplier_configured:
 		_base_scroll_speed_px_per_sec = maxf(100.0, scroll_speed_px_per_sec)
 	scroll_speed_px_per_sec = _base_scroll_speed_px_per_sec * resolve_speed_factor(_speed_multiplier)
@@ -130,7 +154,20 @@ func _process(p_delta: float) -> void:
 	for lane_idx: int in range(mini(lane_count, _lane_hold_states.size())):
 		if _lane_hold_states[lane_idx]:
 			any_holding = true
-			break
+			_lane_hold_phase[lane_idx] += dt * 11.5
+			_lane_hold_energy[lane_idx] = minf(1.0, _lane_hold_energy[lane_idx] + (dt * 7.5))
+			needs_redraw = true
+		elif _lane_hold_energy[lane_idx] > 0.002:
+			_lane_hold_energy[lane_idx] *= exp(-10.0 * dt)
+			if _lane_hold_energy[lane_idx] < 0.002:
+				_lane_hold_energy[lane_idx] = 0.0
+			needs_redraw = true
+
+		if _lane_hold_complete_flare[lane_idx] > 0.002:
+			_lane_hold_complete_flare[lane_idx] *= exp(-HOLD_COMPLETE_FLARE_DECAY_RATE * dt)
+			if _lane_hold_complete_flare[lane_idx] < 0.002:
+				_lane_hold_complete_flare[lane_idx] = 0.0
+			needs_redraw = true
 
 	if any_holding:
 		_hold_spark_accumulator_sec += dt
@@ -140,8 +177,30 @@ func _process(p_delta: float) -> void:
 				if _lane_hold_states[lane_idx]:
 					_spawn_hold_sparks(lane_idx, 2)
 					needs_redraw = true
+
+		_hold_ring_accumulator_sec += dt
+		while _hold_ring_accumulator_sec >= HOLD_RING_SPAWN_INTERVAL_SEC:
+			_hold_ring_accumulator_sec -= HOLD_RING_SPAWN_INTERVAL_SEC
+			for lane_idx: int in range(mini(lane_count, _lane_hold_states.size())):
+				if _lane_hold_states[lane_idx]:
+					_spawn_hold_absorb_ring(lane_idx, false)
+					needs_redraw = true
 	else:
 		_hold_spark_accumulator_sec = 0.0
+		_hold_ring_accumulator_sec = 0.0
+
+	var ring_idx: int = _hold_absorb_rings.size() - 1
+	while ring_idx >= 0:
+		var ring: Dictionary = _hold_absorb_rings[ring_idx]
+		var next_age: float = (ring["age"] as float) + dt
+		var duration: float = maxf(0.01, ring["duration"] as float)
+		if next_age >= duration:
+			_hold_absorb_rings.remove_at(ring_idx)
+		else:
+			ring["age"] = next_age
+			_hold_absorb_rings[ring_idx] = ring
+		needs_redraw = true
+		ring_idx -= 1
 
 	var ripple_idx: int = _touch_ripples.size() - 1
 	while ripple_idx >= 0:
@@ -262,8 +321,79 @@ func _draw() -> void:
 			active_scale
 		)
 
+	_draw_hold_consumption_effects(lane_count)
 	_draw_touch_ripples()
 	_draw_hit_particles()
+
+
+func _draw_hold_consumption_effects(p_lane_count: int) -> void:
+	match _hit_effect_style:
+		HIT_EFFECT_CLASSIC, _:
+			_draw_classic_hold_consumption_effects(p_lane_count)
+
+
+func _draw_classic_hold_consumption_effects(p_lane_count: int) -> void:
+	if _hold_contact_halo_texture != null:
+		for lane_idx: int in range(mini(p_lane_count, _lane_hold_energy.size())):
+			var energy: float = _lane_hold_energy[lane_idx]
+			var flare: float = _lane_hold_complete_flare[lane_idx]
+			if energy <= 0.004 and flare <= 0.004:
+				continue
+
+			var cx: float = (float(lane_idx) + 0.5) * _lane_width
+			var pulse: float = (sin(_lane_hold_phase[lane_idx]) * 0.5) + 0.5
+			var active_strength: float = clampf(maxf(energy, flare), 0.0, 1.0)
+			var halo_col: Color = COLOR_HOLD_ABSORB_CYAN.lerp(
+				COLOR_HOLD_ABSORB_TURQUOISE,
+				clampf((pulse * 0.55) + (flare * 0.45), 0.0, 1.0)
+			)
+
+			# Outer pulsing cyan-turquoise radial halo centered on contact point
+			var outer_rx: float = _lane_width * (0.58 + (pulse * 0.14) + (flare * 0.28))
+			var outer_ry: float = outer_rx * 0.64
+			var outer_alpha: float = clampf((energy * 0.36) + (flare * 0.42), 0.0, 0.56)
+			var outer_rect: Rect2 = Rect2(cx - outer_rx, _hit_line_y - outer_ry, outer_rx * 2.0, outer_ry * 2.0)
+			draw_texture_rect(
+				_hold_contact_halo_texture,
+				outer_rect,
+				false,
+				Color(halo_col.r, halo_col.g, halo_col.b, outer_alpha)
+			)
+
+			# Inner concentrated absorption core at hit line
+			var inner_rx: float = _lane_width * (0.28 + (pulse * 0.08) + (flare * 0.18))
+			var inner_ry: float = inner_rx * 0.56
+			var inner_alpha: float = clampf((active_strength * 0.54) + (flare * 0.24), 0.0, 0.76)
+			var inner_rect: Rect2 = Rect2(cx - inner_rx, _hit_line_y - inner_ry, inner_rx * 2.0, inner_ry * 2.0)
+			draw_texture_rect(
+				_hold_contact_halo_texture,
+				inner_rect,
+				false,
+				Color(halo_col.r, halo_col.g, halo_col.b, inner_alpha)
+			)
+
+	# Soft ascending cyan/turquoise absorption rings drifting upward from contact point
+	var ring_count: int = _hold_absorb_rings.size()
+	for i: int in range(ring_count):
+		var ring: Dictionary = _hold_absorb_rings[i]
+		var origin: Vector2 = ring["origin"] as Vector2
+		var age: float = ring["age"] as float
+		var duration: float = maxf(0.01, ring["duration"] as float)
+		var is_completion: bool = ring["is_completion"] as bool
+		var t: float = clampf(age / duration, 0.0, 1.0)
+		var eased_t: float = 1.0 - pow(1.0 - t, 2.2)
+		var rise_speed: float = HOLD_RING_RISE_SPEED_PX_PER_SEC * (1.35 if is_completion else 1.0)
+		var ring_pos: Vector2 = Vector2(origin.x, origin.y - (rise_speed * age))
+		var start_r: float = _lane_width * (0.16 if is_completion else 0.13)
+		var end_r: float = _lane_width * (0.48 if is_completion else 0.34)
+		var radius: float = lerpf(start_r, end_r, eased_t)
+		var fade: float = sin(t * PI) * (1.0 - (t * 0.45))
+		var alpha: float = clampf(fade * (0.68 if is_completion else 0.44), 0.0, 0.72)
+		var col: Color = COLOR_HOLD_ABSORB_TURQUOISE if is_completion else COLOR_HOLD_ABSORB_CYAN
+		var stroke_w: float = lerpf(3.4 if is_completion else 2.2, 1.0, t)
+
+		draw_arc(ring_pos, radius, 0.0, TAU, 28, Color(col.r, col.g, col.b, alpha * 0.30), stroke_w * 3.0)
+		draw_arc(ring_pos, radius, 0.0, TAU, 28, Color(col.r, col.g, col.b, alpha), stroke_w)
 
 
 func _draw_touch_ripples() -> void:
@@ -491,6 +621,30 @@ func get_active_particle_count() -> int:
 	return _hit_particles.size()
 
 
+func get_hit_effect_style() -> String:
+	return _hit_effect_style
+
+
+func get_hold_contact_halo_texture() -> GradientTexture2D:
+	return _hold_contact_halo_texture
+
+
+func get_lane_hold_energy(p_lane: int) -> float:
+	if p_lane < 0 or p_lane >= _lane_hold_energy.size():
+		return 0.0
+	return _lane_hold_energy[p_lane]
+
+
+func get_lane_hold_complete_flare(p_lane: int) -> float:
+	if p_lane < 0 or p_lane >= _lane_hold_complete_flare.size():
+		return 0.0
+	return _lane_hold_complete_flare[p_lane]
+
+
+func get_active_hold_absorb_ring_count() -> int:
+	return _hold_absorb_rings.size()
+
+
 func get_divider_shake_offset_x() -> float:
 	return _divider_shake_offset_x
 
@@ -655,20 +809,72 @@ func _on_hold_state_changed(p_lane: int, p_is_holding: bool) -> void:
 	if _lane_hold_states[p_lane] != p_is_holding:
 		_lane_hold_states[p_lane] = p_is_holding
 		if p_is_holding:
+			_lane_pending_hold_completion[p_lane] = false
+			_lane_hold_energy[p_lane] = maxf(_lane_hold_energy[p_lane], 0.72)
+			_spawn_hold_absorb_ring(p_lane, false)
 			_spawn_hold_sparks(p_lane, 4)
+		else:
+			_lane_pending_hold_completion[p_lane] = true
 		queue_redraw()
 
 
 func _on_note_judged(p_lane: int, p_grade: int, _p_error_ms: float, _p_combo: int) -> void:
 	if p_lane < 0 or p_lane >= _get_active_lane_count():
 		return
+	if p_lane < _lane_pending_hold_completion.size() and _lane_pending_hold_completion[p_lane]:
+		_lane_pending_hold_completion[p_lane] = false
+		if p_grade != HitJudge.JudgmentGrade.MISS:
+			_trigger_hold_completion_flare(p_lane)
 	_spawn_judgment_particles(p_lane, p_grade)
 
 
 func _on_hold_combo_ticked(p_lane: int, _p_new_combo: int) -> void:
 	if p_lane < 0 or p_lane >= _get_active_lane_count():
 		return
+	_spawn_hold_absorb_ring(p_lane, false)
 	_spawn_hold_sparks(p_lane, HOLD_TICK_SPARK_COUNT)
+
+
+func _trigger_hold_completion_flare(p_lane: int) -> void:
+	if p_lane < 0 or p_lane >= _lane_hold_complete_flare.size():
+		return
+	_lane_hold_complete_flare[p_lane] = 1.0
+	_spawn_hold_absorb_ring(p_lane, true)
+	_spawn_hold_sparks(p_lane, 8)
+	queue_redraw()
+
+
+func _spawn_hold_absorb_ring(p_lane: int, p_is_completion: bool) -> void:
+	if _hold_absorb_rings.size() >= MAX_HOLD_ABSORB_RINGS:
+		_hold_absorb_rings.remove_at(0)
+	var origin: Vector2 = Vector2((float(p_lane) + 0.5) * _lane_width, _hit_line_y)
+	_hold_absorb_rings.append({
+		"origin": origin,
+		"age": 0.0,
+		"duration": HOLD_RING_DURATION_SEC * (1.20 if p_is_completion else 1.0),
+		"is_completion": p_is_completion,
+	})
+	queue_redraw()
+
+
+func _create_hold_contact_halo_texture() -> GradientTexture2D:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.30, 0.65, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.56),
+		Color(1.0, 1.0, 1.0, 0.16),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	var tex: GradientTexture2D = GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 128
+	tex.height = 128
+	tex.use_hdr = false
+	return tex
 
 
 func _spawn_touch_ripple(p_pos: Vector2, p_color: Color) -> void:
@@ -758,7 +964,7 @@ func _spawn_hold_sparks(p_lane: int, p_count: int) -> void:
 		var speed: float = lerpf(135.0, 290.0, speed_t)
 		var vel: Vector2 = Vector2(cos(angle_rad), sin(angle_rad)) * speed
 		var radius: float = lerpf(3.4, 5.8, speed_t)
-		var col: Color = COLOR_HOLD_SPARK if (i % 2) == 0 else COLOR_PERFECT_B
+		var col: Color = COLOR_HOLD_SPARK if (i % 2) == 0 else COLOR_HOLD_ABSORB_CYAN
 		_append_particle(origin, vel, radius, 0.24, col)
 
 	queue_redraw()
@@ -800,11 +1006,17 @@ func _reset_lane_visual_states() -> void:
 		_lane_pressed_states[i] = false
 	for j: int in range(_lane_hold_states.size()):
 		_lane_hold_states[j] = false
+		_lane_pending_hold_completion[j] = false
+		_lane_hold_phase[j] = 0.0
+		_lane_hold_energy[j] = 0.0
+		_lane_hold_complete_flare[j] = 0.0
 	for k: int in range(_touch_ripple_consumed_for_lane.size()):
 		_touch_ripple_consumed_for_lane[k] = false
 	_touch_ripples.clear()
+	_hold_absorb_rings.clear()
 	_hit_particles.clear()
 	_hold_spark_accumulator_sec = 0.0
+	_hold_ring_accumulator_sec = 0.0
 	_divider_beat_pulse = 0.0
 	_divider_bass_energy = 0.0
 	_divider_drop_intensity = 0.0

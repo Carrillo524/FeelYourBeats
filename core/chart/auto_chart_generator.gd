@@ -11,6 +11,7 @@ enum NoteTypeMode {
 	TAP_AND_HOLD = 0,
 	TAP_ONLY = 1,
 	DOUBLE_TAP = 2,
+	HOLD_AND_DOUBLE_TAP = 3,
 }
 
 const LANE_COUNT: int = 4
@@ -209,8 +210,14 @@ func generate_from_analysis(
 		intensity_blocks
 	)
 
-	var allow_chords: bool = p_note_type_mode == NoteTypeMode.DOUBLE_TAP
-	var allow_holds: bool = p_note_type_mode == NoteTypeMode.TAP_AND_HOLD
+	var allow_chords: bool = (
+		p_note_type_mode == NoteTypeMode.DOUBLE_TAP
+		or p_note_type_mode == NoteTypeMode.HOLD_AND_DOUBLE_TAP
+	)
+	var allow_holds: bool = (
+		p_note_type_mode == NoteTypeMode.TAP_AND_HOLD
+		or p_note_type_mode == NoteTypeMode.HOLD_AND_DOUBLE_TAP
+	)
 
 	var notes: Array[NoteData] = _assign_lanes_ergonomically(
 		raw_candidates,

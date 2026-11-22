@@ -268,8 +268,14 @@ func build_demo_chart(
 ) -> ChartData:
 	var beat_sec: float = 60.0 / DEMO_BPM
 	var notes: Array[NoteData] = []
-	var allow_holds: bool = p_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
-	var allow_double_taps: bool = p_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
+	var allow_holds: bool = (
+		p_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD
+		or p_note_type_mode == AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP
+	)
+	var allow_double_taps: bool = (
+		p_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
+		or p_note_type_mode == AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP
+	)
 	var lane_pattern: PackedInt32Array = PackedInt32Array([0, 2, 1, 3])
 
 	for step_idx: int in range(28):

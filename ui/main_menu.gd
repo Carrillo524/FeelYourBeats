@@ -168,6 +168,7 @@ var _diff_hard_button: Button = null
 var _mode_tap_hold_button: Button = null
 var _mode_tap_only_button: Button = null
 var _mode_double_tap_button: Button = null
+var _mode_hold_double_tap_button: Button = null
 var _speed_1x_button: Button = null
 var _speed_2x_button: Button = null
 var _speed_3x_button: Button = null
@@ -1007,7 +1008,7 @@ func select_note_type_mode(p_mode: int) -> void:
 	_selected_note_type_mode = clampi(
 		p_mode,
 		AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD,
-		AutoChartGenerator.NoteTypeMode.DOUBLE_TAP
+		AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP
 	)
 	_refresh_modal_option_styles()
 	_refresh_modal_record_label()
@@ -1305,6 +1306,7 @@ func get_modal_option_buttons() -> Dictionary:
 		"mode_tap_hold": _mode_tap_hold_button,
 		"mode_tap_only": _mode_tap_only_button,
 		"mode_double_tap": _mode_double_tap_button,
+		"mode_hold_double_tap": _mode_hold_double_tap_button,
 		"speed_1x": _speed_1x_button,
 		"speed_2x": _speed_2x_button,
 		"speed_3x": _speed_3x_button,
@@ -3095,6 +3097,7 @@ func _refresh_modal_option_styles() -> void:
 	_set_option_highlight(_mode_tap_hold_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD)
 	_set_option_highlight(_mode_tap_only_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.TAP_ONLY)
 	_set_option_highlight(_mode_double_tap_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.DOUBLE_TAP)
+	_set_option_highlight(_mode_hold_double_tap_button, _selected_note_type_mode == AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP)
 
 	_set_option_highlight(_speed_1x_button, _selected_speed_multiplier == 1)
 	_set_option_highlight(_speed_2x_button, _selected_speed_multiplier == 2)
@@ -3927,25 +3930,35 @@ func _build_song_setup_modal_ui() -> void:
 	mode_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
 	_modal_vbox.add_child(mode_header)
 
-	var mode_row: HBoxContainer = HBoxContainer.new()
-	mode_row.name = "ModalNoteModeRow"
-	mode_row.add_theme_constant_override("separation", 12)
-	_modal_vbox.add_child(mode_row)
+	var mode_row_1: HBoxContainer = HBoxContainer.new()
+	mode_row_1.name = "ModalNoteModeRow1"
+	mode_row_1.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(mode_row_1)
 
 	_mode_tap_hold_button = _create_option_button("ModeTapHoldButton", "TAP + HOLD")
 	_mode_tap_hold_button.add_theme_font_size_override("font_size", 30)
 	_mode_tap_hold_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_AND_HOLD))
-	mode_row.add_child(_mode_tap_hold_button)
+	mode_row_1.add_child(_mode_tap_hold_button)
 
 	_mode_tap_only_button = _create_option_button("ModeTapOnlyButton", "SOLO TAP")
 	_mode_tap_only_button.add_theme_font_size_override("font_size", 30)
 	_mode_tap_only_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.TAP_ONLY))
-	mode_row.add_child(_mode_tap_only_button)
+	mode_row_1.add_child(_mode_tap_only_button)
+
+	var mode_row_2: HBoxContainer = HBoxContainer.new()
+	mode_row_2.name = "ModalNoteModeRow2"
+	mode_row_2.add_theme_constant_override("separation", 12)
+	_modal_vbox.add_child(mode_row_2)
 
 	_mode_double_tap_button = _create_option_button("ModeDoubleTapButton", "DOBLE TAP")
 	_mode_double_tap_button.add_theme_font_size_override("font_size", 30)
 	_mode_double_tap_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.DOUBLE_TAP))
-	mode_row.add_child(_mode_double_tap_button)
+	mode_row_2.add_child(_mode_double_tap_button)
+
+	_mode_hold_double_tap_button = _create_option_button("ModeHoldDoubleTapButton", "HOLD + DOBLE TAP")
+	_mode_hold_double_tap_button.add_theme_font_size_override("font_size", 28)
+	_mode_hold_double_tap_button.pressed.connect(select_note_type_mode.bind(AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP))
+	mode_row_2.add_child(_mode_hold_double_tap_button)
 
 	var speed_header: Label = Label.new()
 	speed_header.text = "VELOCIDAD"

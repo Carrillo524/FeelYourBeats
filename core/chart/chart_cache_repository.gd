@@ -3,7 +3,7 @@ extends RefCounted
 
 const DEFAULT_CACHE_DIR: String = "user://charts_cache"
 const DEFAULT_RECORDS_PATH: String = "user://song_records.cfg"
-const CACHE_SCHEMA_VERSION: String = "v4"
+const CACHE_SCHEMA_VERSION: String = "v5"
 const BUILTIN_DEMO_SONG_KEY: String = "builtin://demo_128bpm"
 const LEGACY_DEMO_SONG_KEY: String = "fyb_demo_128bpm"
 
@@ -54,6 +54,8 @@ static func note_mode_to_label(p_note_type_mode: int) -> String:
 			return "SOLO TAP"
 		AutoChartGenerator.NoteTypeMode.DOUBLE_TAP:
 			return "DOBLE TAP"
+		AutoChartGenerator.NoteTypeMode.HOLD_AND_DOUBLE_TAP:
+			return "HOLD + DOBLE TAP"
 		_:
 			return "TAP + HOLD"
 
@@ -237,7 +239,7 @@ func load_song_summary(p_song_key: String) -> Dictionary:
 	var best_found_rank: String = ""
 	var best_found_diff: int = AutoChartGenerator.Difficulty.NORMAL
 	for diff: int in range(3):
-		for mode: int in range(3):
+		for mode: int in range(4):
 			var rec_sec: String = build_record_key(p_song_key, diff, mode)
 			if cfg.has_section(rec_sec):
 				var rec_score: int = int(cfg.get_value(rec_sec, "best_score", 0))
