@@ -16,6 +16,7 @@ const HIT_EFFECT_CROWN: String = GameplayEffectsConfig.HIT_CROWN
 const STAR_ARM_ANGLE_RAD: float = PI * 0.25
 const CROWN_MAX_ALPHA: float = 0.62
 const CROWN_MAX_LANE_WIDTH_RATIO: float = 1.0
+const CROWN_LANE_INSET_PX: float = 1.0
 const CROWN_BASE_CYAN_TURQUOISE: Color = Color(0.22, 0.94, 0.96, 1.0)
 const CROWN_TOP_VIOLET_NEON: Color = Color(0.56, 0.38, 1.0, 1.0)
 const CROWN_CORE_BRIGHT: Color = Color(0.46, 0.98, 0.98, 1.0)
@@ -470,10 +471,22 @@ func get_crown_fan_spread_multiplier() -> float:
 
 
 func compute_crown_draw_width(p_lane_width: float) -> float:
-	var safe_lane_w: float = maxf(1.0, p_lane_width)
-	var drop_factor: float = get_hit_effect_drop_factor()
-	var half_w: float = minf(safe_lane_w * lerpf(0.46, 0.50, drop_factor), safe_lane_w * 0.5 * CROWN_MAX_LANE_WIDTH_RATIO)
-	return half_w * 2.0
+	var safe_lane_w: float = maxf(2.0, p_lane_width)
+	return maxf(0.0, safe_lane_w - (CROWN_LANE_INSET_PX * 2.0))
+
+
+func compute_crown_lane_rect(p_lane_idx: int, p_bounds: Vector2) -> Rect2:
+	var clamped_lane: int = clampi(p_lane_idx, 0, 3)
+	var lane_w: float = maxf(4.0, p_bounds.x * 0.25)
+	var lane_left: float = float(clamped_lane) * lane_w
+	var lane_right: float = lane_left + lane_w
+	var draw_left: float = lane_left + CROWN_LANE_INSET_PX
+	var draw_right: float = maxf(draw_left + 1.0, lane_right - CROWN_LANE_INSET_PX)
+	var hit_zone_y: float = p_bounds.y * _hit_line_normalized_y
+	var reach_mult: float = get_hit_effect_reach_multiplier()
+	var crown_height: float = p_bounds.y * 0.42 * reach_mult
+	var top_y: float = maxf(0.0, hit_zone_y - crown_height)
+	return Rect2(draw_left, top_y, draw_right - draw_left, maxf(0.0, hit_zone_y - top_y))
 
 
 static func get_star_arm_directions() -> PackedVector2Array:
@@ -1636,20 +1649,11 @@ func _draw_star_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) ->
 
 
 func _draw_crown_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -> void:
-	if p_canvas == null or _hit_beam_texture == null or _hit_crown_fan_texture == null:
+	if p_canvas == null or _hit_crown_fan_texture == null:
 		return
 
-	var w: float = p_bounds.x
-	var h: float = p_bounds.y
-	var lane_w: float = w * 0.25
-	var max_half_w: float = lane_w * 0.5 * CROWN_MAX_LANE_WIDTH_RATIO
-	var hit_zone_y: float = h * _hit_line_normalized_y
 	var drop_factor: float = get_hit_effect_drop_factor()
-	var reach_mult: float = get_hit_effect_reach_multiplier()
 	var drop_bright: float = 1.0 + (drop_factor * 0.34)
-	var fan_height: float = h * 0.40 * reach_mult
-	var top_y: float = maxf(0.0, hit_zone_y - fan_height)
-	var base_y: float = minf(h, hit_zone_y + (lane_w * 0.08))
 	var energies: PackedFloat32Array = PackedFloat32Array([
 		_lane_flashes.x,
 		_lane_flashes.y,
@@ -1665,51 +1669,66 @@ func _draw_crown_diffused_hit_flashes(p_canvas: CanvasItem, p_bounds: Vector2) -
 		var perfect_boost: float = smoothstep(0.75, 1.0, e)
 		var base_col: Color = CROWN_BASE_CYAN_TURQUOISE.lerp(
 			CROWN_CORE_BRIGHT,
-			clampf((perfect_boost * 0.42) + (drop_factor * 0.24), 0.0, 0.72)
+			clampf((perfect_boost * 0.40) + (drop_factor * 0.24), 0.0, 0.72)
 		)
 		var upper_col: Color = CROWN_BASE_CYAN_TURQUOISE.lerp(
 			CROWN_TOP_VIOLET_NEON,
-			clampf(0.55 + (drop_factor * 0.30), 0.0, 0.88)
-		)
-		var cx: float = (float(lane_idx) + 0.5) * lane_w
-
-		# 1. Single-lane ascending neon blur halo (strictly <= lane_w, cyan/turquoise -> violet top)
-		var fan_bot_hw: float = minf(lane_w * 0.32, max_half_w)
-		var fan_top_hw: float = minf(lane_w * lerpf(0.46, 0.50, drop_factor), max_half_w)
-		var fan_alpha: float = clampf(e * 0.46 * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		_draw_crown_tapered_fan(p_canvas, cx, fan_bot_hw, fan_top_hw, top_y, hit_zone_y, upper_col, base_col, 0.0, fan_alpha)
-
-		# 2. Inner luminous ascending turquoise-cyan blur column (strictly within lane)
-		var inner_top_y: float = maxf(top_y, hit_zone_y - (fan_height * 0.70))
-		var inner_bot_hw: float = minf(lane_w * 0.22, max_half_w)
-		var inner_top_hw: float = minf(lane_w * lerpf(0.36, 0.44, drop_factor), max_half_w)
-		var inner_alpha: float = clampf(((e * 0.38) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		_draw_crown_tapered_fan(p_canvas, cx, inner_bot_hw, inner_top_hw, inner_top_y, hit_zone_y, upper_col, CROWN_CORE_BRIGHT, 0.0, inner_alpha)
-
-		# 3. Soft bell dome glow via precreated _hit_crown_fan_texture strictly confined to <= lane_w
-		var dome_rx: float = minf(lane_w * lerpf(0.46, 0.50, drop_factor), max_half_w)
-		var dome_h: float = h * 0.30 * reach_mult
-		var dome_alpha: float = clampf(((e * 0.48) + (perfect_boost * 0.14)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
-		var dome_rect: Rect2 = Rect2(cx - dome_rx, base_y - dome_h, dome_rx * 2.0, dome_h)
-		p_canvas.draw_texture_rect(
-			_hit_crown_fan_texture,
-			dome_rect,
-			false,
-			Color(base_col.r, base_col.g, base_col.b, dome_alpha)
+			clampf(0.58 + (drop_factor * 0.30), 0.0, 0.90)
 		)
 
-		# 4. Luminous neon base core anchored on the hit line inside the lane (never white-clipped)
-		if _hit_radial_texture != null:
-			var core_rx: float = minf(lane_w * lerpf(0.40, 0.46, drop_factor), max_half_w)
-			var core_ry: float = lane_w * lerpf(0.24, 0.30, drop_factor)
-			var core_alpha: float = clampf(((e * 0.46) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
-			var core_rect: Rect2 = Rect2(cx - core_rx, hit_zone_y - core_ry, core_rx * 2.0, core_ry * 1.45)
-			p_canvas.draw_texture_rect(
-				_hit_radial_texture,
-				core_rect,
-				false,
-				Color(CROWN_CORE_BRIGHT.r, CROWN_CORE_BRIGHT.g, CROWN_CORE_BRIGHT.b, core_alpha)
-			)
+		# Strict lane clipping [lane_left + 1.0, lane_right - 1.0] (0 px outside lane lines)
+		var crown_rect: Rect2 = compute_crown_lane_rect(lane_idx, p_bounds)
+		var x_left: float = crown_rect.position.x
+		var x_right: float = crown_rect.end.x
+		var y_top: float = crown_rect.position.y
+		var y_bottom: float = crown_rect.end.y
+		var crown_h: float = crown_rect.size.y
+		if crown_h <= 0.5 or x_right <= x_left + 0.5:
+			continue
+
+		# 1. Full ascending M-shaped dual-pillar glow (bright inner lane walls, dim center)
+		var main_alpha: float = clampf(e * 0.52 * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		_draw_crown_m_pillar_rect(
+			p_canvas,
+			x_left,
+			x_right,
+			y_top,
+			y_bottom,
+			upper_col,
+			base_col,
+			0.0,
+			main_alpha
+		)
+
+		# 2. Mid-height turquoise-cyan neon boost along both inner lane edges
+		var mid_top_y: float = maxf(y_top, y_bottom - (crown_h * 0.62))
+		var mid_alpha: float = clampf(((e * 0.42) + (perfect_boost * 0.16)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		_draw_crown_m_pillar_rect(
+			p_canvas,
+			x_left,
+			x_right,
+			mid_top_y,
+			y_bottom,
+			upper_col,
+			CROWN_CORE_BRIGHT,
+			0.0,
+			mid_alpha
+		)
+
+		# 3. Luminous M-shaped base crest anchored cleanly on the hit line (bright corners, dim center)
+		var base_top_y: float = maxf(y_top, y_bottom - (crown_h * 0.22))
+		var base_alpha: float = clampf(((e * 0.44) + (perfect_boost * 0.18)) * drop_bright, 0.0, CROWN_MAX_ALPHA)
+		_draw_crown_m_pillar_rect(
+			p_canvas,
+			x_left,
+			x_right,
+			base_top_y,
+			y_bottom,
+			base_col,
+			CROWN_CORE_BRIGHT,
+			0.0,
+			base_alpha
+		)
 
 
 func _draw_oriented_tapered_beam(
@@ -1737,11 +1756,10 @@ func _draw_oriented_tapered_beam(
 	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
 
 
-func _draw_crown_tapered_fan(
+func _draw_crown_m_pillar_rect(
 	p_canvas: CanvasItem,
-	p_cx: float,
-	p_bottom_hw: float,
-	p_top_hw: float,
+	p_x_left: float,
+	p_x_right: float,
 	p_y_top: float,
 	p_y_bottom: float,
 	p_top_color: Color,
@@ -1749,17 +1767,17 @@ func _draw_crown_tapered_fan(
 	p_alpha_top: float,
 	p_alpha_bottom: float
 ) -> void:
-	if p_y_bottom <= p_y_top + 0.5:
+	if p_y_bottom <= p_y_top + 0.5 or p_x_right <= p_x_left + 0.5:
 		return
-	_quad_pts_buf[0] = Vector2(p_cx - p_top_hw, p_y_top)
-	_quad_pts_buf[1] = Vector2(p_cx + p_top_hw, p_y_top)
-	_quad_pts_buf[2] = Vector2(p_cx + p_bottom_hw, p_y_bottom)
-	_quad_pts_buf[3] = Vector2(p_cx - p_bottom_hw, p_y_bottom)
+	_quad_pts_buf[0] = Vector2(p_x_left, p_y_top)
+	_quad_pts_buf[1] = Vector2(p_x_right, p_y_top)
+	_quad_pts_buf[2] = Vector2(p_x_right, p_y_bottom)
+	_quad_pts_buf[3] = Vector2(p_x_left, p_y_bottom)
 	_quad_cols_buf[0] = Color(p_top_color.r, p_top_color.g, p_top_color.b, minf(p_alpha_top, CROWN_MAX_ALPHA))
 	_quad_cols_buf[1] = _quad_cols_buf[0]
 	_quad_cols_buf[2] = Color(p_bottom_color.r, p_bottom_color.g, p_bottom_color.b, minf(p_alpha_bottom, CROWN_MAX_ALPHA))
 	_quad_cols_buf[3] = _quad_cols_buf[2]
-	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_beam_texture)
+	p_canvas.draw_polygon(_quad_pts_buf, _quad_cols_buf, _quad_uvs_buf, _hit_crown_fan_texture)
 
 
 func _draw_vertical_tapered_beam(
@@ -1871,22 +1889,26 @@ func _create_hit_radial_texture() -> GradientTexture2D:
 
 
 func _create_hit_crown_fan_texture() -> GradientTexture2D:
+	# Horizontal M-shaped / dual-crest profile:
+	# alpha 0.0 at lane lines (0.00, 1.00), luminous peaks near inner walls (0.14, 0.86), dim center valley (0.22 at 0.50)
 	var grad: Gradient = Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.60, 0.86, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.30, 0.50, 0.70, 0.86, 1.0])
 	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.0),
 		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.64),
-		Color(1.0, 1.0, 1.0, 0.24),
-		Color(1.0, 1.0, 1.0, 0.05),
+		Color(1.0, 1.0, 1.0, 0.42),
+		Color(1.0, 1.0, 1.0, 0.22),
+		Color(1.0, 1.0, 1.0, 0.42),
+		Color(1.0, 1.0, 1.0, 1.0),
 		Color(1.0, 1.0, 1.0, 0.0),
 	])
 	var tex: GradientTexture2D = GradientTexture2D.new()
 	tex.gradient = grad
-	tex.fill = GradientTexture2D.FILL_RADIAL
-	tex.fill_from = Vector2(0.5, 0.94)
-	tex.fill_to = Vector2(0.5, 0.02)
+	tex.fill = GradientTexture2D.FILL_LINEAR
+	tex.fill_from = Vector2(0.0, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
 	tex.width = 128
-	tex.height = 128
+	tex.height = 8
 	tex.use_hdr = false
 	return tex
 
