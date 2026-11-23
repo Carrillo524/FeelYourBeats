@@ -35,27 +35,31 @@ void fragment() {
 	vec3 boosted_bottom = base_color_bottom.rgb + (accent_color.rgb * (0.10 * bass_energy + 0.07 * mid_energy)) + drop_tint;
 	vec4 bg = mix(base_color_top, vec4(boosted_bottom, 1.0), uv.y);
 
-	float horizon_glow = exp(-abs(uv.y - 0.84) * (10.5 - drop_active * 1.8));
-	float normal_pulse = clamp(
-		0.24 + (beat_pulse * (0.20 + 0.10 * energy_level)) + (bass_energy * 0.10),
-		0.0,
-		0.50
+	float normal_pulse = clamp(max(beat_pulse, bass_energy * 0.90), 0.0, 1.0);
+	float normal_horizon_sharpness = mix(13.0, 7.8, normal_pulse);
+	float drop_horizon_sharpness = 10.5 - (drop_active * 1.8);
+	float horizon_glow = exp(-abs(uv.y - 0.84) * mix(normal_horizon_sharpness, drop_horizon_sharpness, drop_active));
+
+	float normal_boost = clamp(
+		0.14 + (normal_pulse * (0.34 + (0.10 * energy_level))),
+		0.14,
+		0.58
 	);
-	float drop_pulse = clamp(
+	float drop_boost = clamp(
 		(beat_pulse * (0.22 + 0.18 * energy_level + 0.10 * tier_factor)) + (bass_energy * 0.16),
 		0.0,
 		0.56
 	);
-	float pulse_boost = clamp(mix(normal_pulse, drop_pulse, drop_active), 0.0, 0.56);
+	float pulse_boost = clamp(mix(normal_boost, drop_boost, drop_active), 0.0, 0.58);
 
 	float wave_speed = 1.2 + (drop_active * 1.1) + (mid_energy * 0.8);
 	float wave = sin((uv.y * 18.0) - (TIME * wave_speed)) * 0.5 + 0.5;
 	float harmonic = sin((uv.x * 12.0) + (uv.y * 28.0) - (TIME * 2.2)) * 0.5 + 0.5;
 	float grid_shimmer = clamp(
-		(wave * horizon_glow * (0.06 + 0.10 * energy_level + 0.08 * mid_energy))
-			+ (harmonic * horizon_glow * high_energy * 0.08),
+		(wave * horizon_glow * (0.04 + (0.10 * mid_energy) + (0.08 * beat_pulse) + (0.04 * energy_level)))
+			+ (harmonic * horizon_glow * high_energy * 0.07),
 		0.0,
-		0.16
+		0.20
 	);
 
 	vec2 shock_center = vec2(0.5, 0.84);

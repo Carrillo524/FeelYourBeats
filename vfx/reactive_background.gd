@@ -49,20 +49,19 @@ const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
-# Smooth temporal envelope for Clásico style (central glow boost + drop-only halo + reactivity-tamed motion)
-const CLASSIC_PULSE_FLOOR: float = 0.28
-const CLASSIC_PULSE_PEAK_CAP: float = 0.96
-const CLASSIC_PULSE_TARGET_DECAY_RATE: float = 3.0
-const CLASSIC_PULSE_ATTACK_RATE: float = 6.2
-const CLASSIC_PULSE_RELEASE_RATE: float = 2.6
-const CLASSIC_BASS_FLOOR: float = 0.24
-const CLASSIC_BASS_ATTACK_RATE: float = 3.6
-const CLASSIC_BASS_RELEASE_RATE: float = 1.9
-const CLASSIC_ENERGY_FLOOR: float = 0.38
-const CLASSIC_ENERGY_ATTACK_RATE: float = 4.0
-const CLASSIC_ENERGY_RELEASE_RATE: float = 2.1
-const CLASSIC_SPECTRUM_ATTACK_RATE: float = 4.6
-const CLASSIC_SPECTRUM_RELEASE_RATE: float = 2.3
+# Smooth temporal envelope for Clásico style (dynamic horizon contrast + drop-only halo + reactivity-tamed motion)
+const CLASSIC_PULSE_FLOOR: float = 0.14
+const CLASSIC_PULSE_PEAK_CAP: float = 0.94
+const CLASSIC_PULSE_ATTACK_RATE: float = 16.0
+const CLASSIC_PULSE_RELEASE_RATE: float = 4.5
+const CLASSIC_BASS_FLOOR: float = 0.12
+const CLASSIC_BASS_ATTACK_RATE: float = 12.0
+const CLASSIC_BASS_RELEASE_RATE: float = 3.8
+const CLASSIC_ENERGY_FLOOR: float = 0.20
+const CLASSIC_ENERGY_ATTACK_RATE: float = 11.0
+const CLASSIC_ENERGY_RELEASE_RATE: float = 3.4
+const CLASSIC_SPECTRUM_ATTACK_RATE: float = 9.0
+const CLASSIC_SPECTRUM_RELEASE_RATE: float = 3.6
 const CLASSIC_MAX_ZOOM_BOUNCE: float = 0.075
 const CLASSIC_ZOOM_ATTACK_RATE: float = 4.2
 const CLASSIC_ZOOM_RELEASE_RATE: float = 2.4
@@ -155,6 +154,7 @@ var _aspect_ratio: float = 1080.0 / 1920.0
 var _beat_pulse: float = CLASSIC_PULSE_FLOOR
 var _beat_pulse_target: float = CLASSIC_PULSE_FLOOR
 var _classic_bass: float = CLASSIC_BASS_FLOOR
+var _classic_bass_target: float = CLASSIC_BASS_FLOOR
 var _classic_mid: float = 0.0
 var _classic_high: float = 0.0
 var _classic_energy: float = CLASSIC_ENERGY_FLOOR
@@ -1180,16 +1180,25 @@ func get_spectrum_update_count() -> int:
 	return _spectrum_update_count
 
 
+func _compute_classic_beat_target(p_strength: float) -> float:
+	var react_norm: float = clampf((_bg_config.get_reactivity_multiplier() - 0.55) / 0.90, 0.0, 1.0)
+	var peak_base: float = lerpf(0.43, 0.87, react_norm)
+	var peak_ceiling: float = lerpf(0.50, CLASSIC_PULSE_PEAK_CAP, react_norm)
+	return clampf(lerpf(peak_base, peak_ceiling, clampf(p_strength, 0.0, 1.0)), CLASSIC_PULSE_FLOOR, CLASSIC_PULSE_PEAK_CAP)
+
+
+func _compute_classic_bass_impulse_target(p_strength: float) -> float:
+	var react_norm: float = clampf((_bg_config.get_reactivity_multiplier() - 0.55) / 0.90, 0.0, 1.0)
+	var peak_base: float = lerpf(0.40, 0.77, react_norm)
+	var peak_ceiling: float = lerpf(0.49, 0.85, react_norm)
+	return clampf(lerpf(peak_base, peak_ceiling, clampf(p_strength, 0.0, 1.0)), CLASSIC_BASS_FLOOR, 0.86)
+
+
 func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
 	var tier_norm: float = float(_current_tier) / 3.0
 	var kick_strength: float = clampf(0.42 + (0.38 * maxf(_smoothed_bass, _target_bass)) + (0.20 * tier_norm), 0.25, 1.0)
-	var glow_scale: float = _get_classic_glow_scale()
-	var beat_target: float = clampf(
-		lerpf(0.66, CLASSIC_PULSE_PEAK_CAP, kick_strength) * glow_scale,
-		CLASSIC_PULSE_FLOOR,
-		1.0
-	)
-	_beat_pulse_target = maxf(_beat_pulse_target, beat_target)
+	_beat_pulse_target = maxf(_beat_pulse_target, _compute_classic_beat_target(kick_strength))
+	_classic_bass_target = maxf(_classic_bass_target, _compute_classic_bass_impulse_target(kick_strength))
 	_beat_pulse_count += 1
 
 	if is_classic_style_active():
@@ -1263,13 +1272,9 @@ func _on_spectrum_updated(
 		var tier_norm: float = float(_current_tier) / 3.0
 		var kick_strength: float = clampf(clamped_bass * 0.72 + bass_jump * 0.65, 0.25, 1.0)
 		if is_classic_style_active():
-			var glow_scale: float = _get_classic_glow_scale()
-			var transient_pulse: float = clampf(
-				lerpf(0.58, CLASSIC_PULSE_PEAK_CAP, kick_strength) * glow_scale,
-				CLASSIC_PULSE_FLOOR,
-				1.0
-			)
+			var transient_pulse: float = _compute_classic_beat_target(kick_strength)
 			_beat_pulse_target = maxf(_beat_pulse_target, transient_pulse)
+			_classic_bass_target = maxf(_classic_bass_target, _compute_classic_bass_impulse_target(kick_strength))
 			var motion_scale: float = _get_classic_motion_scale()
 			var classic_shake: float = clampf(kick_strength * (0.20 + (0.35 * tier_norm)) * motion_scale, 0.0, 1.0)
 			_shake_target = maxf(_shake_target, classic_shake)
@@ -1382,35 +1387,32 @@ func _is_sustained_classic_drop_active() -> bool:
 func _step_classic_envelope(p_delta: float) -> void:
 	var active_floor_enabled: bool = _backdrop_mode == BackdropMode.GAMEPLAY or _menu_bgm_active
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var react_norm: float = clampf((react_mult - 0.55) / 0.90, 0.0, 1.0)
 	var glow_scale: float = _get_classic_glow_scale()
 
-	var pulse_floor: float = clampf(CLASSIC_PULSE_FLOOR * lerpf(0.86, 1.16, (react_mult - 0.55) / 0.90), 0.22, 0.36) if active_floor_enabled else 0.0
-	var bass_floor: float = clampf(CLASSIC_BASS_FLOOR * lerpf(0.88, 1.14, (react_mult - 0.55) / 0.90), 0.20, 0.32) if active_floor_enabled else 0.0
-	var energy_floor: float = clampf(CLASSIC_ENERGY_FLOOR * lerpf(0.90, 1.12, (react_mult - 0.55) / 0.90), 0.34, 0.46) if active_floor_enabled else 0.16
+	var pulse_floor: float = CLASSIC_PULSE_FLOOR if active_floor_enabled else 0.0
+	var bass_floor: float = CLASSIC_BASS_FLOOR if active_floor_enabled else 0.0
+	var energy_floor: float = CLASSIC_ENERGY_FLOOR if active_floor_enabled else 0.12
 
-	_beat_pulse_target = lerpf(
-		pulse_floor,
-		_beat_pulse_target,
-		exp(-CLASSIC_PULSE_TARGET_DECAY_RATE * p_delta)
-	)
-	_beat_pulse = _exp_smooth(
-		_beat_pulse,
-		maxf(pulse_floor, _beat_pulse_target),
-		CLASSIC_PULSE_ATTACK_RATE,
-		CLASSIC_PULSE_RELEASE_RATE,
-		p_delta
-	)
-	var target_classic_bass: float = maxf(
-		bass_floor,
-		clampf((_smoothed_bass * (0.76 + (0.24 * glow_scale))) + (_beat_pulse * 0.16), 0.0, 1.0)
-	)
-	_classic_bass = _exp_smooth(
-		_classic_bass,
-		target_classic_bass,
-		CLASSIC_BASS_ATTACK_RATE,
-		CLASSIC_BASS_RELEASE_RATE,
-		p_delta
-	)
+	# Peak-and-Release AR envelope for beat pulse: attacks smoothly to exact peak, then releases exponentially to floor
+	if _beat_pulse_target > pulse_floor:
+		_beat_pulse = _exp_smooth(_beat_pulse, _beat_pulse_target, CLASSIC_PULSE_ATTACK_RATE, CLASSIC_PULSE_RELEASE_RATE, p_delta)
+		if _beat_pulse >= _beat_pulse_target - 0.02:
+			_beat_pulse_target = pulse_floor
+	else:
+		_beat_pulse = _exp_smooth(_beat_pulse, pulse_floor, CLASSIC_PULSE_ATTACK_RATE, CLASSIC_PULSE_RELEASE_RATE, p_delta)
+
+	var bass_scale: float = lerpf(0.54, 1.02, react_norm)
+	var bass_cap: float = lerpf(0.50, 0.85, react_norm)
+	var live_bass_target: float = clampf(maxf(bass_floor, _smoothed_bass * bass_scale), bass_floor, bass_cap)
+	if _classic_bass_target > live_bass_target:
+		_classic_bass = _exp_smooth(_classic_bass, _classic_bass_target, CLASSIC_BASS_ATTACK_RATE, CLASSIC_BASS_RELEASE_RATE, p_delta)
+		if _classic_bass >= _classic_bass_target - 0.02:
+			_classic_bass_target = bass_floor
+	else:
+		_classic_bass_target = bass_floor
+		_classic_bass = _exp_smooth(_classic_bass, live_bass_target, CLASSIC_BASS_ATTACK_RATE, CLASSIC_BASS_RELEASE_RATE, p_delta)
+
 	_classic_mid = _exp_smooth(
 		_classic_mid,
 		clampf(_smoothed_mid * glow_scale, 0.0, 1.0),
@@ -1425,9 +1427,12 @@ func _step_classic_envelope(p_delta: float) -> void:
 		CLASSIC_SPECTRUM_RELEASE_RATE,
 		p_delta
 	)
-	var target_classic_energy: float = maxf(
-		energy_floor,
-		clampf((_current_energy * (0.80 + (0.24 * glow_scale))) + (_beat_pulse * 0.20), 0.0, 1.0)
+	var beat_above_floor: float = maxf(0.0, _beat_pulse - pulse_floor)
+	var energy_lift: float = energy_floor + (beat_above_floor * lerpf(0.28, 0.58, react_norm))
+	var target_classic_energy: float = clampf(
+		maxf(energy_floor, maxf(_current_energy * lerpf(0.68, 1.05, react_norm), energy_lift)),
+		0.0,
+		lerpf(0.62, 0.95, react_norm)
 	)
 	_classic_energy = _exp_smooth(
 		_classic_energy,
