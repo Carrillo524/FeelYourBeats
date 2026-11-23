@@ -4,7 +4,7 @@
 
 **Un sucesor espiritual de código abierto para sentir tu propia música, nota a nota.**
 
-[![Version](https://img.shields.io/badge/release-v1.1.0-00e5ff?style=for-the-badge)](https://github.com/Carrillo524/FeelYourBeats/releases/latest)
+[![Version](https://img.shields.io/badge/release-v1.1.2-00e5ff?style=for-the-badge)](https://github.com/Carrillo524/FeelYourBeats/releases/latest)
 [![Engine](https://img.shields.io/badge/Godot-4.x-478cbf?style=for-the-badge&logo=godot-engine&logoColor=white)](https://godotengine.org/)
 [![Platform](https://img.shields.io/badge/Plataformas-Android%20%7C%20PC-7c4dff?style=for-the-badge)](https://github.com/Carrillo524/FeelYourBeats/releases/latest)
 [![Status](https://img.shields.io/badge/Proyecto-Independiente%20%26%20Abierto-00c853?style=for-the-badge)](#)
@@ -47,8 +47,8 @@ Con el paso del tiempo ese tipo de experiencias fueron desapareciendo o volvién
 
 1. Entra a la sección de [**Releases**](https://github.com/Carrillo524/FeelYourBeats/releases/latest).
 2. Descarga el archivo correspondiente a tu dispositivo:
-   * **Android:** `FeelYourBeats_v1.1.0.apk` (habilita *Instalar aplicaciones de orígenes desconocidos* si tu teléfono lo solicita).
-   * **Windows (PC):** `FeelYourBeats_v1.1.0_Windows.exe` (ejecutable autónomo, no requiere instalación).
+   * **Android:** `FeelYourBeats_v1.1.2.apk` (habilita *Instalar aplicaciones de orígenes desconocidos* si tu teléfono lo solicita).
+   * **Windows (PC):** `FeelYourBeats_v1.1.2_Windows.exe` (ejecutable autónomo, no requiere instalación).
 
 ---
 
