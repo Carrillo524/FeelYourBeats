@@ -196,6 +196,8 @@ var _import_list_vbox: VBoxContainer = null
 
 var _settings_tab_container: Control = null
 var _settings_scroll: ScrollContainer = null
+var _desktop_display_section: VBoxContainer = null
+var _fullscreen_toggle_button: Button = null
 var _bgm_toggle_button: Button = null
 var _bgm_track_label: Label = null
 var _bgm_prev_button: Button = null
@@ -411,6 +413,7 @@ func _ready() -> void:
 	_reload_all_track_lists()
 	_refresh_tab_visuals()
 	_refresh_modal_option_styles()
+	refresh_desktop_fullscreen_controls()
 	_refresh_bgm_controls()
 	_refresh_particle_controls()
 	_refresh_background_controls()
@@ -504,6 +507,9 @@ func _process(p_delta: float) -> void:
 func _exit_tree() -> void:
 	if _release_http_request != null and is_instance_valid(_release_http_request):
 		_release_http_request.cancel_request()
+	var display_ctrl: UiSfxPlayer = _get_global_display_controller()
+	if display_ctrl != null and is_instance_valid(display_ctrl) and display_ctrl.fullscreen_mode_changed.is_connected(_on_desktop_fullscreen_mode_changed):
+		display_ctrl.fullscreen_mode_changed.disconnect(_on_desktop_fullscreen_mode_changed)
 	var vp: Viewport = get_viewport()
 	if vp != null and vp.size_changed.is_connected(_on_viewport_size_changed):
 		vp.size_changed.disconnect(_on_viewport_size_changed)
@@ -2907,6 +2913,35 @@ func _on_file_selected(p_path: String) -> void:
 	register_external_track(p_path, true)
 
 
+func _get_global_display_controller() -> UiSfxPlayer:
+	var global_sfx: UiSfxPlayer = get_node_or_null("/root/GlobalUiSfx") as UiSfxPlayer
+	if global_sfx != null:
+		return global_sfx
+	return ui_sfx_player
+
+
+func get_desktop_display_section() -> VBoxContainer:
+	return _desktop_display_section
+
+
+func get_fullscreen_toggle_button() -> Button:
+	return _fullscreen_toggle_button
+
+
+func _on_fullscreen_toggle_pressed() -> void:
+	if _consume_suppressed_scroll_press():
+		return
+	var display_ctrl: UiSfxPlayer = _get_global_display_controller()
+	if display_ctrl != null:
+		display_ctrl.toggle_desktop_fullscreen()
+	refresh_desktop_fullscreen_controls()
+
+
+func _on_desktop_fullscreen_mode_changed(_p_is_fullscreen: bool) -> void:
+	refresh_desktop_fullscreen_controls()
+	sync_responsive_viewport_layout()
+
+
 func _on_bgm_toggle_pressed() -> void:
 	if _consume_suppressed_scroll_press():
 		return
@@ -3764,6 +3799,11 @@ func _connect_dependencies() -> void:
 		if not tree.is_connected("on_request_permissions_result", _on_android_permissions_result):
 			tree.connect("on_request_permissions_result", _on_android_permissions_result)
 
+	var display_ctrl: UiSfxPlayer = _get_global_display_controller()
+	if display_ctrl != null:
+		if not display_ctrl.fullscreen_mode_changed.is_connected(_on_desktop_fullscreen_mode_changed):
+			display_ctrl.fullscreen_mode_changed.connect(_on_desktop_fullscreen_mode_changed)
+
 	if ui_sfx_player != null:
 		var excluded: Array[BaseButton] = []
 		if _play_button != null:
@@ -4452,6 +4492,19 @@ func _refresh_modal_record_label() -> void:
 		_modal_record_detail_label.text = ""
 
 
+func refresh_desktop_fullscreen_controls() -> void:
+	var is_desktop: bool = UiSfxPlayer.is_desktop_platform()
+	if _desktop_display_section != null:
+		_desktop_display_section.visible = is_desktop
+	if not is_desktop:
+		return
+	var display_ctrl: UiSfxPlayer = _get_global_display_controller()
+	var is_fullscreen: bool = display_ctrl.is_desktop_fullscreen() if display_ctrl != null else false
+	if _fullscreen_toggle_button != null:
+		_fullscreen_toggle_button.text = "PANTALLA COMPLETA: ACTIVADA" if is_fullscreen else "PANTALLA COMPLETA: DESACTIVADA"
+		_set_option_highlight(_fullscreen_toggle_button, is_fullscreen)
+
+
 func _refresh_bgm_controls() -> void:
 	var bgm_enabled: bool = menu_bgm_player.is_bgm_enabled if menu_bgm_player != null else true
 	var track_name: String = menu_bgm_player.get_current_track_name() if menu_bgm_player != null else MenuBgmPlayer.EMPTY_TRACK_LABEL
@@ -5087,6 +5140,31 @@ func _build_browser_screen_ui() -> void:
 	settings_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	settings_vbox.add_theme_constant_override("separation", 28)
 	settings_margin.add_child(settings_vbox)
+
+	# Desktop-only display section (visible exclusively on Windows/PC, hidden on Android)
+	_desktop_display_section = VBoxContainer.new()
+	_desktop_display_section.name = "SettingsDesktopDisplaySection"
+	_desktop_display_section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_desktop_display_section.add_theme_constant_override("separation", 22)
+	_desktop_display_section.visible = UiSfxPlayer.is_desktop_platform()
+	settings_vbox.add_child(_desktop_display_section)
+
+	var display_header: Label = Label.new()
+	display_header.name = "SettingsDisplayHeader"
+	display_header.text = "PANTALLA (PC · F11 / ALT+ENTER)"
+	display_header.add_theme_font_size_override("font_size", SETTINGS_LABEL_FONT_SIZE)
+	display_header.add_theme_color_override("font_color", COLOR_TEXT_ACCENT)
+	_desktop_display_section.add_child(display_header)
+
+	_fullscreen_toggle_button = Button.new()
+	_fullscreen_toggle_button.name = "FullscreenToggleButton"
+	_fullscreen_toggle_button.text = "PANTALLA COMPLETA: DESACTIVADA"
+	_fullscreen_toggle_button.custom_minimum_size = Vector2(0.0, 90.0)
+	_fullscreen_toggle_button.add_theme_font_size_override("font_size", 38)
+	_fullscreen_toggle_button.pressed.connect(_on_fullscreen_toggle_pressed)
+	_desktop_display_section.add_child(_fullscreen_toggle_button)
+
+	_desktop_display_section.add_child(_create_white_divider("SettingsDivider_Display", 0))
 
 	var settings_header: Label = Label.new()
 	settings_header.name = "SettingsBgmHeader"
