@@ -49,29 +49,38 @@ const EDGE_LATERAL_WAVE_BOOST: float = 1.60
 const EDGE_MAX_OPACITY: float = 0.52
 const EDGE_EPSILON: float = 0.004
 
-# Smooth temporal envelope for Clásico style (eliminates stroboscopic flicker on horizon line & drop ring)
-const CLASSIC_PULSE_FLOOR: float = 0.14
-const CLASSIC_PULSE_PEAK_CAP: float = 0.88
-const CLASSIC_PULSE_TARGET_DECAY_RATE: float = 3.2
-const CLASSIC_PULSE_ATTACK_RATE: float = 6.5
-const CLASSIC_PULSE_RELEASE_RATE: float = 2.8
-const CLASSIC_BASS_FLOOR: float = 0.14
+# Smooth temporal envelope for Clásico style (central glow boost + drop-only halo + reactivity-tamed motion)
+const CLASSIC_PULSE_FLOOR: float = 0.28
+const CLASSIC_PULSE_PEAK_CAP: float = 0.96
+const CLASSIC_PULSE_TARGET_DECAY_RATE: float = 3.0
+const CLASSIC_PULSE_ATTACK_RATE: float = 6.2
+const CLASSIC_PULSE_RELEASE_RATE: float = 2.6
+const CLASSIC_BASS_FLOOR: float = 0.24
 const CLASSIC_BASS_ATTACK_RATE: float = 3.6
 const CLASSIC_BASS_RELEASE_RATE: float = 1.9
-const CLASSIC_ENERGY_FLOOR: float = 0.22
+const CLASSIC_ENERGY_FLOOR: float = 0.38
 const CLASSIC_ENERGY_ATTACK_RATE: float = 4.0
 const CLASSIC_ENERGY_RELEASE_RATE: float = 2.1
 const CLASSIC_SPECTRUM_ATTACK_RATE: float = 4.6
 const CLASSIC_SPECTRUM_RELEASE_RATE: float = 2.3
-const CLASSIC_EDGE_GLOW_FLOOR: float = 0.16
-const CLASSIC_EDGE_DROP_FLOOR: float = 0.24
+const CLASSIC_MAX_ZOOM_BOUNCE: float = 0.14
+const CLASSIC_ZOOM_ATTACK_RATE: float = 4.2
+const CLASSIC_ZOOM_RELEASE_RATE: float = 2.4
+const CLASSIC_MAX_SHAKE_PX: float = 2.8
+const CLASSIC_SHAKE_OSCILLATION_SPEED: float = 26.0
+const CLASSIC_SHAKE_TARGET_DECAY_RATE: float = 5.5
+const CLASSIC_SHAKE_ATTACK_RATE: float = 8.0
+const CLASSIC_SHAKE_RELEASE_RATE: float = 4.8
+const CLASSIC_EDGE_GLOW_DROP_FLOOR: float = 0.20
+const CLASSIC_EDGE_DROP_FLOOR: float = 0.26
 const CLASSIC_EDGE_DROP_BASE_WIDTH: float = 0.015
-const CLASSIC_EDGE_ATTACK_RATE: float = 6.8
-const CLASSIC_EDGE_RELEASE_RATE: float = 3.0
-const CLASSIC_EDGE_DROP_ATTACK_RATE: float = 5.4
-const CLASSIC_EDGE_DROP_RELEASE_RATE: float = 2.2
-const CLASSIC_EDGE_WIDTH_ATTACK_RATE: float = 6.2
-const CLASSIC_EDGE_WIDTH_RELEASE_RATE: float = 2.8
+const CLASSIC_EDGE_ATTACK_RATE: float = 6.2
+const CLASSIC_EDGE_RELEASE_RATE: float = 3.2
+const CLASSIC_EDGE_DROP_ATTACK_RATE: float = 5.2
+const CLASSIC_EDGE_DROP_RELEASE_RATE: float = 2.6
+const CLASSIC_EDGE_WIDTH_ATTACK_RATE: float = 5.8
+const CLASSIC_EDGE_WIDTH_RELEASE_RATE: float = 3.0
+const CLASSIC_EDGE_BLUR_RELEASE_RATE: float = 3.6
 
 const NEBULA_CLOUD_COUNT: int = 6
 const NEBULA_BEAT_DECAY_RATE: float = 3.8
@@ -131,7 +140,7 @@ var edge_glow_intensity: float = 0.0
 var edge_glow_width: float = EDGE_BASE_WIDTH
 var edge_drop_boost: float = 0.0
 var wave_amplitude: float = 0.65
-var wave_blur_intensity: float = 0.10
+var wave_blur_intensity: float = 0.0
 
 var _shader_material: ShaderMaterial = null
 var _bg_config: ReactiveBackgroundConfig = ReactiveBackgroundConfig.new()
@@ -161,6 +170,7 @@ var _prev_bass_sample: float = 0.0
 var _zoom_bounce: float = 0.0
 var _ambient_phase: float = 0.0
 var _shake_intensity: float = 0.0
+var _shake_target: float = 0.0
 var _shake_phase: float = 0.0
 var _shake_offset_px: Vector2 = Vector2.ZERO
 var _shake_offset_uv: Vector2 = Vector2.ZERO
@@ -311,8 +321,9 @@ func connect_dependencies() -> void:
 
 func _process(p_delta: float) -> void:
 	var dt: float = maxf(0.0, p_delta)
+	var is_classic: bool = is_classic_style_active()
 	_ambient_phase += dt * AMBIENT_BREATH_SPEED
-	_shake_phase += dt * SHAKE_OSCILLATION_SPEED
+	_shake_phase += dt * (CLASSIC_SHAKE_OSCILLATION_SPEED if is_classic else SHAKE_OSCILLATION_SPEED)
 
 	_current_energy = lerpf(_current_energy, _target_energy, clampf(ENERGY_LERP_SPEED * dt, 0.0, 1.0))
 
@@ -330,29 +341,72 @@ func _process(p_delta: float) -> void:
 
 	_step_classic_envelope(dt)
 
-	var ambient_breath: float = (sin(_ambient_phase) * 0.5 + 0.5) * AMBIENT_ZOOM_AMPLITUDE
-	var target_zoom: float = clampf(
-		(_smoothed_bass * 0.16) + (_beat_pulse * 0.07) + ambient_breath,
-		0.0,
-		MAX_ZOOM_BOUNCE
-	)
-	_zoom_bounce = lerpf(_zoom_bounce, target_zoom, clampf(ZOOM_DECAY_SPEED * dt, 0.0, 1.0))
+	if is_classic:
+		var react_mult: float = _bg_config.get_reactivity_multiplier()
+		var motion_scale: float = _get_classic_motion_scale()
+		var classic_ambient: float = (sin(_ambient_phase) * 0.5 + 0.5) * (AMBIENT_ZOOM_AMPLITUDE * 0.65 * clampf(react_mult, 0.45, 1.35))
+		var target_classic_zoom: float = clampf(
+			(((_classic_bass * 0.062) + (_beat_pulse * 0.032)) * motion_scale) + classic_ambient,
+			0.0,
+			CLASSIC_MAX_ZOOM_BOUNCE
+		)
+		_zoom_bounce = _exp_smooth(
+			_zoom_bounce,
+			target_classic_zoom,
+			CLASSIC_ZOOM_ATTACK_RATE,
+			CLASSIC_ZOOM_RELEASE_RATE,
+			dt
+		)
 
-	_shake_intensity = maxf(0.0, _shake_intensity - (SHAKE_DECAY_SPEED * dt))
-	if _shake_intensity > 0.001:
-		var tier_mult: float = 1.35 if _current_tier >= 2 else 0.75
-		var amp_px: float = _shake_intensity * MAX_SHAKE_PX * tier_mult
-		_shake_offset_px = Vector2(
-			sin(_shake_phase * 1.73) * amp_px,
-			cos(_shake_phase * 2.29) * amp_px * 0.85
+		_shake_target *= exp(-CLASSIC_SHAKE_TARGET_DECAY_RATE * dt)
+		if _shake_target < 0.001:
+			_shake_target = 0.0
+		_shake_intensity = _exp_smooth(
+			_shake_intensity,
+			_shake_target,
+			CLASSIC_SHAKE_ATTACK_RATE,
+			CLASSIC_SHAKE_RELEASE_RATE,
+			dt
 		)
-		_shake_offset_uv = Vector2(
-			_shake_offset_px.x / 1080.0,
-			_shake_offset_px.y / 1920.0
-		)
+		if _shake_intensity > 0.001:
+			var classic_tier_mult: float = 1.15 if _current_tier >= 2 else 0.55
+			var classic_amp_px: float = _shake_intensity * CLASSIC_MAX_SHAKE_PX * classic_tier_mult * motion_scale
+			_shake_offset_px = Vector2(
+				sin(_shake_phase * 1.73) * classic_amp_px,
+				cos(_shake_phase * 2.29) * classic_amp_px * 0.85
+			)
+			_shake_offset_uv = Vector2(
+				_shake_offset_px.x / 1080.0,
+				_shake_offset_px.y / 1920.0
+			)
+		else:
+			_shake_intensity = 0.0
+			_shake_offset_px = Vector2.ZERO
+			_shake_offset_uv = Vector2.ZERO
 	else:
-		_shake_offset_px = Vector2.ZERO
-		_shake_offset_uv = Vector2.ZERO
+		var ambient_breath: float = (sin(_ambient_phase) * 0.5 + 0.5) * AMBIENT_ZOOM_AMPLITUDE
+		var target_zoom: float = clampf(
+			(_smoothed_bass * 0.16) + (_beat_pulse * 0.07) + ambient_breath,
+			0.0,
+			MAX_ZOOM_BOUNCE
+		)
+		_zoom_bounce = lerpf(_zoom_bounce, target_zoom, clampf(ZOOM_DECAY_SPEED * dt, 0.0, 1.0))
+
+		_shake_intensity = maxf(0.0, _shake_intensity - (SHAKE_DECAY_SPEED * dt))
+		if _shake_intensity > 0.001:
+			var tier_mult: float = 1.35 if _current_tier >= 2 else 0.75
+			var amp_px: float = _shake_intensity * MAX_SHAKE_PX * tier_mult
+			_shake_offset_px = Vector2(
+				sin(_shake_phase * 1.73) * amp_px,
+				cos(_shake_phase * 2.29) * amp_px * 0.85
+			)
+			_shake_offset_uv = Vector2(
+				_shake_offset_px.x / 1080.0,
+				_shake_offset_px.y / 1920.0
+			)
+		else:
+			_shake_offset_px = Vector2.ZERO
+			_shake_offset_uv = Vector2.ZERO
 
 	screen_shake_updated.emit(_shake_offset_px)
 
@@ -916,6 +970,33 @@ func step_aurora(p_delta: float) -> void:
 	queue_redraw()
 
 
+func is_classic_style_active() -> bool:
+	return not is_nebula_style_active() and not is_aurora_style_active() and not is_eclipse_style_active()
+
+
+func get_classic_energy_level() -> float:
+	return _classic_energy
+
+
+func get_classic_bass_energy() -> float:
+	return _classic_bass
+
+
+func _get_classic_motion_scale() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	return clampf(pow(react_mult, 1.35), 0.30, 1.65)
+
+
+func _get_classic_glow_scale() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	return clampf(lerpf(0.76, 1.18, (react_mult - 0.55) / 0.90), 0.72, 1.20)
+
+
+func _get_classic_drop_halo_scale() -> float:
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	return clampf(lerpf(0.65, 1.12, (react_mult - 0.55) / 0.90), 0.60, 1.15)
+
+
 func set_perimeter_wave_enabled(p_enabled: bool) -> void:
 	perimeter_wave_enabled = p_enabled
 	if not perimeter_wave_enabled:
@@ -926,11 +1007,6 @@ func set_perimeter_wave_enabled(p_enabled: bool) -> void:
 		edge_drop_boost = 0.0
 		edge_glow_width = EDGE_BASE_WIDTH
 		wave_blur_intensity = 0.0
-	else:
-		var glow_floor: float = CLASSIC_EDGE_GLOW_FLOOR if _backdrop_mode == BackdropMode.GAMEPLAY else 0.08
-		_edge_glow_target = maxf(_edge_glow_target, glow_floor)
-		edge_glow_intensity = maxf(edge_glow_intensity, glow_floor)
-		wave_blur_intensity = maxf(wave_blur_intensity, 0.10)
 	_sync_shader_parameters()
 
 
@@ -1082,12 +1158,23 @@ func get_spectrum_update_count() -> int:
 func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
 	var tier_norm: float = float(_current_tier) / 3.0
 	var kick_strength: float = clampf(0.42 + (0.38 * maxf(_smoothed_bass, _target_bass)) + (0.20 * tier_norm), 0.25, 1.0)
-	var beat_target: float = clampf(lerpf(0.58, CLASSIC_PULSE_PEAK_CAP, kick_strength), CLASSIC_PULSE_FLOOR, CLASSIC_PULSE_PEAK_CAP)
+	var glow_scale: float = _get_classic_glow_scale()
+	var beat_target: float = clampf(
+		lerpf(0.66, CLASSIC_PULSE_PEAK_CAP, kick_strength) * glow_scale,
+		CLASSIC_PULSE_FLOOR,
+		1.0
+	)
 	_beat_pulse_target = maxf(_beat_pulse_target, beat_target)
-	_zoom_bounce = clampf(_zoom_bounce + 0.05, 0.0, MAX_ZOOM_BOUNCE)
 	_beat_pulse_count += 1
 
-	_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+	if is_classic_style_active():
+		var motion_scale: float = _get_classic_motion_scale()
+		var classic_shake: float = clampf(kick_strength * (0.22 + (0.38 * tier_norm)) * motion_scale, 0.0, 1.0)
+		_shake_target = maxf(_shake_target, classic_shake)
+	else:
+		_zoom_bounce = clampf(_zoom_bounce + 0.05, 0.0, MAX_ZOOM_BOUNCE)
+		_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+
 	_trigger_edge_beat_impulse(kick_strength)
 	trigger_wave_pulse(kick_strength, false)
 	bass_kick_pulsed.emit(kick_strength)
@@ -1102,8 +1189,13 @@ func _on_intensity_changed(p_block: IntensityBlock) -> void:
 	_current_tier = clampi(p_block.tier, IntensityBlock.MIN_TIER, IntensityBlock.MAX_TIER)
 	_intensity_change_count += 1
 	if _current_tier >= 2 and _current_tier > prev_tier:
-		_shake_intensity = clampf(maxf(_shake_intensity, 0.85), 0.0, 1.0)
-		_trigger_edge_beat_impulse(0.95)
+		if is_classic_style_active():
+			_shake_target = clampf(maxf(_shake_target, 0.55 * _get_classic_motion_scale()), 0.0, 1.0)
+			if _backdrop_mode == BackdropMode.GAMEPLAY:
+				_trigger_edge_drop_impulse(0.88)
+		else:
+			_shake_intensity = clampf(maxf(_shake_intensity, 0.85), 0.0, 1.0)
+			_trigger_edge_beat_impulse(0.95)
 		trigger_wave_pulse(0.95, true)
 		bass_kick_pulsed.emit(0.95)
 	elif is_aurora_style_active() and _current_tier >= 2:
@@ -1145,7 +1237,19 @@ func _on_spectrum_updated(
 	if is_bass_transient:
 		var tier_norm: float = float(_current_tier) / 3.0
 		var kick_strength: float = clampf(clamped_bass * 0.72 + bass_jump * 0.65, 0.25, 1.0)
-		_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
+		if is_classic_style_active():
+			var glow_scale: float = _get_classic_glow_scale()
+			var transient_pulse: float = clampf(
+				lerpf(0.58, CLASSIC_PULSE_PEAK_CAP, kick_strength) * glow_scale,
+				CLASSIC_PULSE_FLOOR,
+				1.0
+			)
+			_beat_pulse_target = maxf(_beat_pulse_target, transient_pulse)
+			var motion_scale: float = _get_classic_motion_scale()
+			var classic_shake: float = clampf(kick_strength * (0.20 + (0.35 * tier_norm)) * motion_scale, 0.0, 1.0)
+			_shake_target = maxf(_shake_target, classic_shake)
+		else:
+			_shake_intensity = clampf(maxf(_shake_intensity, kick_strength * (0.45 + 0.55 * tier_norm)), 0.0, 1.0)
 		_trigger_edge_beat_impulse(kick_strength)
 		trigger_wave_pulse(kick_strength, is_gameplay_drop)
 		bass_kick_pulsed.emit(kick_strength)
@@ -1248,9 +1352,12 @@ static func _exp_smooth(
 
 func _step_classic_envelope(p_delta: float) -> void:
 	var active_floor_enabled: bool = _backdrop_mode == BackdropMode.GAMEPLAY or _menu_bgm_active
-	var pulse_floor: float = CLASSIC_PULSE_FLOOR if active_floor_enabled else 0.0
-	var bass_floor: float = CLASSIC_BASS_FLOOR if active_floor_enabled else 0.0
-	var energy_floor: float = CLASSIC_ENERGY_FLOOR if active_floor_enabled else 0.12
+	var react_mult: float = _bg_config.get_reactivity_multiplier()
+	var glow_scale: float = _get_classic_glow_scale()
+
+	var pulse_floor: float = clampf(CLASSIC_PULSE_FLOOR * lerpf(0.86, 1.16, (react_mult - 0.55) / 0.90), 0.22, 0.36) if active_floor_enabled else 0.0
+	var bass_floor: float = clampf(CLASSIC_BASS_FLOOR * lerpf(0.88, 1.14, (react_mult - 0.55) / 0.90), 0.20, 0.32) if active_floor_enabled else 0.0
+	var energy_floor: float = clampf(CLASSIC_ENERGY_FLOOR * lerpf(0.90, 1.12, (react_mult - 0.55) / 0.90), 0.34, 0.46) if active_floor_enabled else 0.16
 
 	_beat_pulse_target = lerpf(
 		pulse_floor,
@@ -1264,30 +1371,38 @@ func _step_classic_envelope(p_delta: float) -> void:
 		CLASSIC_PULSE_RELEASE_RATE,
 		p_delta
 	)
+	var target_classic_bass: float = maxf(
+		bass_floor,
+		clampf((_smoothed_bass * (0.76 + (0.24 * glow_scale))) + (_beat_pulse * 0.16), 0.0, 1.0)
+	)
 	_classic_bass = _exp_smooth(
 		_classic_bass,
-		maxf(bass_floor, _smoothed_bass),
+		target_classic_bass,
 		CLASSIC_BASS_ATTACK_RATE,
 		CLASSIC_BASS_RELEASE_RATE,
 		p_delta
 	)
 	_classic_mid = _exp_smooth(
 		_classic_mid,
-		_smoothed_mid,
+		clampf(_smoothed_mid * glow_scale, 0.0, 1.0),
 		CLASSIC_SPECTRUM_ATTACK_RATE,
 		CLASSIC_SPECTRUM_RELEASE_RATE,
 		p_delta
 	)
 	_classic_high = _exp_smooth(
 		_classic_high,
-		_smoothed_high,
+		clampf(_smoothed_high * glow_scale, 0.0, 1.0),
 		CLASSIC_SPECTRUM_ATTACK_RATE,
 		CLASSIC_SPECTRUM_RELEASE_RATE,
 		p_delta
 	)
+	var target_classic_energy: float = maxf(
+		energy_floor,
+		clampf((_current_energy * (0.80 + (0.24 * glow_scale))) + (_beat_pulse * 0.20), 0.0, 1.0)
+	)
 	_classic_energy = _exp_smooth(
 		_classic_energy,
-		maxf(energy_floor, _current_energy),
+		target_classic_energy,
 		CLASSIC_ENERGY_ATTACK_RATE,
 		CLASSIC_ENERGY_RELEASE_RATE,
 		p_delta
@@ -1295,29 +1410,21 @@ func _step_classic_envelope(p_delta: float) -> void:
 
 
 func _trigger_edge_beat_impulse(p_strength: float) -> void:
-	if not perimeter_wave_enabled:
+	if not perimeter_wave_enabled or _backdrop_mode == BackdropMode.MENU:
 		return
-	var s: float = clampf(p_strength, 0.0, 1.0)
-	if _backdrop_mode == BackdropMode.MENU:
+	if not _is_gameplay_drop_active():
 		return
-
-	if _is_gameplay_drop_active():
-		_trigger_edge_drop_impulse(s)
-		return
-
-	var beat_peak: float = lerpf(0.50, 0.76, s)
-	var beat_width: float = lerpf(0.014, 0.020, s)
-	_edge_glow_target = maxf(_edge_glow_target, beat_peak)
-	_edge_width_target = maxf(_edge_width_target, beat_width)
+	_trigger_edge_drop_impulse(clampf(p_strength, 0.0, 1.0))
 
 
 func _trigger_edge_drop_impulse(p_strength: float) -> void:
-	if not perimeter_wave_enabled:
+	if not perimeter_wave_enabled or _backdrop_mode == BackdropMode.MENU:
 		return
 	var s: float = clampf(p_strength, 0.0, 1.0)
-	var drop_peak: float = lerpf(0.74, 0.96, s)
-	var drop_width: float = lerpf(0.026, EDGE_MAX_REACH_LATERAL, s)
-	var drop_mix: float = lerpf(0.72, 0.96, s)
+	var drop_scale: float = _get_classic_drop_halo_scale()
+	var drop_peak: float = clampf(lerpf(0.68, 0.94, s) * drop_scale, 0.0, 1.0)
+	var drop_width: float = clampf(lerpf(0.022, EDGE_MAX_REACH_LATERAL, s * clampf(drop_scale, 0.65, 1.0)), EDGE_BASE_WIDTH, EDGE_MAX_REACH_LATERAL)
+	var drop_mix: float = clampf(lerpf(0.68, 0.94, s) * drop_scale, 0.0, 1.0)
 	_edge_glow_target = maxf(_edge_glow_target, drop_peak)
 	_edge_width_target = maxf(_edge_width_target, drop_width)
 	_edge_drop_target = maxf(_edge_drop_target, drop_mix)
@@ -1343,19 +1450,25 @@ func _update_edge_halo(p_delta: float) -> void:
 		wave_blur_intensity = 0.0
 		return
 
-	var in_drop: bool = _backdrop_mode == BackdropMode.GAMEPLAY and _current_tier >= 2
-	var glow_floor: float = CLASSIC_EDGE_GLOW_FLOOR if _backdrop_mode == BackdropMode.GAMEPLAY else 0.08
-	var drop_floor: float = CLASSIC_EDGE_DROP_FLOOR if in_drop else 0.0
-	var width_floor: float = CLASSIC_EDGE_DROP_BASE_WIDTH if in_drop else EDGE_BASE_WIDTH
+	var in_drop: bool = (_backdrop_mode == BackdropMode.GAMEPLAY) and (_is_gameplay_drop_active() or _current_tier >= 2)
+	var drop_scale: float = _get_classic_drop_halo_scale()
+	var glow_floor: float = (CLASSIC_EDGE_GLOW_DROP_FLOOR * drop_scale) if in_drop else 0.0
+	var drop_floor: float = (CLASSIC_EDGE_DROP_FLOOR * drop_scale) if in_drop else 0.0
+	var width_floor: float = lerpf(EDGE_BASE_WIDTH, CLASSIC_EDGE_DROP_BASE_WIDTH, clampf(drop_scale, 0.5, 1.0)) if in_drop else EDGE_BASE_WIDTH
 
 	var target_glow_decay: float = (
 		EDGE_DROP_INTENSITY_DECAY_RATE * 0.55
-		if in_drop or _edge_drop_target > 0.25
+		if in_drop
 		else CLASSIC_EDGE_RELEASE_RATE
 	)
 	_edge_glow_target = lerpf(glow_floor, _edge_glow_target, exp(-target_glow_decay * p_delta))
 	_edge_drop_target = lerpf(drop_floor, _edge_drop_target, exp(-(EDGE_DROP_DECAY_SPEED * 0.55) * p_delta))
 	_edge_width_target = lerpf(width_floor, _edge_width_target, exp(-(EDGE_WIDTH_RELAX_SPEED * 0.65) * p_delta))
+	if not in_drop:
+		if _edge_glow_target < EDGE_EPSILON:
+			_edge_glow_target = 0.0
+		if _edge_drop_target < EDGE_EPSILON:
+			_edge_drop_target = 0.0
 
 	edge_glow_intensity = _exp_smooth(
 		edge_glow_intensity,
@@ -1364,8 +1477,8 @@ func _update_edge_halo(p_delta: float) -> void:
 		CLASSIC_EDGE_RELEASE_RATE,
 		p_delta
 	)
-	if edge_glow_intensity < glow_floor:
-		edge_glow_intensity = glow_floor
+	if not in_drop and edge_glow_intensity < EDGE_EPSILON:
+		edge_glow_intensity = 0.0
 
 	edge_drop_boost = _exp_smooth(
 		edge_drop_boost,
@@ -1391,20 +1504,24 @@ func _update_edge_halo(p_delta: float) -> void:
 		1.0
 	)
 	var target_wave_amp: float = clampf(
-		0.45 + (spectral_activity * 0.35) + (edge_glow_intensity * 0.18) + (edge_drop_boost * 0.25),
-		0.40,
+		(0.42 + (spectral_activity * 0.32) + (edge_glow_intensity * 0.18) + (edge_drop_boost * 0.24)) * clampf(drop_scale, 0.65, 1.12),
+		0.35,
 		1.15
 	)
-	# Stable floor opacity (>= 0.10) with smooth swell so drops cap cleanly at <= 0.52 without flickering
-	var target_blur_intensity: float = clampf(
-		0.10 + (spectral_activity * 0.045) + (edge_drop_boost * 0.02),
-		0.10,
-		0.16
-	)
+	var target_blur_intensity: float = 0.0
+	if in_drop:
+		target_blur_intensity = clampf(
+			(0.09 + (spectral_activity * 0.045) + (edge_drop_boost * 0.02)) * clampf(drop_scale, 0.65, 1.10),
+			0.06,
+			0.16
+		)
 
 	var wave_lerp: float = 1.0 - exp(-5.0 * p_delta)
 	wave_amplitude = lerpf(wave_amplitude, target_wave_amp, wave_lerp)
-	wave_blur_intensity = lerpf(wave_blur_intensity, target_blur_intensity, wave_lerp)
+	var blur_rate: float = 5.0 if target_blur_intensity > wave_blur_intensity else CLASSIC_EDGE_BLUR_RELEASE_RATE
+	wave_blur_intensity = lerpf(wave_blur_intensity, target_blur_intensity, 1.0 - exp(-blur_rate * p_delta))
+	if not in_drop and wave_blur_intensity < EDGE_EPSILON:
+		wave_blur_intensity = 0.0
 
 
 func _sync_shader_parameters() -> void:
