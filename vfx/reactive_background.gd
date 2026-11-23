@@ -63,16 +63,21 @@ const CLASSIC_ENERGY_ATTACK_RATE: float = 4.0
 const CLASSIC_ENERGY_RELEASE_RATE: float = 2.1
 const CLASSIC_SPECTRUM_ATTACK_RATE: float = 4.6
 const CLASSIC_SPECTRUM_RELEASE_RATE: float = 2.3
-const CLASSIC_MAX_ZOOM_BOUNCE: float = 0.14
+const CLASSIC_MAX_ZOOM_BOUNCE: float = 0.075
 const CLASSIC_ZOOM_ATTACK_RATE: float = 4.2
 const CLASSIC_ZOOM_RELEASE_RATE: float = 2.4
-const CLASSIC_MAX_SHAKE_PX: float = 2.8
+const CLASSIC_MAX_SHAKE_PX: float = 1.5
 const CLASSIC_SHAKE_OSCILLATION_SPEED: float = 26.0
 const CLASSIC_SHAKE_TARGET_DECAY_RATE: float = 5.5
 const CLASSIC_SHAKE_ATTACK_RATE: float = 8.0
 const CLASSIC_SHAKE_RELEASE_RATE: float = 4.8
-const CLASSIC_EDGE_GLOW_DROP_FLOOR: float = 0.20
-const CLASSIC_EDGE_DROP_FLOOR: float = 0.26
+const CLASSIC_DROP_SUSTAIN_REQUIRED_SEC: float = 0.28
+const CLASSIC_DROP_HALO_ATTACK_RATE: float = 2.8
+const CLASSIC_DROP_HALO_RELEASE_RATE: float = 2.2
+const CLASSIC_DROP_BASS_THRESHOLD: float = 0.64
+const CLASSIC_DROP_ENERGY_THRESHOLD: float = 0.64
+const CLASSIC_EDGE_GLOW_DROP_FLOOR: float = 0.18
+const CLASSIC_EDGE_DROP_FLOOR: float = 0.22
 const CLASSIC_EDGE_DROP_BASE_WIDTH: float = 0.015
 const CLASSIC_EDGE_ATTACK_RATE: float = 6.2
 const CLASSIC_EDGE_RELEASE_RATE: float = 3.2
@@ -156,6 +161,8 @@ var _classic_energy: float = CLASSIC_ENERGY_FLOOR
 var _edge_glow_target: float = 0.0
 var _edge_drop_target: float = 0.0
 var _edge_width_target: float = EDGE_BASE_WIDTH
+var _drop_sustain_timer_sec: float = 0.0
+var _drop_halo_amount: float = 0.0
 var _current_energy: float = 0.2
 var _target_energy: float = 0.2
 var _current_tier: int = 0
@@ -343,12 +350,14 @@ func _process(p_delta: float) -> void:
 
 	if is_classic:
 		var react_mult: float = _bg_config.get_reactivity_multiplier()
-		var motion_scale: float = _get_classic_motion_scale()
-		var classic_ambient: float = (sin(_ambient_phase) * 0.5 + 0.5) * (AMBIENT_ZOOM_AMPLITUDE * 0.65 * clampf(react_mult, 0.45, 1.35))
+		var react_norm: float = clampf((react_mult - 0.55) / 0.90, 0.0, 1.0)
+		var max_zoom_for_react: float = lerpf(0.028, CLASSIC_MAX_ZOOM_BOUNCE, react_norm)
+		var classic_ambient: float = (sin(_ambient_phase) * 0.5 + 0.5) * lerpf(0.004, 0.010, react_norm)
+		var zoom_drive: float = ((_classic_bass * 0.036) + (_beat_pulse * 0.020) + (_drop_halo_amount * 0.012)) * lerpf(0.42, 1.05, react_norm)
 		var target_classic_zoom: float = clampf(
-			(((_classic_bass * 0.062) + (_beat_pulse * 0.032)) * motion_scale) + classic_ambient,
+			zoom_drive + classic_ambient,
 			0.0,
-			CLASSIC_MAX_ZOOM_BOUNCE
+			max_zoom_for_react
 		)
 		_zoom_bounce = _exp_smooth(
 			_zoom_bounce,
@@ -369,8 +378,13 @@ func _process(p_delta: float) -> void:
 			dt
 		)
 		if _shake_intensity > 0.001:
-			var classic_tier_mult: float = 1.15 if _current_tier >= 2 else 0.55
-			var classic_amp_px: float = _shake_intensity * CLASSIC_MAX_SHAKE_PX * classic_tier_mult * motion_scale
+			var shake_scale: float = lerpf(0.28, 1.00, react_norm)
+			var classic_tier_mult: float = lerpf(0.55, 1.00, _drop_halo_amount)
+			var classic_amp_px: float = clampf(
+				_shake_intensity * CLASSIC_MAX_SHAKE_PX * classic_tier_mult * shake_scale,
+				0.0,
+				CLASSIC_MAX_SHAKE_PX * shake_scale
+			)
 			_shake_offset_px = Vector2(
 				sin(_shake_phase * 1.73) * classic_amp_px,
 				cos(_shake_phase * 2.29) * classic_amp_px * 0.85
@@ -982,6 +996,10 @@ func get_classic_bass_energy() -> float:
 	return _classic_bass
 
 
+func get_drop_halo_amount() -> float:
+	return _drop_halo_amount
+
+
 func _get_classic_motion_scale() -> float:
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
 	return clampf(pow(react_mult, 1.35), 0.30, 1.65)
@@ -1017,8 +1035,15 @@ func is_perimeter_wave_enabled() -> bool:
 func set_backdrop_mode(p_mode: int) -> void:
 	_backdrop_mode = clampi(p_mode, BackdropMode.MENU, BackdropMode.GAMEPLAY)
 	if _backdrop_mode == BackdropMode.MENU:
+		_drop_sustain_timer_sec = 0.0
+		_drop_halo_amount = 0.0
+		_edge_glow_target = 0.0
 		_edge_drop_target = 0.0
+		_edge_width_target = EDGE_BASE_WIDTH
+		edge_glow_intensity = 0.0
 		edge_drop_boost = 0.0
+		edge_glow_width = EDGE_BASE_WIDTH
+		wave_blur_intensity = 0.0
 	_sync_shader_parameters()
 
 
@@ -1190,9 +1215,9 @@ func _on_intensity_changed(p_block: IntensityBlock) -> void:
 	_intensity_change_count += 1
 	if _current_tier >= 2 and _current_tier > prev_tier:
 		if is_classic_style_active():
-			_shake_target = clampf(maxf(_shake_target, 0.55 * _get_classic_motion_scale()), 0.0, 1.0)
-			if _backdrop_mode == BackdropMode.GAMEPLAY:
-				_trigger_edge_drop_impulse(0.88)
+			if _is_sustained_classic_drop_active():
+				_shake_target = clampf(maxf(_shake_target, 0.55 * _get_classic_motion_scale()), 0.0, 1.0)
+				_trigger_edge_drop_impulse(0.85)
 		else:
 			_shake_intensity = clampf(maxf(_shake_intensity, 0.85), 0.0, 1.0)
 			_trigger_edge_beat_impulse(0.95)
@@ -1350,6 +1375,10 @@ static func _exp_smooth(
 	return lerpf(p_current, p_target, weight)
 
 
+func _is_sustained_classic_drop_active() -> bool:
+	return _backdrop_mode == BackdropMode.GAMEPLAY and _drop_sustain_timer_sec >= CLASSIC_DROP_SUSTAIN_REQUIRED_SEC
+
+
 func _step_classic_envelope(p_delta: float) -> void:
 	var active_floor_enabled: bool = _backdrop_mode == BackdropMode.GAMEPLAY or _menu_bgm_active
 	var react_mult: float = _bg_config.get_reactivity_multiplier()
@@ -1408,11 +1437,39 @@ func _step_classic_envelope(p_delta: float) -> void:
 		p_delta
 	)
 
+	# Sustained Gameplay Drop/Clímax detector (prevents song intro or isolated spikes from triggering ring/edge halo)
+	var raw_drop_condition: bool = false
+	if _backdrop_mode == BackdropMode.GAMEPLAY:
+		if _current_tier >= 3:
+			raw_drop_condition = true
+		elif (
+			_current_tier >= 2
+			and _smoothed_bass >= CLASSIC_DROP_BASS_THRESHOLD
+			and _current_energy >= CLASSIC_DROP_ENERGY_THRESHOLD
+		):
+			raw_drop_condition = true
+
+	if raw_drop_condition:
+		_drop_sustain_timer_sec = minf(_drop_sustain_timer_sec + p_delta, 2.0)
+	else:
+		_drop_sustain_timer_sec = 0.0
+
+	var drop_halo_target: float = 1.0 if _is_sustained_classic_drop_active() else 0.0
+	_drop_halo_amount = _exp_smooth(
+		_drop_halo_amount,
+		drop_halo_target,
+		CLASSIC_DROP_HALO_ATTACK_RATE,
+		CLASSIC_DROP_HALO_RELEASE_RATE,
+		p_delta
+	)
+	if drop_halo_target <= 0.0 and _drop_halo_amount <= EDGE_EPSILON:
+		_drop_halo_amount = 0.0
+
 
 func _trigger_edge_beat_impulse(p_strength: float) -> void:
 	if not perimeter_wave_enabled or _backdrop_mode == BackdropMode.MENU:
 		return
-	if not _is_gameplay_drop_active():
+	if not _is_sustained_classic_drop_active():
 		return
 	_trigger_edge_drop_impulse(clampf(p_strength, 0.0, 1.0))
 
@@ -1420,11 +1477,13 @@ func _trigger_edge_beat_impulse(p_strength: float) -> void:
 func _trigger_edge_drop_impulse(p_strength: float) -> void:
 	if not perimeter_wave_enabled or _backdrop_mode == BackdropMode.MENU:
 		return
+	if not _is_sustained_classic_drop_active():
+		return
 	var s: float = clampf(p_strength, 0.0, 1.0)
 	var drop_scale: float = _get_classic_drop_halo_scale()
-	var drop_peak: float = clampf(lerpf(0.68, 0.94, s) * drop_scale, 0.0, 1.0)
-	var drop_width: float = clampf(lerpf(0.022, EDGE_MAX_REACH_LATERAL, s * clampf(drop_scale, 0.65, 1.0)), EDGE_BASE_WIDTH, EDGE_MAX_REACH_LATERAL)
-	var drop_mix: float = clampf(lerpf(0.68, 0.94, s) * drop_scale, 0.0, 1.0)
+	var drop_peak: float = clampf(lerpf(0.62, 0.88, s) * drop_scale, 0.0, 0.95)
+	var drop_width: float = clampf(lerpf(0.020, EDGE_MAX_REACH_LATERAL, s * clampf(drop_scale, 0.65, 0.95)), EDGE_BASE_WIDTH, EDGE_MAX_REACH_LATERAL)
+	var drop_mix: float = clampf(lerpf(0.62, 0.88, s) * drop_scale, 0.0, 0.95)
 	_edge_glow_target = maxf(_edge_glow_target, drop_peak)
 	_edge_width_target = maxf(_edge_width_target, drop_width)
 	_edge_drop_target = maxf(_edge_drop_target, drop_mix)
@@ -1440,7 +1499,8 @@ func _update_edge_halo(p_delta: float) -> void:
 			ref_size = Vector2(1080.0, 1920.0)
 	_aspect_ratio = clampf(ref_size.x / maxf(1.0, ref_size.y), 0.25, 4.0)
 
-	if not perimeter_wave_enabled:
+	var in_drop: bool = _is_sustained_classic_drop_active()
+	if not perimeter_wave_enabled or (not in_drop and _drop_halo_amount <= EDGE_EPSILON):
 		_edge_glow_target = 0.0
 		_edge_drop_target = 0.0
 		_edge_width_target = EDGE_BASE_WIDTH
@@ -1450,11 +1510,10 @@ func _update_edge_halo(p_delta: float) -> void:
 		wave_blur_intensity = 0.0
 		return
 
-	var in_drop: bool = (_backdrop_mode == BackdropMode.GAMEPLAY) and (_is_gameplay_drop_active() or _current_tier >= 2)
-	var drop_scale: float = _get_classic_drop_halo_scale()
+	var drop_scale: float = _get_classic_drop_halo_scale() * _drop_halo_amount
 	var glow_floor: float = (CLASSIC_EDGE_GLOW_DROP_FLOOR * drop_scale) if in_drop else 0.0
 	var drop_floor: float = (CLASSIC_EDGE_DROP_FLOOR * drop_scale) if in_drop else 0.0
-	var width_floor: float = lerpf(EDGE_BASE_WIDTH, CLASSIC_EDGE_DROP_BASE_WIDTH, clampf(drop_scale, 0.5, 1.0)) if in_drop else EDGE_BASE_WIDTH
+	var width_floor: float = lerpf(EDGE_BASE_WIDTH, CLASSIC_EDGE_DROP_BASE_WIDTH, clampf(drop_scale, 0.0, 1.0)) if in_drop else EDGE_BASE_WIDTH
 
 	var target_glow_decay: float = (
 		EDGE_DROP_INTENSITY_DECAY_RATE * 0.55
@@ -1472,7 +1531,7 @@ func _update_edge_halo(p_delta: float) -> void:
 
 	edge_glow_intensity = _exp_smooth(
 		edge_glow_intensity,
-		maxf(glow_floor, _edge_glow_target),
+		maxf(glow_floor, _edge_glow_target * _drop_halo_amount),
 		CLASSIC_EDGE_ATTACK_RATE,
 		CLASSIC_EDGE_RELEASE_RATE,
 		p_delta
@@ -1482,7 +1541,7 @@ func _update_edge_halo(p_delta: float) -> void:
 
 	edge_drop_boost = _exp_smooth(
 		edge_drop_boost,
-		maxf(drop_floor, _edge_drop_target),
+		maxf(drop_floor, _edge_drop_target * _drop_halo_amount),
 		CLASSIC_EDGE_DROP_ATTACK_RATE,
 		CLASSIC_EDGE_DROP_RELEASE_RATE,
 		p_delta
@@ -1504,16 +1563,16 @@ func _update_edge_halo(p_delta: float) -> void:
 		1.0
 	)
 	var target_wave_amp: float = clampf(
-		(0.42 + (spectral_activity * 0.32) + (edge_glow_intensity * 0.18) + (edge_drop_boost * 0.24)) * clampf(drop_scale, 0.65, 1.12),
+		(0.42 + (spectral_activity * 0.32) + (edge_glow_intensity * 0.18) + (edge_drop_boost * 0.24)) * clampf(_get_classic_drop_halo_scale(), 0.65, 1.08),
 		0.35,
-		1.15
+		1.10
 	)
 	var target_blur_intensity: float = 0.0
 	if in_drop:
 		target_blur_intensity = clampf(
-			(0.09 + (spectral_activity * 0.045) + (edge_drop_boost * 0.02)) * clampf(drop_scale, 0.65, 1.10),
-			0.06,
-			0.16
+			(0.08 + (spectral_activity * 0.04) + (edge_drop_boost * 0.02)) * clampf(drop_scale, 0.0, 1.05),
+			0.0,
+			0.14
 		)
 
 	var wave_lerp: float = 1.0 - exp(-5.0 * p_delta)
@@ -1531,6 +1590,7 @@ func _sync_shader_parameters() -> void:
 	_shader_material.set_shader_parameter("beat_pulse", _beat_pulse)
 	_shader_material.set_shader_parameter("energy_level", _classic_energy)
 	_shader_material.set_shader_parameter("intensity_tier", _current_tier)
+	_shader_material.set_shader_parameter("drop_halo_amount", _drop_halo_amount)
 	var uses_custom_overlay_hit: bool = (
 		_hit_effect_style == HIT_EFFECT_STAR
 		or _hit_effect_style == HIT_EFFECT_CROWN

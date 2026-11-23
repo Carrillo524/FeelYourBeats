@@ -6,6 +6,7 @@ uniform vec4 accent_color : source_color = vec4(0.20, 0.85, 1.00, 1.0);
 uniform float beat_pulse : hint_range(0.0, 1.0) = 0.0;
 uniform float energy_level : hint_range(0.0, 1.0) = 0.25;
 uniform int intensity_tier : hint_range(0, 3) = 0;
+uniform float drop_halo_amount : hint_range(0.0, 1.0) = 0.0;
 uniform vec4 lane_hit_energies = vec4(0.0, 0.0, 0.0, 0.0);
 uniform float bass_energy : hint_range(0.0, 1.0) = 0.0;
 uniform float mid_energy : hint_range(0.0, 1.0) = 0.0;
@@ -28,26 +29,44 @@ void fragment() {
 	vec2 uv = clamp(((UV - vec2(0.5)) * zoom_scale) + vec2(0.5) + shake_offset, vec2(0.0), vec2(1.0));
 
 	float tier_factor = float(intensity_tier) / 3.0;
-	float drop_active = step(2.0, float(intensity_tier));
+	float drop_active = clamp(drop_halo_amount, 0.0, 1.0);
 
-	vec3 drop_tint = vec3(0.95, 0.22, 0.78) * (drop_active * (0.14 + 0.18 * bass_energy));
-	vec3 boosted_bottom = base_color_bottom.rgb + (accent_color.rgb * (0.14 * bass_energy + 0.10 * mid_energy)) + drop_tint;
+	vec3 drop_tint = vec3(0.95, 0.22, 0.78) * (drop_active * (0.10 + 0.12 * bass_energy));
+	vec3 boosted_bottom = base_color_bottom.rgb + (accent_color.rgb * (0.10 * bass_energy + 0.07 * mid_energy)) + drop_tint;
 	vec4 bg = mix(base_color_top, vec4(boosted_bottom, 1.0), uv.y);
 
-	float horizon_glow = exp(-abs(uv.y - 0.84) * (9.5 - tier_factor * 4.2));
-	float pulse_boost = (beat_pulse * (0.20 + 0.24 * energy_level + 0.18 * tier_factor)) + (bass_energy * 0.24);
+	float horizon_glow = exp(-abs(uv.y - 0.84) * (10.5 - drop_active * 1.8));
+	float normal_pulse = clamp(
+		0.24 + (beat_pulse * (0.20 + 0.10 * energy_level)) + (bass_energy * 0.10),
+		0.0,
+		0.50
+	);
+	float drop_pulse = clamp(
+		(beat_pulse * (0.22 + 0.18 * energy_level + 0.10 * tier_factor)) + (bass_energy * 0.16),
+		0.0,
+		0.56
+	);
+	float pulse_boost = clamp(mix(normal_pulse, drop_pulse, drop_active), 0.0, 0.56);
 
-	float wave_speed = 1.6 + (tier_factor * 2.8) + (mid_energy * 1.6);
+	float wave_speed = 1.2 + (drop_active * 1.1) + (mid_energy * 0.8);
 	float wave = sin((uv.y * 18.0) - (TIME * wave_speed)) * 0.5 + 0.5;
-	float harmonic = sin((uv.x * 12.0) + (uv.y * 28.0) - (TIME * 3.4)) * 0.5 + 0.5;
-	float grid_shimmer = (wave * horizon_glow * (0.10 + 0.26 * energy_level + 0.20 * mid_energy))
-		+ (harmonic * horizon_glow * high_energy * 0.18);
+	float harmonic = sin((uv.x * 12.0) + (uv.y * 28.0) - (TIME * 2.2)) * 0.5 + 0.5;
+	float grid_shimmer = clamp(
+		(wave * horizon_glow * (0.06 + 0.10 * energy_level + 0.08 * mid_energy))
+			+ (harmonic * horizon_glow * high_energy * 0.08),
+		0.0,
+		0.16
+	);
 
 	vec2 shock_center = vec2(0.5, 0.84);
 	float radial_dist = length((uv - shock_center) * vec2(1.0, 1.65));
-	float ring_wave = sin((radial_dist * 24.0) - (TIME * (6.5 + bass_energy * 4.0))) * 0.5 + 0.5;
+	float ring_wave = sin((radial_dist * 14.0) - (TIME * (2.4 + bass_energy * 1.4))) * 0.5 + 0.5;
 	float shock_envelope = exp(-radial_dist * 3.2) * (0.35 + 0.65 * max(beat_pulse, bass_energy));
-	float drop_shockwave = drop_active * pow(ring_wave, 3.0) * shock_envelope * (0.28 + 0.22 * tier_factor);
+	float drop_shockwave = clamp(
+		drop_active * pow(ring_wave, 3.0) * shock_envelope * (0.22 + 0.10 * tier_factor),
+		0.0,
+		0.24
+	);
 
 	int lane_idx = clamp(int(floor(uv.x * 4.0)), 0, 3);
 	float lane_energy = 0.0;
@@ -78,7 +97,11 @@ void fragment() {
 		+ drop_ring_color * drop_shockwave;
 
 	float luma = dot(raw_rgb, vec3(0.299, 0.587, 0.114));
-	float saturation_boost = 1.0 + (0.32 * energy_level) + (0.42 * bass_energy) + (0.22 * drop_active);
+	float saturation_boost = clamp(
+		1.0 + (0.14 * energy_level) + (0.14 * bass_energy) + (0.10 * drop_active),
+		1.0,
+		1.35
+	);
 	vec3 saturated_rgb = mix(vec3(luma), raw_rgb, saturation_boost);
 
 	// Subtle border-emanating light-blue neon wave blur (gameplay-only, lateral <= 0.044, top/bottom <= 0.028, opacity <= 0.52)
@@ -125,8 +148,8 @@ void fragment() {
 	vec3 core_ice_blue = mix(neon_blue, vec3(0.72, 0.94, 1.00), 0.45);
 
 	float raw_opacity = wave_blur_intensity + (edge_glow_intensity * 0.16) + (edge_drop_boost * 0.22);
-	float max_opacity = clamp(raw_opacity, 0.0, 0.52) * perimeter_wave_enabled;
-	float edge_alpha = clamp((fill_blur * 0.82 + bezel_core * 0.18) * max_opacity, 0.0, 0.52);
+	float max_opacity = clamp(raw_opacity, 0.0, 0.42) * perimeter_wave_enabled * drop_active;
+	float edge_alpha = clamp((fill_blur * 0.82 + bezel_core * 0.18) * max_opacity, 0.0, 0.42);
 
 	vec3 wave_tint = mix(neon_blue, core_ice_blue, bezel_core * 0.55);
 	vec3 final_rgb = clamp(
