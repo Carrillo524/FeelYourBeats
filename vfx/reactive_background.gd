@@ -51,7 +51,7 @@ const EDGE_EPSILON: float = 0.004
 
 # Smooth temporal envelope for Clásico style (dynamic horizon contrast + drop-only halo + reactivity-tamed motion)
 const CLASSIC_PULSE_FLOOR: float = 0.14
-const CLASSIC_PULSE_PEAK_CAP: float = 0.94
+const CLASSIC_PULSE_PEAK_CAP: float = 1.00
 const CLASSIC_PULSE_ATTACK_RATE: float = 16.0
 const CLASSIC_PULSE_RELEASE_RATE: float = 4.5
 const CLASSIC_BASS_FLOOR: float = 0.12
@@ -1182,16 +1182,16 @@ func get_spectrum_update_count() -> int:
 
 func _compute_classic_beat_target(p_strength: float) -> float:
 	var react_norm: float = clampf((_bg_config.get_reactivity_multiplier() - 0.55) / 0.90, 0.0, 1.0)
-	var peak_base: float = lerpf(0.43, 0.87, react_norm)
-	var peak_ceiling: float = lerpf(0.50, CLASSIC_PULSE_PEAK_CAP, react_norm)
+	var peak_base: float = lerpf(0.42, 0.94, react_norm)
+	var peak_ceiling: float = lerpf(0.49, CLASSIC_PULSE_PEAK_CAP, react_norm)
 	return clampf(lerpf(peak_base, peak_ceiling, clampf(p_strength, 0.0, 1.0)), CLASSIC_PULSE_FLOOR, CLASSIC_PULSE_PEAK_CAP)
 
 
 func _compute_classic_bass_impulse_target(p_strength: float) -> float:
 	var react_norm: float = clampf((_bg_config.get_reactivity_multiplier() - 0.55) / 0.90, 0.0, 1.0)
-	var peak_base: float = lerpf(0.40, 0.77, react_norm)
-	var peak_ceiling: float = lerpf(0.49, 0.85, react_norm)
-	return clampf(lerpf(peak_base, peak_ceiling, clampf(p_strength, 0.0, 1.0)), CLASSIC_BASS_FLOOR, 0.86)
+	var peak_base: float = lerpf(0.40, 0.92, react_norm)
+	var peak_ceiling: float = lerpf(0.48, 1.00, react_norm)
+	return clampf(lerpf(peak_base, peak_ceiling, clampf(p_strength, 0.0, 1.0)), CLASSIC_BASS_FLOOR, 1.00)
 
 
 func _on_beat_pulsed(_p_beat_index: int, _p_beat_time_sec: float) -> void:
@@ -1402,8 +1402,8 @@ func _step_classic_envelope(p_delta: float) -> void:
 	else:
 		_beat_pulse = _exp_smooth(_beat_pulse, pulse_floor, CLASSIC_PULSE_ATTACK_RATE, CLASSIC_PULSE_RELEASE_RATE, p_delta)
 
-	var bass_scale: float = lerpf(0.54, 1.02, react_norm)
-	var bass_cap: float = lerpf(0.50, 0.85, react_norm)
+	var bass_scale: float = lerpf(0.52, 1.15, react_norm)
+	var bass_cap: float = lerpf(0.49, 1.00, react_norm)
 	var live_bass_target: float = clampf(maxf(bass_floor, _smoothed_bass * bass_scale), bass_floor, bass_cap)
 	if _classic_bass_target > live_bass_target:
 		_classic_bass = _exp_smooth(_classic_bass, _classic_bass_target, CLASSIC_BASS_ATTACK_RATE, CLASSIC_BASS_RELEASE_RATE, p_delta)

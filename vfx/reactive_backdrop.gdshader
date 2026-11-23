@@ -36,21 +36,22 @@ void fragment() {
 	vec4 bg = mix(base_color_top, vec4(boosted_bottom, 1.0), uv.y);
 
 	float normal_pulse = clamp(max(beat_pulse, bass_energy * 0.90), 0.0, 1.0);
-	float normal_horizon_sharpness = mix(13.0, 7.8, normal_pulse);
+	float normal_horizon_sharpness = mix(13.5, 4.8, normal_pulse);
 	float drop_horizon_sharpness = 10.5 - (drop_active * 1.8);
 	float horizon_glow = exp(-abs(uv.y - 0.84) * mix(normal_horizon_sharpness, drop_horizon_sharpness, drop_active));
+	float horizon_outer_bloom = exp(-abs(uv.y - 0.84) * mix(8.5, 3.4, normal_pulse)) * 0.26 * normal_pulse * (1.0 - (drop_active * 0.45));
 
 	float normal_boost = clamp(
-		0.14 + (normal_pulse * (0.34 + (0.10 * energy_level))),
-		0.14,
-		0.58
+		0.15 + (normal_pulse * (0.53 + (0.10 * energy_level))),
+		0.15,
+		0.78
 	);
 	float drop_boost = clamp(
 		(beat_pulse * (0.22 + 0.18 * energy_level + 0.10 * tier_factor)) + (bass_energy * 0.16),
 		0.0,
 		0.56
 	);
-	float pulse_boost = clamp(mix(normal_boost, drop_boost, drop_active), 0.0, 0.58);
+	float pulse_boost = clamp(mix(normal_boost, drop_boost, drop_active), 0.0, 0.78);
 
 	float wave_speed = 1.2 + (drop_active * 1.1) + (mid_energy * 0.8);
 	float wave = sin((uv.y * 18.0) - (TIME * wave_speed)) * 0.5 + 0.5;
@@ -96,7 +97,7 @@ void fragment() {
 	vec3 drop_ring_color = mix(accent_color.rgb, vec3(1.0, 0.42, 0.88), 0.55);
 
 	vec3 raw_rgb = bg.rgb
-		+ accent_color.rgb * (pulse_boost * horizon_glow + grid_shimmer)
+		+ accent_color.rgb * ((pulse_boost * horizon_glow) + horizon_outer_bloom + grid_shimmer)
 		+ perfect_tint * lane_flash
 		+ drop_ring_color * drop_shockwave;
 
