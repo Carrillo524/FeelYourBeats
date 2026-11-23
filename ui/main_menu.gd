@@ -80,6 +80,7 @@ const MENU_LANDSCAPE_MAX_WIDTH_RATIO: float = 0.50
 const MENU_MAX_CONTENT_WIDTH_BASE_PX: float = 960.0
 const GITHUB_REPO_SLUG: String = "Carrillo524/FeelYourBeats"
 const GITHUB_LATEST_RELEASE_URL_FMT: String = "https://api.github.com/repos/%s/releases/latest"
+const GITHUB_LATEST_RELEASE_PAGE_URL: String = "https://github.com/Carrillo524/FeelYourBeats/releases/latest"
 const GITHUB_HTTP_USER_AGENT: String = "User-Agent: FeelYourBeats-Client"
 const GITHUB_HTTP_ACCEPT: String = "Accept: application/vnd.github+json"
 const RELEASE_BELL_SIZE_PX: float = 72.0
@@ -293,7 +294,7 @@ var last_read_release_tag: String = "":
 var _has_remote_update: bool = false
 var _remote_release_tag: String = ""
 var _remote_release_body: String = ""
-var _remote_apk_download_url: String = ""
+var _remote_release_page_url: String = GITHUB_LATEST_RELEASE_PAGE_URL
 var _cached_active_release_tag: String = ""
 var _cached_has_unread_release: bool = false
 var _release_unread_cache_dirty: bool = true
@@ -3333,8 +3334,23 @@ func has_remote_update_available() -> bool:
 	return _has_remote_update
 
 
+static func resolve_release_page_url(p_raw_html_url: String) -> String:
+	var candidate: String = p_raw_html_url.strip_edges()
+	if (
+		not candidate.is_empty()
+		and (candidate.begins_with("https://") or candidate.begins_with("http://"))
+		and not candidate.contains("/releases/download/")
+	):
+		return candidate
+	return GITHUB_LATEST_RELEASE_PAGE_URL
+
+
+func get_remote_release_page_url() -> String:
+	return resolve_release_page_url(_remote_release_page_url)
+
+
 func get_remote_apk_download_url() -> String:
-	return _remote_apk_download_url
+	return get_remote_release_page_url()
 
 
 func get_release_bell_button() -> Button:
@@ -3373,25 +3389,12 @@ func close_release_notes_modal() -> void:
 func apply_release_payload_dict(p_payload: Dictionary) -> void:
 	var remote_tag: String = str(p_payload.get("tag_name", "")).strip_edges()
 	var remote_body: String = str(p_payload.get("body", "")).strip_edges()
-	var apk_url: String = ""
-
-	var assets_val: Variant = p_payload.get("assets", [])
-	if assets_val is Array:
-		var assets_arr: Array = assets_val as Array
-		for i: int in range(assets_arr.size()):
-			var entry: Variant = assets_arr[i]
-			if entry is Dictionary:
-				var asset_dict: Dictionary = entry as Dictionary
-				var asset_name: String = str(asset_dict.get("name", "")).to_lower()
-				var dl_url: String = str(asset_dict.get("browser_download_url", "")).strip_edges()
-				if asset_name.ends_with(".apk") and not dl_url.is_empty():
-					apk_url = dl_url
-					break
+	var raw_html_url: String = str(p_payload.get("html_url", "")).strip_edges()
 
 	var local_ver: String = get_local_app_version()
 	_remote_release_tag = remote_tag
 	_remote_release_body = remote_body
-	_remote_apk_download_url = apk_url
+	_remote_release_page_url = resolve_release_page_url(raw_html_url)
 	_has_remote_update = (not remote_tag.is_empty()) and is_remote_version_newer(remote_tag, local_ver)
 	_release_unread_cache_dirty = true
 
@@ -3461,7 +3464,7 @@ func _refresh_release_notes_modal_content() -> void:
 		_release_notes_body_label.text = _markdown_to_bbcode(raw_notes)
 
 	if _release_download_button != null:
-		var can_download: bool = _has_remote_update and not _remote_apk_download_url.is_empty()
+		var can_download: bool = _has_remote_update and not get_remote_release_page_url().is_empty()
 		_release_download_button.visible = can_download
 
 
@@ -3582,9 +3585,10 @@ func _on_release_bell_pressed() -> void:
 
 
 func _on_release_download_pressed() -> void:
-	if _remote_apk_download_url.is_empty():
+	var release_url: String = get_remote_release_page_url()
+	if release_url.is_empty():
 		return
-	OS.shell_open(_remote_apk_download_url)
+	OS.shell_open(release_url)
 
 
 func _on_release_modal_backdrop_gui_input(p_event: InputEvent) -> void:
