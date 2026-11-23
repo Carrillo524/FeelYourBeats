@@ -32,26 +32,26 @@ void fragment() {
 	float drop_active = clamp(drop_halo_amount, 0.0, 1.0);
 
 	vec3 drop_tint = vec3(0.95, 0.22, 0.78) * (drop_active * (0.10 + 0.12 * bass_energy));
-	vec3 boosted_bottom = base_color_bottom.rgb + (accent_color.rgb * (0.10 * bass_energy + 0.07 * mid_energy)) + drop_tint;
+	vec3 boosted_bottom = base_color_bottom.rgb + (accent_color.rgb * (0.08 * bass_energy + 0.06 * mid_energy)) + drop_tint;
 	vec4 bg = mix(base_color_top, vec4(boosted_bottom, 1.0), uv.y);
 
 	float normal_pulse = clamp(max(beat_pulse, bass_energy * 0.90), 0.0, 1.0);
 	float normal_horizon_sharpness = mix(13.5, 4.8, normal_pulse);
 	float drop_horizon_sharpness = 10.5 - (drop_active * 1.8);
 	float horizon_glow = exp(-abs(uv.y - 0.84) * mix(normal_horizon_sharpness, drop_horizon_sharpness, drop_active));
-	float horizon_outer_bloom = exp(-abs(uv.y - 0.84) * mix(8.5, 3.4, normal_pulse)) * 0.26 * normal_pulse * (1.0 - (drop_active * 0.45));
+	float horizon_outer_bloom = exp(-abs(uv.y - 0.84) * mix(8.5, 3.4, normal_pulse)) * 0.11 * normal_pulse * (1.0 - (drop_active * 0.45));
 
 	float normal_boost = clamp(
-		0.15 + (normal_pulse * (0.53 + (0.10 * energy_level))),
-		0.15,
-		0.78
+		0.13 + (normal_pulse * (0.25 + (0.06 * energy_level))),
+		0.13,
+		0.44
 	);
 	float drop_boost = clamp(
 		(beat_pulse * (0.22 + 0.18 * energy_level + 0.10 * tier_factor)) + (bass_energy * 0.16),
 		0.0,
 		0.56
 	);
-	float pulse_boost = clamp(mix(normal_boost, drop_boost, drop_active), 0.0, 0.78);
+	float pulse_boost = clamp(mix(normal_boost, drop_boost, drop_active), 0.0, 0.56);
 
 	float wave_speed = 1.2 + (drop_active * 1.1) + (mid_energy * 0.8);
 	float wave = sin((uv.y * 18.0) - (TIME * wave_speed)) * 0.5 + 0.5;
@@ -102,10 +102,11 @@ void fragment() {
 		+ drop_ring_color * drop_shockwave;
 
 	float luma = dot(raw_rgb, vec3(0.299, 0.587, 0.114));
+	float saturation_cap = mix(1.24, 1.35, drop_active);
 	float saturation_boost = clamp(
-		1.0 + (0.14 * energy_level) + (0.14 * bass_energy) + (0.10 * drop_active),
+		1.0 + (0.11 * energy_level) + (0.11 * bass_energy) + (0.10 * drop_active),
 		1.0,
-		1.35
+		saturation_cap
 	);
 	vec3 saturated_rgb = mix(vec3(luma), raw_rgb, saturation_boost);
 
