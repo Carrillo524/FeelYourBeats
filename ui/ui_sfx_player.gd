@@ -1,6 +1,8 @@
 class_name UiSfxPlayer
 extends Node
 
+signal fullscreen_mode_changed(p_is_fullscreen: bool)
+
 const DEFAULT_SFX_DIR: String = "res://assets/sfx"
 const BUTTON_CLICK_STEM: String = "button_click"
 const CASSETTE_INSERT_STEM: String = "cassette_insert"
@@ -14,6 +16,8 @@ const META_CLICK_WIRED: StringName = &"ui_click_wired"
 const META_CLICK_EXCLUDED: StringName = &"ui_click_excluded"
 
 static var _touch_scroll_suppressed: bool = false
+static var _desktop_platform_override: int = -1
+static var _desktop_fullscreen_state: bool = false
 
 @export var sfx_dir_path: String = DEFAULT_SFX_DIR
 @export var auto_wire_scene_tree: bool = false
@@ -40,8 +44,99 @@ static func mark_button_excluded(p_button: BaseButton) -> void:
 	p_button.set_meta(META_CLICK_EXCLUDED, true)
 
 
+static func set_desktop_platform_override_for_tests(p_override: int) -> void:
+	_desktop_platform_override = clampi(p_override, -1, 1)
+
+
+static func is_desktop_platform() -> bool:
+	if _desktop_platform_override == 0:
+		return false
+	if _desktop_platform_override == 1:
+		return true
+	var os_name: String = OS.get_name()
+	if os_name == "Android" or os_name == "iOS":
+		return false
+	return os_name == "Windows" or OS.has_feature("pc")
+
+
+func is_desktop_fullscreen() -> bool:
+	if not is_desktop_platform():
+		return false
+	if DisplayServer.get_name() != "headless":
+		var mode: DisplayServer.WindowMode = DisplayServer.window_get_mode()
+		_desktop_fullscreen_state = (
+			mode == DisplayServer.WINDOW_MODE_FULLSCREEN
+			or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+		)
+	return _desktop_fullscreen_state
+
+
+func set_desktop_fullscreen(p_enabled: bool) -> void:
+	if not is_desktop_platform():
+		return
+	var target_mode: DisplayServer.WindowMode = (
+		DisplayServer.WINDOW_MODE_FULLSCREEN
+		if p_enabled
+		else DisplayServer.WINDOW_MODE_WINDOWED
+	)
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_mode(target_mode)
+	_desktop_fullscreen_state = p_enabled
+	fullscreen_mode_changed.emit(_desktop_fullscreen_state)
+
+
+func toggle_desktop_fullscreen() -> void:
+	if not is_desktop_platform():
+		return
+	set_desktop_fullscreen(not is_desktop_fullscreen())
+
+
+func _is_desktop_shortcut_owner() -> bool:
+	var tree: SceneTree = get_tree()
+	if tree == null or tree.root == null:
+		return true
+	var global_node: Node = tree.root.get_node_or_null(^"GlobalUiSfx")
+	if global_node != null:
+		return global_node == self
+	return true
+
+
+func _input(p_event: InputEvent) -> void:
+	if not is_desktop_platform() or not _is_desktop_shortcut_owner():
+		return
+	if not (p_event is InputEventKey):
+		return
+	var key_event: InputEventKey = p_event as InputEventKey
+	if not key_event.pressed or key_event.echo:
+		return
+	var code: Key = key_event.keycode if key_event.keycode != KEY_NONE else key_event.physical_keycode
+	var is_f11: bool = (
+		code == KEY_F11
+		and not key_event.ctrl_pressed
+		and not key_event.alt_pressed
+		and not key_event.meta_pressed
+	)
+	var is_alt_enter: bool = (
+		(code == KEY_ENTER or code == KEY_KP_ENTER)
+		and key_event.alt_pressed
+		and not key_event.ctrl_pressed
+		and not key_event.meta_pressed
+	)
+	if is_f11 or is_alt_enter:
+		toggle_desktop_fullscreen()
+		var vp: Viewport = get_viewport()
+		if vp != null:
+			vp.set_input_as_handled()
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	if is_desktop_platform() and DisplayServer.get_name() != "headless":
+		var mode: DisplayServer.WindowMode = DisplayServer.window_get_mode()
+		_desktop_fullscreen_state = (
+			mode == DisplayServer.WINDOW_MODE_FULLSCREEN
+			or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+		)
 	_ensure_players()
 	reload_sfx()
 	var tree: SceneTree = get_tree()
